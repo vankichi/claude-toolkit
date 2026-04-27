@@ -21,7 +21,6 @@ anyhow.workspace = true
 chrono.workspace = true
 clap.workspace = true
 crossterm.workspace = true
-dirs.workspace = true
 futures.workspace = true
 ratatui.workspace = true
 serde.workspace = true

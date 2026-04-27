@@ -48,7 +48,7 @@ async fn main() -> Result<()> {
     let projects_dir = if let Some(p) = cli.projects_dir {
         p
     } else {
-        let home = dirs::home_dir().context("could not determine home directory")?;
+        let home = std::env::home_dir().context("could not determine home directory")?;
         home.join(".claude").join("projects")
     };
 

@@ -7,22 +7,24 @@ all-features = true
 [advisories]
 version = 2
 yanked = "deny"
-ignore = []
+ignore = [
+    # `paste` 1.0.15 is unmaintained (author archived the repo).
+    # Pulled in transitively via ratatui 0.29 → paste. It's a proc-macro,
+    # so it only runs at compile time — no runtime / security impact.
+    # Drop this entry when ratatui releases a version that switches off paste.
+    { id = "RUSTSEC-2024-0436", reason = "transitive via ratatui; proc-macro only; no runtime impact" },
+]
 
 [licenses]
 version = 2
+# Add licenses here only when an actual dep introduces them. cargo-deny
+# warns on unused allowances, so the list stays tight.
 allow = [
     "MIT",
-    "MIT-0",
     "Apache-2.0",
     "Apache-2.0 WITH LLVM-exception",
-    "BSD-2-Clause",
-    "BSD-3-Clause",
-    "ISC",
     "Unicode-3.0",
-    "Unicode-DFS-2016",
     "Zlib",
-    "CC0-1.0",
     "MPL-2.0",
 ]
 confidence-threshold = 0.93
