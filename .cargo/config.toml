@@ -1,0 +1,7 @@
+# Static-CRT on Windows MSVC for self-contained binaries.
+[target.'cfg(all(target_env = "msvc", target_os = "windows"))']
+rustflags = ["-C", "target-feature=+crt-static"]
+
+[alias]
+ci = "test --workspace --all-targets --locked"
+xclippy = "clippy --workspace --all-targets --all-features -- -D warnings"

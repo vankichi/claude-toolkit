@@ -1,0 +1,30 @@
+# Build artifacts
+/target
+**/*.rs.bk
+Cargo.lock.bak
+
+# OS
+.DS_Store
+
+# Editor / IDE
+*.swp
+.idea/
+.vscode/
+
+# Secrets — never commit these
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+id_rsa*
+id_ed25519*
+id_ecdsa*
+*credentials*
+*secret*
+*.p12
+*.pfx
+*.kdbx
+
+# Claude Code per-machine settings (may contain personal allowlists)
+.claude/settings.local.json
