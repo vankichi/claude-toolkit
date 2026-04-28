@@ -200,7 +200,7 @@ impl SessionStats {
     pub(crate) fn project_basename(&self) -> Option<&str> {
         self.cwd
             .as_deref()
-            .and_then(|c| c.rsplit('/').find(|s| !s.is_empty()))
+            .and_then(|c| c.rsplit(['/', '\\']).find(|s| !s.is_empty()))
     }
 
     #[must_use]
@@ -309,7 +309,8 @@ impl SessionStats {
         let Some(last) = self.last_event_at else {
             return false;
         };
-        (Utc::now() - last).num_seconds() < ACTIVE_THRESHOLD_SECS
+        let age_secs = (Utc::now() - last).num_seconds();
+        (0..ACTIVE_THRESHOLD_SECS).contains(&age_secs)
     }
 }
 

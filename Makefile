@@ -3,7 +3,7 @@
 # Override at invocation: `make install PREFIX=/opt/homebrew/bin`
 PREFIX ?= $(HOME)/.local/bin
 
-.PHONY: help build release test clippy fmt-check fmt check deny ci install clean update
+.PHONY: help build release test clippy fmt-check fmt check deny ci install uninstall clean update
 
 help: ## このヘルプを表示
 	@grep -hE '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \

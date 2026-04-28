@@ -203,6 +203,12 @@ fn open_in_browser(url: &str) {
     let program = "xdg-open";
     #[cfg(target_os = "windows")]
     let program = "explorer";
+    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+    {
+        let _ = url;
+        return;
+    }
+    #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
     let _ = std::process::Command::new(program)
         .arg(url)
         .stdout(std::process::Stdio::null())

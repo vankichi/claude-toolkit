@@ -40,8 +40,6 @@ async fn run(path: PathBuf, tx: mpsc::Sender<Event>) -> Result<()> {
                 }
                 if len > offset {
                     f.seek(SeekFrom::Start(offset)).await?;
-                    let cap = usize::try_from(len - offset).unwrap_or(usize::MAX);
-                    buf_remainder.reserve(cap);
                     f.read_to_end(&mut buf_remainder).await?;
                     offset = len;
 
