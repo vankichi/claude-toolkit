@@ -16,17 +16,22 @@ use tokio::sync::mpsc;
 const POLL_INTERVAL: Duration = Duration::from_millis(200);
 
 /// Start a background tail of `path` on the current tokio runtime. Parsed
-/// events flow into `tx`; the returned `JoinHandle` is `abort()`-able when
-/// switching sessions or shutting down.
-pub(crate) fn spawn(path: PathBuf, tx: mpsc::Sender<Event>) -> tokio::task::JoinHandle<Result<()>> {
-    tokio::spawn(async move { run(path, tx).await })
+/// events flow into `tx` tagged with `tag` so the consumer can dispatch
+/// `(idx, Event)` tuples to the right per-session aggregate. The returned
+/// `JoinHandle` is `abort()`-able when switching sessions or shutting down.
+pub(crate) fn spawn(
+    path: PathBuf,
+    tag: usize,
+    tx: mpsc::Sender<(usize, Event)>,
+) -> tokio::task::JoinHandle<Result<()>> {
+    tokio::spawn(async move { run(path, tag, tx).await })
 }
 
 /// Tail loop: open the file every `POLL_INTERVAL`, read any newly appended
 /// bytes from the last known offset, split on `\n`, parse, and forward
 /// events. Handles file shrink (rotation/replacement) by resetting the
 /// offset, and tolerates the file not yet existing on first poll.
-async fn run(path: PathBuf, tx: mpsc::Sender<Event>) -> Result<()> {
+async fn run(path: PathBuf, tag: usize, tx: mpsc::Sender<(usize, Event)>) -> Result<()> {
     let mut offset: u64 = 0;
     let mut buf_remainder: Vec<u8> = Vec::new();
 
@@ -56,7 +61,7 @@ async fn run(path: PathBuf, tx: mpsc::Sender<Event>) -> Result<()> {
                         let Ok(Some(ev)) = jsonl::parse_line(s) else {
                             continue;
                         };
-                        if tx.send(ev).await.is_err() {
+                        if tx.send((tag, ev)).await.is_err() {
                             return Ok(());
                         }
                     }
@@ -92,7 +97,7 @@ mod tests {
         f.flush().await.unwrap();
     }
 
-    async fn next_event(rx: &mut mpsc::Receiver<Event>) -> Event {
+    async fn next_event(rx: &mut mpsc::Receiver<(usize, Event)>) -> (usize, Event) {
         tokio::time::timeout(Duration::from_secs(3), rx.recv())
             .await
             .expect("watcher did not produce an event within 3s")
@@ -106,15 +111,17 @@ mod tests {
         // Pre-create empty file so the watcher has something to read.
         tokio::fs::write(&path, b"").await.unwrap();
 
-        let (tx, mut rx) = mpsc::channel::<Event>(8);
-        let handle = spawn(path.clone(), tx);
+        let (tx, mut rx) = mpsc::channel::<(usize, Event)>(8);
+        let handle = spawn(path.clone(), 7, tx);
 
         append(&path, ASSISTANT_LINE).await;
-        let ev = next_event(&mut rx).await;
+        let (tag, ev) = next_event(&mut rx).await;
+        assert_eq!(tag, 7);
         assert!(matches!(ev, Event::Assistant(_)));
 
         append(&path, ASSISTANT_LINE).await;
-        let ev = next_event(&mut rx).await;
+        let (tag, ev) = next_event(&mut rx).await;
+        assert_eq!(tag, 7);
         assert!(matches!(ev, Event::Assistant(_)));
 
         handle.abort();
@@ -126,8 +133,8 @@ mod tests {
         let path = dir.path().join("session.jsonl");
         tokio::fs::write(&path, b"").await.unwrap();
 
-        let (tx, mut rx) = mpsc::channel::<Event>(8);
-        let handle = spawn(path.clone(), tx);
+        let (tx, mut rx) = mpsc::channel::<(usize, Event)>(8);
+        let handle = spawn(path.clone(), 0, tx);
 
         // Write the line in two halves without the newline first.
         let half = ASSISTANT_LINE.len() / 2;
@@ -149,7 +156,7 @@ mod tests {
         assert!(rx.try_recv().is_err());
 
         append(&path, second).await;
-        let ev = next_event(&mut rx).await;
+        let (_, ev) = next_event(&mut rx).await;
         assert!(matches!(ev, Event::Assistant(_)));
 
         handle.abort();
@@ -160,14 +167,14 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("not-yet.jsonl");
 
-        let (tx, mut rx) = mpsc::channel::<Event>(8);
-        let handle = spawn(path.clone(), tx);
+        let (tx, mut rx) = mpsc::channel::<(usize, Event)>(8);
+        let handle = spawn(path.clone(), 0, tx);
 
         // Slight delay so the watcher polls the missing file at least once.
         tokio::time::sleep(Duration::from_millis(300)).await;
         append(&path, ASSISTANT_LINE).await;
 
-        let ev = next_event(&mut rx).await;
+        let (_, ev) = next_event(&mut rx).await;
         assert!(matches!(ev, Event::Assistant(_)));
         handle.abort();
     }

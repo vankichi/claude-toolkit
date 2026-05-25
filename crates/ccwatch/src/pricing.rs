@@ -74,16 +74,16 @@ impl ModelInfo {
         }
     }
 
-    /// Maximum context window in tokens for this model (200k base, 1M for
-    /// long-context variants). Used as the denominator for the context gauge
-    /// when no `--context-window` override is in play.
+    /// Maximum context window in tokens for this model. Defaults to 1M for
+    /// every family because Claude Code now defaults to the 1M-context tier
+    /// and JSONL doesn't surface the variant on assistant events. Users on
+    /// the 200k tier can opt down with `CCWATCH_CONTEXT_WINDOW=200000`.
     #[must_use]
     pub fn context_window(self) -> u64 {
-        if self.long_context {
-            1_000_000
-        } else {
-            200_000
-        }
+        // `long_context` is still consulted by `pricing()` (1M-tier billing
+        // differs above 200k input), but the gauge denominator is uniform.
+        let _ = self.long_context;
+        1_000_000
     }
 
     /// Family-coded accent color used in the header `model:` field so each
@@ -166,7 +166,7 @@ mod tests {
     }
 
     #[test]
-    fn context_window_matches_long_flag() {
+    fn context_window_defaults_to_1m_for_all_variants() {
         let normal = ModelInfo {
             family: Family::Opus,
             long_context: false,
@@ -175,7 +175,7 @@ mod tests {
             family: Family::Opus,
             long_context: true,
         };
-        assert_eq!(normal.context_window(), 200_000);
+        assert_eq!(normal.context_window(), 1_000_000);
         assert_eq!(long.context_window(), 1_000_000);
     }
 
