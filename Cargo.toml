@@ -1,0 +1,52 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.90"
+license = "MIT"
+authors = ["vankichi"]
+repository = "https://github.com/vankichi/claude-toolkit"
+homepage = "https://github.com/vankichi/claude-toolkit"
+keywords = ["claude", "cli", "tui", "monitoring"]
+categories = ["command-line-utilities"]
+publish = false
+
+[workspace.dependencies]
+anyhow = "1"
+chrono = "0.4"
+clap = { version = "4", features = ["derive", "env"] }
+crossterm = { version = "0.29", features = ["event-stream"] }
+futures = "0.3"
+ratatui = "0.30"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tempfile = "3"
+tokio = { version = "1", features = ["fs", "rt-multi-thread", "macros", "sync", "time", "io-util"] }
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+module_name_repetitions = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+# Intentional in numeric/stats code: u64 token counts → f64 for cost/rate arithmetic.
+cast_precision_loss = "allow"
+# Field names like `*_per_mtok` and `*_tokens` are domain-meaningful suffixes.
+struct_field_names = "allow"
+
+# Distribution-grade release profile: smallest, fastest binaries.
+[profile.release]
+lto = "fat"
+codegen-units = 1
+strip = "symbols"
+panic = "abort"
+opt-level = 3
+incremental = false
+
+# Lighter profile for fast iteration without giving up optimization entirely.
+[profile.dist]
+inherits = "release"
