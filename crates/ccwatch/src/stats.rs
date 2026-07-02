@@ -43,12 +43,11 @@ pub(crate) struct SessionStats {
     /// Wall-clock timestamp of the most recently ingested event.
     /// Used to flag the session as active in the header.
     last_event_at: Option<DateTime<Utc>>,
-    /// Explicit override from `--context-window` flag. Takes precedence over auto-detection.
+    /// Explicit override from `--context-window` flag. Takes precedence over the model default.
     user_override_context_window: Option<u64>,
-    /// Set true when observed `context_size` exceeds 200k while the model name didn't
-    /// signal long context — i.e. the session is on a 1M-context variant whose JSONL
-    /// model field omits the `[1m]` suffix.
-    auto_promoted_long_context: bool,
+    /// Last seen permission mode from `permission-mode` events.
+    /// Raw values from JSONL: `default` / `acceptEdits` / `bypassPermissions` / `plan`.
+    permission_mode: Option<String>,
 }
 
 impl SessionStats {
@@ -72,7 +71,7 @@ impl SessionStats {
             recent: VecDeque::new(),
             last_event_at: None,
             user_override_context_window: override_context_window,
-            auto_promoted_long_context: false,
+            permission_mode: None,
         }
     }
 }
@@ -85,14 +84,9 @@ impl Default for SessionStats {
     }
 }
 
-/// Threshold above which a session that wasn't detected as long-context from its
-/// model name is auto-promoted to 1M. Anything above 200k can only fit in a 1M model.
-const AUTO_PROMOTE_THRESHOLD: u64 = 200_000;
-
 impl SessionStats {
     /// Wipe accumulated counts back to zero. Preserves the user-supplied
-    /// context window override (still wanted on the new session) and clears
-    /// auto-promotion (so detection runs fresh).
+    /// context window override (still wanted on the new session).
     pub(crate) fn reset(&mut self) {
         *self = Self::new(self.user_override_context_window);
     }
@@ -103,6 +97,10 @@ impl SessionStats {
     /// last context size, sliding-window history, output token history, and
     /// active-session timestamp.
     pub(crate) fn ingest(&mut self, event: &Event) {
+        if let Event::PermissionMode(p) = event {
+            self.permission_mode = Some(p.permission_mode.clone());
+            return;
+        }
         let Event::Assistant(a) = event else { return };
 
         if self.cwd.is_none()
@@ -133,15 +131,6 @@ impl SessionStats {
         self.assistant_messages += 1;
         let event_cost = self.pricing.cost_usd(&usage);
         self.session_cost_usd += event_cost;
-
-        // Auto-promote: if context exceeds 200k and the model name didn't carry a
-        // 1M signal, the session is on a 1M variant whose JSONL omits `[1m]`.
-        if self.user_override_context_window.is_none()
-            && !self.model_info.long_context
-            && self.last_context_size > AUTO_PROMOTE_THRESHOLD
-        {
-            self.auto_promoted_long_context = true;
-        }
 
         if let Some(ts_raw) = a.timestamp.as_deref()
             && let Ok(parsed) = DateTime::parse_from_rfc3339(ts_raw)
@@ -228,17 +217,7 @@ impl SessionStats {
         if let Some(w) = self.user_override_context_window {
             return w;
         }
-        if self.auto_promoted_long_context {
-            return 1_000_000;
-        }
         self.model_info.context_window()
-    }
-
-    /// True iff the displayed context window came from `AUTO_PROMOTE_THRESHOLD` rather
-    /// than the model name or `--context-window`. UI can show a hint.
-    #[must_use]
-    pub(crate) fn is_auto_promoted(&self) -> bool {
-        self.auto_promoted_long_context && self.user_override_context_window.is_none()
     }
 
     #[must_use]
@@ -311,6 +290,20 @@ impl SessionStats {
         };
         let age_secs = (Utc::now() - last).num_seconds();
         (0..ACTIVE_THRESHOLD_SECS).contains(&age_secs)
+    }
+
+    /// Wall-clock timestamp of the most recently ingested event, if any.
+    /// Exposed for the summary view's "sort by recent activity" comparator.
+    #[must_use]
+    pub(crate) fn last_event_at(&self) -> Option<DateTime<Utc>> {
+        self.last_event_at
+    }
+
+    /// Latest permission mode observed (raw JSONL string).
+    /// Display-side mapping (e.g. `acceptEdits` → `edit`) happens in `summary`.
+    #[must_use]
+    pub(crate) fn permission_mode(&self) -> Option<&str> {
+        self.permission_mode.as_deref()
     }
 }
 
@@ -430,9 +423,10 @@ mod tests {
 
     #[test]
     fn context_pct_partial() {
+        // Default window is 1M → 100k observed = 10%.
         let mut s = SessionStats::default();
         s.ingest(&assistant("sonnet", &[], (50_000, 0, 0, 50_000)));
-        assert!((s.context_pct() - 0.5).abs() < 1e-9);
+        assert!((s.context_pct() - 0.1).abs() < 1e-9);
     }
 
     #[test]
@@ -480,46 +474,40 @@ mod tests {
         let mut s = SessionStats::new(Some(500_000));
         s.ingest(&assistant("claude-opus-4-7", &[], (10, 10, 0, 0)));
         assert_eq!(s.context_window(), 500_000);
-        assert!(!s.is_auto_promoted());
     }
 
     #[test]
-    fn auto_promotes_to_1m_when_observed_exceeds_200k() {
+    fn default_context_window_is_1m_for_all_families() {
         let mut s = SessionStats::default();
-        // model name without [1m] suffix → defaults to 200k...
         s.ingest(&assistant("claude-opus-4-7", &[], (10, 10, 0, 0)));
-        assert_eq!(s.context_window(), 200_000);
-        assert!(!s.is_auto_promoted());
-
-        // ...until we observe context_size > 200k → promote to 1M.
-        s.ingest(&assistant("claude-opus-4-7", &[], (210_000, 10, 0, 0)));
         assert_eq!(s.context_window(), 1_000_000);
-        assert!(s.is_auto_promoted());
+        let mut h = SessionStats::default();
+        h.ingest(&assistant("claude-haiku-4-5", &[], (10, 10, 0, 0)));
+        assert_eq!(h.context_window(), 1_000_000);
     }
 
     #[test]
-    fn override_suppresses_auto_promotion() {
-        let mut s = SessionStats::new(Some(300_000));
-        s.ingest(&assistant("claude-opus-4-7", &[], (250_000, 0, 0, 0)));
-        assert_eq!(s.context_window(), 300_000);
-        assert!(!s.is_auto_promoted());
-    }
-
-    #[test]
-    fn explicit_1m_model_name_does_not_count_as_auto_promoted() {
-        let mut s = SessionStats::default();
-        s.ingest(&assistant("claude-opus-4-7[1m]", &[], (250_000, 0, 0, 0)));
-        assert_eq!(s.context_window(), 1_000_000);
-        assert!(!s.is_auto_promoted()); // model name carried the signal
-    }
-
-    #[test]
-    fn reset_preserves_override_clears_auto_promotion() {
+    fn reset_preserves_override() {
         let mut s = SessionStats::new(Some(750_000));
         s.ingest(&assistant("claude-opus-4-7", &[], (210_000, 0, 0, 0)));
         s.reset();
         assert_eq!(s.context_window(), 750_000);
-        assert!(!s.is_auto_promoted());
+    }
+
+    #[test]
+    fn ingests_permission_mode_event() {
+        use crate::jsonl::PermissionModeEvent;
+        let mut s = SessionStats::default();
+        assert_eq!(s.permission_mode(), None);
+        s.ingest(&Event::PermissionMode(PermissionModeEvent {
+            permission_mode: "plan".to_string(),
+        }));
+        assert_eq!(s.permission_mode(), Some("plan"));
+        // Later events overwrite.
+        s.ingest(&Event::PermissionMode(PermissionModeEvent {
+            permission_mode: "acceptEdits".to_string(),
+        }));
+        assert_eq!(s.permission_mode(), Some("acceptEdits"));
     }
 
     #[test]
@@ -534,13 +522,10 @@ mod tests {
             "sonnet",
             &[],
             (1, 1, 0, 0),
-            Some("/Users/kiichi/go/src/github.com/vankichi/claude-toolkit"),
+            Some("/home/user/code/alpha-service"),
         ));
-        assert_eq!(
-            s.cwd(),
-            Some("/Users/kiichi/go/src/github.com/vankichi/claude-toolkit")
-        );
-        assert_eq!(s.project_basename(), Some("claude-toolkit"));
+        assert_eq!(s.cwd(), Some("/home/user/code/alpha-service"));
+        assert_eq!(s.project_basename(), Some("alpha-service"));
     }
 
     #[test]

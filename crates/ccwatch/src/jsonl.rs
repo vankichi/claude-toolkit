@@ -8,14 +8,26 @@
 use serde::Deserialize;
 
 /// One line in the JSONL session log. Discriminated by the top-level `type`
-/// field; only `assistant` is fully parsed because it carries the metrics we
-/// display. Unknown / unhandled types collapse into `Other` to forward-compat.
+/// field. `assistant` carries the usage metrics; `permission-mode` carries
+/// the current agent mode (default / plan / acceptEdits / bypassPermissions).
+/// Anything else collapses to `Other` so the parser is forward-compat.
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "kebab-case")]
 pub(crate) enum Event {
     Assistant(AssistantEvent),
+    PermissionMode(PermissionModeEvent),
     #[serde(other)]
     Other,
+}
+
+/// `permission-mode` event payload. Emitted when the user switches the
+/// session's permission mode (e.g. `default` → `plan` via `/plan`).
+#[derive(Debug, Deserialize)]
+pub(crate) struct PermissionModeEvent {
+    /// Raw mode string from the JSONL. Known values:
+    /// `default`, `acceptEdits`, `bypassPermissions`, `plan`.
+    #[serde(rename = "permissionMode")]
+    pub permission_mode: String,
 }
 
 /// A single assistant turn captured in the JSONL log. Wraps the API's
