@@ -3,37 +3,67 @@
 //! `~/.claude.json` also carries OAuth tokens and per-server `command`/
 //! `args`/`env` values, none of which this module may ever materialize or
 //! print. See the `ClaudeJson`/`ProjectEntry`/`McpJson` shapes below: every
-//! `mcpServers` map is typed with [`serde::de::IgnoredAny`] values, so serde
-//! parses far enough to keep the server-name keys but discards the value
-//! bytes without ever building a `String`/`Value` out of them. Fields this
-//! module has no use for (notably `oauthAccount`) are simply absent from
-//! the types, so they are never read either.
+//! `mcpServers` object is collected into a `BTreeSet<String>` of its keys via
+//! the [`map_keys`] deserializer, which discards each value through
+//! [`serde::de::IgnoredAny`] — serde parses far enough to keep the
+//! server-name keys but never builds a `String`/`Value` out of the value
+//! bytes. Fields this module has no use for (notably `oauthAccount`) are
+//! simply absent from the types, so they are never read either.
 
 use crate::model::{Item, Kind, Source};
-use serde::de::{DeserializeOwned, IgnoredAny};
-use std::collections::BTreeMap;
+use serde::de::{DeserializeOwned, Deserializer, IgnoredAny, MapAccess, Visitor};
+use std::collections::{BTreeMap, BTreeSet};
+use std::fmt;
 use std::fs;
 use std::path::Path;
 
+/// Deserializes a JSON object (e.g. `mcpServers`) into just the *set of its
+/// keys*, discarding every value via [`IgnoredAny`]. This is the module's
+/// core secret-safety primitive: the `command`/`args`/`env`/token bytes that
+/// live in each server's value are parsed only far enough to skip over and
+/// are never materialized into an owned Rust value — only the server-name
+/// keys survive.
+fn map_keys<'de, D>(deserializer: D) -> Result<BTreeSet<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    struct KeysOnly;
+
+    impl<'de> Visitor<'de> for KeysOnly {
+        type Value = BTreeSet<String>;
+
+        fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+            formatter.write_str("a map of server names to configs")
+        }
+
+        fn visit_map<A>(self, mut access: A) -> Result<Self::Value, A::Error>
+        where
+            A: MapAccess<'de>,
+        {
+            let mut keys = BTreeSet::new();
+            while let Some(key) = access.next_key::<String>()? {
+                access.next_value::<IgnoredAny>()?;
+                keys.insert(key);
+            }
+            Ok(keys)
+        }
+    }
+
+    deserializer.deserialize_map(KeysOnly)
+}
+
 #[derive(Debug, Default, serde::Deserialize)]
 struct ClaudeJson {
-    // Security-mandated shape: a `BTreeSet<String>` would parse a JSON
-    // array, not the `{"name": {...}}` object Claude Code actually writes.
-    // `IgnoredAny` is the only zero-sized value type that both accepts an
-    // arbitrary value shape (command/args/env/token) and guarantees it is
-    // never materialized.
-    #[allow(clippy::zero_sized_map_values)]
-    #[serde(default, rename = "mcpServers")]
-    mcp_servers: BTreeMap<String, IgnoredAny>,
+    #[serde(default, rename = "mcpServers", deserialize_with = "map_keys")]
+    mcp_servers: BTreeSet<String>,
     #[serde(default)]
     projects: BTreeMap<String, ProjectEntry>,
 }
 
 #[derive(Debug, Default, serde::Deserialize)]
 struct ProjectEntry {
-    #[allow(clippy::zero_sized_map_values)]
-    #[serde(default, rename = "mcpServers")]
-    mcp_servers: BTreeMap<String, IgnoredAny>,
+    #[serde(default, rename = "mcpServers", deserialize_with = "map_keys")]
+    mcp_servers: BTreeSet<String>,
     #[serde(default, rename = "enabledMcpjsonServers")]
     enabled_mcpjson: Vec<String>,
     #[serde(default, rename = "disabledMcpjsonServers")]
@@ -42,9 +72,8 @@ struct ProjectEntry {
 
 #[derive(Debug, Default, serde::Deserialize)]
 struct McpJson {
-    #[allow(clippy::zero_sized_map_values)]
-    #[serde(default, rename = "mcpServers")]
-    mcp_servers: BTreeMap<String, IgnoredAny>,
+    #[serde(default, rename = "mcpServers", deserialize_with = "map_keys")]
+    mcp_servers: BTreeSet<String>,
 }
 
 /// Reads and parses `path` as JSON into `T`, returning `T::default()` if the
@@ -111,12 +140,12 @@ pub fn discover(claude_json: &Path, project_dir: &Path) -> Vec<Item> {
 
     let mut items = Vec::new();
 
-    for name in claude_json.mcp_servers.keys() {
+    for name in &claude_json.mcp_servers {
         items.push(mcp_item(name, Source::User, "active"));
     }
 
     if let Some(entry) = project_entry {
-        for name in entry.mcp_servers.keys() {
+        for name in &entry.mcp_servers {
             items.push(mcp_item(name, Source::Project, "active"));
         }
     }
@@ -126,7 +155,7 @@ pub fn discover(claude_json: &Path, project_dir: &Path) -> Vec<Item> {
         (&entry.enabled_mcpjson, &entry.disabled_mcpjson)
     });
     let project_mcp_json: McpJson = read_or_default(&project_dir.join(".mcp.json"));
-    for name in project_mcp_json.mcp_servers.keys() {
+    for name in &project_mcp_json.mcp_servers {
         let state = project_scope_state(name, enabled, disabled);
         items.push(mcp_item(name, Source::Project, state));
     }
@@ -242,6 +271,33 @@ mod tests {
         fs::create_dir_all(&project_dir).unwrap();
         let claude_json_path = tmp.path().join("claude.json");
         fs::write(&claude_json_path, "{ not valid json").unwrap();
+
+        let items = discover(&claude_json_path, &project_dir);
+
+        assert!(items.is_empty());
+    }
+
+    #[test]
+    fn well_formed_claude_json_without_mcp_servers_key_yields_empty_set() {
+        let tmp = tempfile::tempdir().unwrap();
+        let project_dir = tmp.path().join("project");
+        fs::create_dir_all(&project_dir).unwrap();
+        let canonical_project = fs::canonicalize(&project_dir).unwrap();
+
+        let mut projects = serde_json::Map::new();
+        projects.insert(
+            canonical_project.to_string_lossy().into_owned(),
+            serde_json::json!({ "disabledMcpjsonServers": ["ignored"] }),
+        );
+        let claude_json_path = tmp.path().join("claude.json");
+        fs::write(
+            &claude_json_path,
+            serde_json::to_string_pretty(&serde_json::json!({
+                "projects": serde_json::Value::Object(projects)
+            }))
+            .unwrap(),
+        )
+        .unwrap();
 
         let items = discover(&claude_json_path, &project_dir);
 
