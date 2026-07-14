@@ -109,11 +109,8 @@ fn build_item(kind: Kind, source: &Source, file: &Path, default_name: &str) -> O
     })
 }
 
-/// Discovers agents, skills, and commands from user, project, and enabled
-/// plugin sources.
-///
-/// This is a temporary implementation: MCP servers are wired into
-/// `discover_all` by a later task.
+/// Discovers agents, skills, commands, plugins, and MCP servers from user,
+/// project, and enabled-plugin sources.
 #[must_use]
 pub fn discover_all(ctx: &Context) -> Discovered {
     let specs = [
@@ -163,6 +160,16 @@ pub fn discover_all(ctx: &Context) -> Discovered {
             Layout::FlatMd,
         ));
     }
+    items.extend(plugin_discovery.items);
+
+    // `--claude-dir` overrides `~/.claude`, and `~/.claude.json` lives as its
+    // sibling on disk (not inside it), so the equivalent override path is
+    // derived rather than joined: `claude_dir`'s parent plus `.claude.json`.
+    let claude_json = ctx
+        .claude_dir
+        .parent()
+        .map_or_else(|| PathBuf::from(".claude.json"), |p| p.join(".claude.json"));
+    items.extend(mcp::discover(&claude_json, &ctx.project_dir));
 
     Discovered { items }
 }
@@ -356,6 +363,53 @@ mod tests {
                 marketplace: "mkt".into(),
             }
         );
+    }
+
+    #[test]
+    fn discover_all_wires_all_five_sources() {
+        let tmp = tempfile::tempdir().unwrap();
+        let claude_dir = build_plugin_fixture(tmp.path());
+
+        fs::create_dir_all(claude_dir.join("agents")).unwrap();
+        fs::write(
+            claude_dir.join("agents/a.md"),
+            "---\nname: agent-a\ndescription: user agent\n---\n",
+        )
+        .unwrap();
+
+        let project_dir = tmp.path().join("project");
+        fs::create_dir_all(project_dir.join(".claude/commands")).unwrap();
+        fs::write(
+            project_dir.join(".claude/commands/c.md"),
+            "---\nname: cmd-c\ndescription: project command\n---\n",
+        )
+        .unwrap();
+
+        write_json(
+            &tmp.path().join(".claude.json"),
+            &serde_json::json!({
+                "mcpServers": { "srv1": { "command": "secret-value" } }
+            }),
+        );
+        write_json(
+            &project_dir.join(".mcp.json"),
+            &serde_json::json!({
+                "mcpServers": { "srv2": {} }
+            }),
+        );
+
+        let ctx = Context {
+            claude_dir,
+            project_dir,
+        };
+        let discovered = discover_all(&ctx);
+
+        let count = |kind: Kind| discovered.items.iter().filter(|i| i.kind == kind).count();
+        assert_eq!(count(Kind::Agent), 1);
+        assert_eq!(count(Kind::Skill), 1);
+        assert_eq!(count(Kind::Command), 1);
+        assert_eq!(count(Kind::Plugin), 2);
+        assert_eq!(count(Kind::Mcp), 2);
     }
 
     #[test]
