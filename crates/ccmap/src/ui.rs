@@ -163,7 +163,7 @@ impl AppState {
 pub fn run(cfg: UiConfig) -> anyhow::Result<()> {
     let UiConfig { ctx } = cfg;
     let mut state = AppState::new(discover_all(&ctx).items);
-    let mut terminal = ratatui::try_init()?;
+    let mut terminal = ratatui::try_init().inspect_err(|_| restore_terminal())?;
     let result = run_inner(&mut terminal, &ctx, &mut state);
     restore_terminal();
     result

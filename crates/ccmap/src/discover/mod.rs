@@ -1,6 +1,8 @@
-//! Discovery of Claude Code agents, skills, and commands from markdown
-//! sources on disk. Scans user (`~/.claude`), project (`<project>/.claude`),
-//! and enabled-plugin sources; MCP servers are wired in a later task.
+//! Discovery of Claude Code agents, skills, commands, plugins, and MCP
+//! servers. `discover_all` sweeps: user (`~/.claude`) and project
+//! (`<project>/.claude`) markdown sources; enabled-plugin agents, skills,
+//! and commands; plugin catalog state (`Kind::Plugin`); and MCP servers
+//! configured in `~/.claude.json` and `.mcp.json`.
 
 pub mod mcp;
 pub mod plugins;

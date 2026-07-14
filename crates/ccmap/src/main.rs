@@ -39,7 +39,7 @@ fn main() -> Result<()> {
 
     let project_dir = match cli.project_dir {
         Some(dir) => dir,
-        None => std::env::current_dir()?,
+        None => std::env::current_dir().context("could not determine current directory")?,
     };
 
     ui::run(UiConfig {
