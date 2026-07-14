@@ -2,6 +2,7 @@
 //! sources on disk. Scans user (`~/.claude`), project (`<project>/.claude`),
 //! and enabled-plugin sources; MCP servers are wired in a later task.
 
+pub mod mcp;
 pub mod plugins;
 
 use crate::frontmatter;
