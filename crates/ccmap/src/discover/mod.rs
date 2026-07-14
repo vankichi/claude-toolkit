@@ -161,6 +161,8 @@ mod tests {
             Layout::FlatMd,
         );
         assert_eq!(items.len(), 1);
+        assert_eq!(items[0].kind, Kind::Agent);
+        assert_eq!(items[0].source, Source::User);
         assert_eq!(items[0].name, "alpha");
         assert_eq!(items[0].description, "desc a");
         assert!(
@@ -171,6 +173,65 @@ mod tests {
                 Layout::FlatMd
             )
             .is_empty()
+        );
+    }
+
+    #[test]
+    fn skilldir_uses_dir_name_when_frontmatter_omits_name() {
+        let tmp = tempfile::tempdir().unwrap();
+        let skills = tmp.path().join("skills");
+        std::fs::create_dir_all(skills.join("s")).unwrap();
+        std::fs::write(
+            skills.join("s/SKILL.md"),
+            "---\ndescription: a skill\n---\n",
+        )
+        .unwrap();
+
+        let items = scan_md(Kind::Skill, &Source::User, &skills, Layout::SkillDir);
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].kind, Kind::Skill);
+        assert_eq!(items[0].source, Source::User);
+        assert_eq!(items[0].name, "s");
+        assert_eq!(items[0].description, "a skill");
+        assert_eq!(items[0].path, Some(skills.join("s/SKILL.md")));
+    }
+
+    #[test]
+    fn flatmd_falls_back_to_stem_and_placeholder_description() {
+        let tmp = tempfile::tempdir().unwrap();
+        let commands = tmp.path().join("commands");
+        std::fs::create_dir_all(&commands).unwrap();
+        std::fs::write(commands.join("c.md"), "just a body, no frontmatter\n").unwrap();
+
+        let items = scan_md(Kind::Command, &Source::Project, &commands, Layout::FlatMd);
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].kind, Kind::Command);
+        assert_eq!(items[0].source, Source::Project);
+        assert_eq!(items[0].name, "c");
+        assert_eq!(items[0].description, "(no description)");
+        assert!(items[0].extra.is_empty());
+    }
+
+    #[test]
+    fn extra_is_collected_in_fixed_key_order() {
+        let tmp = tempfile::tempdir().unwrap();
+        let agents = tmp.path().join("agents");
+        std::fs::create_dir_all(&agents).unwrap();
+        std::fs::write(
+            agents.join("a.md"),
+            "---\nname: a\nmodel: opus\nallowed-tools: Read\ntools: Bash\n---\n",
+        )
+        .unwrap();
+
+        let items = scan_md(Kind::Agent, &Source::User, &agents, Layout::FlatMd);
+        assert_eq!(items.len(), 1);
+        assert_eq!(
+            items[0].extra,
+            vec![
+                ("tools".to_string(), "Bash".to_string()),
+                ("allowed-tools".to_string(), "Read".to_string()),
+                ("model".to_string(), "opus".to_string()),
+            ]
         );
     }
 }
