@@ -1,7 +1,6 @@
 //! Discovery of Claude Code agents, skills, and commands from markdown
-//! sources on disk. This module currently scans user (`~/.claude`) and
-//! project (`<project>/.claude`) sources only; plugin-provided items are
-//! wired in a later task.
+//! sources on disk. Scans user (`~/.claude`), project (`<project>/.claude`),
+//! and enabled-plugin sources; MCP servers are wired in a later task.
 
 pub mod plugins;
 
@@ -109,10 +108,11 @@ fn build_item(kind: Kind, source: &Source, file: &Path, default_name: &str) -> O
     })
 }
 
-/// Discovers agents, skills, and commands from user and project sources.
+/// Discovers agents, skills, and commands from user, project, and enabled
+/// plugin sources.
 ///
-/// This is a temporary implementation: plugin-provided items and MCP
-/// servers are wired into `discover_all` by later tasks.
+/// This is a temporary implementation: MCP servers are wired into
+/// `discover_all` by a later task.
 #[must_use]
 pub fn discover_all(ctx: &Context) -> Discovered {
     let specs = [
@@ -136,6 +136,33 @@ pub fn discover_all(ctx: &Context) -> Discovered {
             layout,
         ));
     }
+
+    let plugin_discovery = plugins::discover(&ctx.claude_dir);
+    for plugin in &plugin_discovery.enabled {
+        let source = Source::Plugin {
+            plugin: plugin.plugin.clone(),
+            marketplace: plugin.marketplace.clone(),
+        };
+        items.extend(scan_md(
+            Kind::Agent,
+            &source,
+            &plugin.agents_dir,
+            Layout::FlatMd,
+        ));
+        items.extend(scan_md(
+            Kind::Skill,
+            &source,
+            &plugin.skills_dir,
+            Layout::SkillDir,
+        ));
+        items.extend(scan_md(
+            Kind::Command,
+            &source,
+            &plugin.commands_dir,
+            Layout::FlatMd,
+        ));
+    }
+
     Discovered { items }
 }
 
@@ -212,6 +239,122 @@ mod tests {
         assert_eq!(items[0].name, "c");
         assert_eq!(items[0].description, "(no description)");
         assert!(items[0].extra.is_empty());
+    }
+
+    fn write_json(path: &Path, value: &serde_json::Value) {
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, serde_json::to_string_pretty(value).unwrap()).unwrap();
+    }
+
+    /// Builds a `claude_dir` fixture with one marketplace declaring two
+    /// plugins that are both installed, but only `enabled-plugin` is turned
+    /// on via `enabledPlugins`. `enabled-plugin` gets a
+    /// `skills/demo/SKILL.md`; `hidden-plugin` (installed but not enabled)
+    /// gets `skills/hidden/SKILL.md`, which must not surface in discovery
+    /// results. Returns the `claude_dir` path.
+    fn build_plugin_fixture(root: &Path) -> PathBuf {
+        let claude_dir = root.join("claude");
+        let plugins_dir = claude_dir.join("plugins");
+        let marketplace_root = root.join("external/mkt");
+
+        write_json(
+            &marketplace_root.join(".claude-plugin/marketplace.json"),
+            &serde_json::json!({
+                "plugins": [
+                    { "name": "enabled-plugin", "description": "Enabled plugin" },
+                    { "name": "hidden-plugin", "description": "Hidden plugin" }
+                ]
+            }),
+        );
+        write_json(
+            &plugins_dir.join("known_marketplaces.json"),
+            &serde_json::json!({
+                "mkt": { "installLocation": marketplace_root.to_string_lossy() }
+            }),
+        );
+
+        let enabled_install = root.join("installed/enabled-plugin");
+        let hidden_install = root.join("installed/hidden-plugin");
+        write_json(
+            &plugins_dir.join("installed_plugins.json"),
+            &serde_json::json!({
+                "version": 1,
+                "plugins": {
+                    "enabled-plugin@mkt": [
+                        {
+                            "scope": "user",
+                            "installPath": enabled_install.to_string_lossy(),
+                            "version": "0.1"
+                        }
+                    ],
+                    "hidden-plugin@mkt": [
+                        {
+                            "scope": "user",
+                            "installPath": hidden_install.to_string_lossy(),
+                            "version": "0.1"
+                        }
+                    ]
+                }
+            }),
+        );
+        write_json(
+            &claude_dir.join("settings.json"),
+            &serde_json::json!({
+                "enabledPlugins": { "enabled-plugin@mkt": true }
+            }),
+        );
+
+        fs::create_dir_all(enabled_install.join("skills/demo")).unwrap();
+        fs::write(
+            enabled_install.join("skills/demo/SKILL.md"),
+            "---\nname: demo\ndescription: demo skill\n---\n",
+        )
+        .unwrap();
+
+        fs::create_dir_all(hidden_install.join("skills/hidden")).unwrap();
+        fs::write(
+            hidden_install.join("skills/hidden/SKILL.md"),
+            "---\nname: hidden\ndescription: hidden skill\n---\n",
+        )
+        .unwrap();
+
+        claude_dir
+    }
+
+    #[test]
+    fn discover_all_includes_enabled_plugin_skills_but_not_installed_only_ones() {
+        let tmp = tempfile::tempdir().unwrap();
+        let claude_dir = build_plugin_fixture(tmp.path());
+        let project_dir = tmp.path().join("project");
+        fs::create_dir_all(&project_dir).unwrap();
+
+        let ctx = Context {
+            claude_dir,
+            project_dir,
+        };
+        let discovered = discover_all(&ctx);
+
+        let skill_names: Vec<&str> = discovered
+            .items
+            .iter()
+            .filter(|item| item.kind == Kind::Skill)
+            .map(|item| item.name.as_str())
+            .collect();
+        assert!(skill_names.contains(&"demo"));
+        assert!(!skill_names.contains(&"hidden"));
+
+        let demo = discovered
+            .items
+            .iter()
+            .find(|item| item.kind == Kind::Skill && item.name == "demo")
+            .unwrap();
+        assert_eq!(
+            demo.source,
+            Source::Plugin {
+                plugin: "enabled-plugin".into(),
+                marketplace: "mkt".into(),
+            }
+        );
     }
 
     #[test]
