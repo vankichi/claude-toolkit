@@ -3,6 +3,8 @@
 //! project (`<project>/.claude`) sources only; plugin-provided items are
 //! wired in a later task.
 
+pub mod plugins;
+
 use crate::frontmatter;
 use crate::model::{Item, Kind, Source};
 use std::fs;
