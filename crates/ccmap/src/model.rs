@@ -30,6 +30,21 @@ pub enum PluginState {
     Enabled,
 }
 
+/// Where an [`Item`]'s content originates, orthogonal to `Kind`: personal
+/// config, project-local config, or a plugin, further split by marketplace
+/// into `Official` (Claude's own marketplace) vs `Community` (any other).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Provenance {
+    Local,
+    Project,
+    Official,
+    Community,
+}
+
+/// Claude's official plugin marketplace identifier, used to distinguish
+/// [`Provenance::Official`] from [`Provenance::Community`].
+const OFFICIAL_MARKETPLACE: &str = "claude-plugins-official";
+
 /// A single discovered Claude Code extension (agent, skill, command, plugin,
 /// or MCP server).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -62,6 +77,21 @@ impl Item {
                 } => format!("{plugin}@{marketplace}"),
                 Source::User | Source::Project => self.name.clone(),
             },
+        }
+    }
+
+    /// Classifies where this item's content comes from: personal config,
+    /// project-local config, the official plugin marketplace, or any other
+    /// (community) marketplace.
+    #[must_use]
+    pub fn provenance(&self) -> Provenance {
+        match &self.source {
+            Source::User => Provenance::Local,
+            Source::Project => Provenance::Project,
+            Source::Plugin { marketplace, .. } if marketplace == OFFICIAL_MARKETPLACE => {
+                Provenance::Official
+            }
+            Source::Plugin { .. } => Provenance::Community,
         }
     }
 }
@@ -122,5 +152,43 @@ mod tests {
             ..user_skill.clone()
         };
         assert_eq!(mcp.invocation_string(), "serena");
+    }
+
+    #[test]
+    fn provenance_classifies_each_source_variant() {
+        let user = Item {
+            kind: Kind::Skill,
+            name: "demo".into(),
+            description: String::new(),
+            source: Source::User,
+            path: None,
+            extra: vec![],
+            plugin_state: None,
+        };
+        assert_eq!(user.provenance(), Provenance::Local);
+
+        let project = Item {
+            source: Source::Project,
+            ..user.clone()
+        };
+        assert_eq!(project.provenance(), Provenance::Project);
+
+        let official = Item {
+            source: Source::Plugin {
+                plugin: "superpowers".into(),
+                marketplace: "claude-plugins-official".into(),
+            },
+            ..user.clone()
+        };
+        assert_eq!(official.provenance(), Provenance::Official);
+
+        let community = Item {
+            source: Source::Plugin {
+                plugin: "some-plugin".into(),
+                marketplace: "third-party-marketplace".into(),
+            },
+            ..user.clone()
+        };
+        assert_eq!(community.provenance(), Provenance::Community);
     }
 }

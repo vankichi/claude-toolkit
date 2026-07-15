@@ -8,12 +8,13 @@
 //! async, matching `ccmap`'s single-shot CLI usage.
 
 use crate::discover::{self, discover_all};
-use crate::model::{Item, Kind, PluginState, Source};
+use crate::model::{Item, Kind, PluginState, Provenance, Source};
 use crossterm::event::{Event as CtEvent, KeyCode, KeyEventKind};
 use ratatui::{
     DefaultTerminal, Frame,
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
+    text::{Line, Span},
     widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Tabs, Wrap},
 };
 
@@ -34,6 +35,10 @@ const HINT_H: u16 = 1;
 const LIST_PCT: u16 = 35;
 /// Width of the right detail pane as a percentage of the body area.
 const DETAIL_PCT: u16 = 65;
+/// Height of the provenance box above the detail pane, in rows (including
+/// its border): one bordered box holding exactly the icon+label line and
+/// the detail line.
+const PROVENANCE_H: u16 = 4;
 
 /// Configuration for [`run`]: the filesystem roots that discovery scans.
 pub struct UiConfig {
@@ -387,14 +392,23 @@ fn draw_body(f: &mut Frame<'_>, area: Rect, state: &AppState) {
         ])
         .split(area);
     draw_list(f, chunks[0], state);
-    draw_detail(f, chunks[1], state);
+
+    let right =
+        Layout::vertical([Constraint::Length(PROVENANCE_H), Constraint::Min(0)]).split(chunks[1]);
+    draw_provenance(f, right[0], state);
+    draw_detail(f, right[1], state);
 }
 
 fn draw_list(f: &mut Frame<'_>, area: Rect, state: &AppState) {
     let visible = state.visible();
     let items: Vec<ListItem<'_>> = visible
         .iter()
-        .map(|item| ListItem::new(item.name.as_str()))
+        .map(|item| {
+            let provenance = item.provenance();
+            let text = format!("{} {}", provenance_icon(provenance), item.name);
+            let color = provenance_color(provenance);
+            ListItem::new(Line::from(Span::styled(text, Style::default().fg(color))))
+        })
         .collect();
 
     let mut list_state = ListState::default();
@@ -412,8 +426,44 @@ fn draw_list(f: &mut Frame<'_>, area: Rect, state: &AppState) {
 
     let list = List::new(items)
         .block(Block::default().borders(Borders::ALL).title(title))
-        .highlight_style(Style::default().add_modifier(Modifier::REVERSED));
+        .highlight_style(
+            Style::default()
+                .bg(Color::Green)
+                .fg(Color::Black)
+                .add_modifier(Modifier::BOLD),
+        );
     f.render_stateful_widget(list, area, &mut list_state);
+}
+
+/// Renders the provenance box above the detail pane: the selected item's
+/// provenance icon + label (bold, colored), and where its content lives on
+/// disk (a dim second line). Renders a placeholder dash instead of
+/// panicking when the visible list is empty.
+fn draw_provenance(f: &mut Frame<'_>, area: Rect, state: &AppState) {
+    let block = Block::default().borders(Borders::ALL).title(" provenance ");
+    let Some(item) = state.selected_item() else {
+        f.render_widget(Paragraph::new("—").block(block), area);
+        return;
+    };
+
+    let provenance = item.provenance();
+    let lines = vec![
+        Line::from(Span::styled(
+            format!(
+                "{} {}",
+                provenance_icon(provenance),
+                provenance_label(provenance)
+            ),
+            Style::default()
+                .fg(provenance_color(provenance))
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::from(Span::styled(
+            provenance_detail(&item.source),
+            Style::default().fg(Color::DarkGray),
+        )),
+    ];
+    f.render_widget(Paragraph::new(lines).block(block), area);
 }
 
 fn draw_detail(f: &mut Frame<'_>, area: Rect, state: &AppState) {
@@ -449,16 +499,52 @@ fn tab_title(kind: Kind) -> &'static str {
     }
 }
 
-/// Human-readable rendering of an item's `Source` for the detail pane.
+/// Marker glyph for a `Provenance`, shown before the item name in the list
+/// and beside its label in the provenance panel.
 #[must_use]
-fn format_source(source: &Source) -> String {
+fn provenance_icon(provenance: Provenance) -> &'static str {
+    match provenance {
+        Provenance::Local => "●",
+        Provenance::Project => "◆",
+        Provenance::Official => "★",
+        Provenance::Community => "✦",
+    }
+}
+
+/// Foreground color for a `Provenance`, used for both the list row and the
+/// provenance panel's label line.
+#[must_use]
+fn provenance_color(provenance: Provenance) -> Color {
+    match provenance {
+        Provenance::Local => Color::White,
+        Provenance::Project => Color::Cyan,
+        Provenance::Official => Color::Yellow,
+        Provenance::Community => Color::Magenta,
+    }
+}
+
+/// Human-readable label for a `Provenance`, shown in the provenance panel.
+#[must_use]
+fn provenance_label(provenance: Provenance) -> &'static str {
+    match provenance {
+        Provenance::Local => "Local",
+        Provenance::Project => "Project",
+        Provenance::Official => "Official",
+        Provenance::Community => "Community",
+    }
+}
+
+/// Second line of the provenance panel: where on disk (or which
+/// plugin+marketplace) this item's content came from.
+#[must_use]
+fn provenance_detail(source: &Source) -> String {
     match source {
-        Source::User => "user".to_string(),
-        Source::Project => "project".to_string(),
+        Source::User => "~/.claude".to_string(),
+        Source::Project => "<project>/.claude".to_string(),
         Source::Plugin {
             plugin,
             marketplace,
-        } => format!("plugin ({plugin}@{marketplace})"),
+        } => format!("{plugin} @ {marketplace}"),
     }
 }
 
@@ -473,18 +559,15 @@ fn format_plugin_state(state: PluginState) -> &'static str {
 }
 
 /// Builds the detail-pane text for `item`: full description, a blank line,
-/// `Source: ...`, `Path: ...` when the item has a backing file, a
-/// `State: ...` badge for plugins that carry a `PluginState`, and — for
-/// agents/commands only — a blank line followed by one `key: value` row per
-/// `extra` entry (tools/allowed-tools/model). Pure and terminal-free so it
-/// can be unit-tested directly.
+/// `Path: ...` when the item has a backing file, a `State: ...` badge for
+/// plugins that carry a `PluginState`, and — for agents/commands only — a
+/// blank line followed by one `key: value` row per `extra` entry
+/// (tools/allowed-tools/model). Provenance (local/project/official/community)
+/// is shown in the separate provenance panel, not here. Pure and
+/// terminal-free so it can be unit-tested directly.
 #[must_use]
 fn detail_lines(item: &Item) -> Vec<String> {
-    let mut lines = vec![
-        item.description.clone(),
-        String::new(),
-        format!("Source: {}", format_source(&item.source)),
-    ];
+    let mut lines = vec![item.description.clone(), String::new()];
 
     if let Some(path) = &item.path {
         lines.push(format!("Path: {}", path.display()));
@@ -508,12 +591,13 @@ fn detail_lines(item: &Item) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use crate::model::{Item, Kind, PluginState, Source};
+    use crate::model::{Item, Kind, PluginState, Provenance, Source};
     use crate::ui::{
-        AppState, KeyAction, classify_key, detail_lines, format_plugin_state, format_source,
-        tab_title,
+        AppState, KeyAction, classify_key, detail_lines, format_plugin_state, provenance_color,
+        provenance_detail, provenance_icon, provenance_label, tab_title,
     };
     use crossterm::event::KeyCode;
+    use ratatui::style::Color;
     use std::path::PathBuf;
 
     fn item(kind: Kind, name: &str, description: &str) -> Item {
@@ -698,19 +782,6 @@ mod tests {
     }
 
     #[test]
-    fn format_source_renders_each_variant() {
-        assert_eq!(format_source(&Source::User), "user");
-        assert_eq!(format_source(&Source::Project), "project");
-        assert_eq!(
-            format_source(&Source::Plugin {
-                plugin: "superpowers".to_string(),
-                marketplace: "claude-plugins-official".to_string(),
-            }),
-            "plugin (superpowers@claude-plugins-official)"
-        );
-    }
-
-    #[test]
     fn format_plugin_state_renders_each_variant() {
         assert_eq!(format_plugin_state(PluginState::Available), "available");
         assert_eq!(format_plugin_state(PluginState::Installed), "installed");
@@ -718,16 +789,48 @@ mod tests {
     }
 
     #[test]
-    fn detail_lines_includes_description_and_source_and_omits_absent_sections() {
-        let mut base = item(Kind::Skill, "demo", "a demo skill");
-        base.source = Source::User;
+    fn provenance_icon_maps_each_variant_to_its_glyph() {
+        assert_eq!(provenance_icon(Provenance::Local), "●");
+        assert_eq!(provenance_icon(Provenance::Project), "◆");
+        assert_eq!(provenance_icon(Provenance::Official), "★");
+        assert_eq!(provenance_icon(Provenance::Community), "✦");
+    }
+
+    #[test]
+    fn provenance_color_maps_each_variant_to_its_color() {
+        assert_eq!(provenance_color(Provenance::Local), Color::White);
+        assert_eq!(provenance_color(Provenance::Project), Color::Cyan);
+        assert_eq!(provenance_color(Provenance::Official), Color::Yellow);
+        assert_eq!(provenance_color(Provenance::Community), Color::Magenta);
+    }
+
+    #[test]
+    fn provenance_label_maps_each_variant_to_its_name() {
+        assert_eq!(provenance_label(Provenance::Local), "Local");
+        assert_eq!(provenance_label(Provenance::Project), "Project");
+        assert_eq!(provenance_label(Provenance::Official), "Official");
+        assert_eq!(provenance_label(Provenance::Community), "Community");
+    }
+
+    #[test]
+    fn provenance_detail_renders_each_source_branch() {
+        assert_eq!(provenance_detail(&Source::User), "~/.claude");
+        assert_eq!(provenance_detail(&Source::Project), "<project>/.claude");
+        assert_eq!(
+            provenance_detail(&Source::Plugin {
+                plugin: "superpowers".to_string(),
+                marketplace: "claude-plugins-official".to_string(),
+            }),
+            "superpowers @ claude-plugins-official"
+        );
+    }
+
+    #[test]
+    fn detail_lines_includes_description_and_omits_absent_sections() {
+        let base = item(Kind::Skill, "demo", "a demo skill");
         assert_eq!(
             detail_lines(&base),
-            vec![
-                "a demo skill".to_string(),
-                String::new(),
-                "Source: user".to_string(),
-            ]
+            vec!["a demo skill".to_string(), String::new()]
         );
     }
 
