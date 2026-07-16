@@ -89,8 +89,17 @@ impl UsageDb {
                 Extracted::Command { name } => (Category::Command, name.clone(), unit()),
                 Extracted::Mcp { server } => (Category::Mcp, server.clone(), unit()),
             };
-            let key = EntryKey { category, name, project: project.to_string() };
-            self.entries.entry(key).or_default().entry(day).or_default().add(&stat);
+            let key = EntryKey {
+                category,
+                name,
+                project: project.to_string(),
+            };
+            self.entries
+                .entry(key)
+                .or_default()
+                .entry(day)
+                .or_default()
+                .add(&stat);
         }
     }
 
@@ -107,11 +116,7 @@ impl UsageDb {
     /// Sorted, de-duplicated list of every project label seen.
     #[must_use]
     pub fn projects(&self) -> Vec<String> {
-        let mut set: Vec<String> = self
-            .entries
-            .keys()
-            .map(|k| k.project.clone())
-            .collect();
+        let mut set: Vec<String> = self.entries.keys().map(|k| k.project.clone()).collect();
         set.sort_unstable();
         set.dedup();
         set
@@ -189,7 +194,10 @@ impl UsageDb {
 
 /// A one-invocation `DayStat` for the count-only categories.
 fn unit() -> DayStat {
-    DayStat { count: 1, ..Default::default() }
+    DayStat {
+        count: 1,
+        ..Default::default()
+    }
 }
 
 struct RowAcc {
@@ -244,10 +252,14 @@ impl RowAcc {
 
 fn sort_rows(rows: &mut [Row], sort: SortKey) {
     match sort {
-        SortKey::Count => rows.sort_by(|a, b| b.count.cmp(&a.count).then_with(|| a.name.cmp(&b.name))),
+        SortKey::Count => {
+            rows.sort_by(|a, b| b.count.cmp(&a.count).then_with(|| a.name.cmp(&b.name)));
+        }
         SortKey::Name => rows.sort_by(|a, b| a.name.cmp(&b.name)),
         SortKey::Recency => rows.sort_by(|a, b| {
-            b.last_used.cmp(&a.last_used).then_with(|| a.name.cmp(&b.name))
+            b.last_used
+                .cmp(&a.last_used)
+                .then_with(|| a.name.cmp(&b.name))
         }),
     }
 }
@@ -264,22 +276,56 @@ mod tests {
 
     fn line_at(y: i32, m: u32, d: u32, items: Vec<Extracted>) -> LineData {
         let ts = chrono::Utc.with_ymd_and_hms(y, m, d, 12, 0, 0).unwrap();
-        LineData { timestamp: Some(ts), cwd: None, items }
+        LineData {
+            timestamp: Some(ts),
+            cwd: None,
+            items,
+        }
     }
 
     #[test]
     fn counts_within_window_only() {
         let mut db = UsageDb::default();
         let today = day(2026, 7, 16);
-        db.absorb(&line_at(2026, 7, 15, vec![Extracted::Skill { name: "a".into() }]), "p", today);
-        db.absorb(&line_at(2026, 7, 1, vec![Extracted::Skill { name: "a".into() }]), "p", today);
-        db.absorb(&line_at(2026, 5, 1, vec![Extracted::Skill { name: "a".into() }]), "p", today);
+        db.absorb(
+            &line_at(2026, 7, 15, vec![Extracted::Skill { name: "a".into() }]),
+            "p",
+            today,
+        );
+        db.absorb(
+            &line_at(2026, 7, 1, vec![Extracted::Skill { name: "a".into() }]),
+            "p",
+            today,
+        );
+        db.absorb(
+            &line_at(2026, 5, 1, vec![Extracted::Skill { name: "a".into() }]),
+            "p",
+            today,
+        );
 
-        let all = db.rows(Category::Skill, Window::All, &ProjectFilter::All, SortKey::Count, today);
+        let all = db.rows(
+            Category::Skill,
+            Window::All,
+            &ProjectFilter::All,
+            SortKey::Count,
+            today,
+        );
         assert_eq!(all[0].count, 3);
-        let d7 = db.rows(Category::Skill, Window::Days7, &ProjectFilter::All, SortKey::Count, today);
+        let d7 = db.rows(
+            Category::Skill,
+            Window::Days7,
+            &ProjectFilter::All,
+            SortKey::Count,
+            today,
+        );
         assert_eq!(d7[0].count, 1); // only 7/15 within last 7 days
-        let d30 = db.rows(Category::Skill, Window::Days30, &ProjectFilter::All, SortKey::Count, today);
+        let d30 = db.rows(
+            Category::Skill,
+            Window::Days30,
+            &ProjectFilter::All,
+            SortKey::Count,
+            today,
+        );
         assert_eq!(d30[0].count, 2); // 7/15 and 7/1
     }
 
@@ -287,8 +333,18 @@ mod tests {
     fn recency_is_all_time_regardless_of_window() {
         let mut db = UsageDb::default();
         let today = day(2026, 7, 16);
-        db.absorb(&line_at(2026, 5, 1, vec![Extracted::Skill { name: "a".into() }]), "p", today);
-        let d7 = db.rows(Category::Skill, Window::Days7, &ProjectFilter::All, SortKey::Count, today);
+        db.absorb(
+            &line_at(2026, 5, 1, vec![Extracted::Skill { name: "a".into() }]),
+            "p",
+            today,
+        );
+        let d7 = db.rows(
+            Category::Skill,
+            Window::Days7,
+            &ProjectFilter::All,
+            SortKey::Count,
+            today,
+        );
         // Zero count in the 7d window, but the row still surfaces with its last_used.
         assert_eq!(d7[0].last_used, Some(day(2026, 5, 1)));
         assert_eq!(d7[0].count, 0);
@@ -298,10 +354,28 @@ mod tests {
     fn trend_buckets_last_30_days_oldest_to_newest() {
         let mut db = UsageDb::default();
         let today = day(2026, 7, 16);
-        db.absorb(&line_at(2026, 7, 16, vec![Extracted::Skill { name: "a".into() }]), "p", today);
-        db.absorb(&line_at(2026, 7, 16, vec![Extracted::Skill { name: "a".into() }]), "p", today);
-        db.absorb(&line_at(2026, 7, 15, vec![Extracted::Skill { name: "a".into() }]), "p", today);
-        let rows = db.rows(Category::Skill, Window::All, &ProjectFilter::All, SortKey::Count, today);
+        db.absorb(
+            &line_at(2026, 7, 16, vec![Extracted::Skill { name: "a".into() }]),
+            "p",
+            today,
+        );
+        db.absorb(
+            &line_at(2026, 7, 16, vec![Extracted::Skill { name: "a".into() }]),
+            "p",
+            today,
+        );
+        db.absorb(
+            &line_at(2026, 7, 15, vec![Extracted::Skill { name: "a".into() }]),
+            "p",
+            today,
+        );
+        let rows = db.rows(
+            Category::Skill,
+            Window::All,
+            &ProjectFilter::All,
+            SortKey::Count,
+            today,
+        );
         let t = &rows[0].trend;
         assert_eq!(t.len(), TREND_DAYS);
         assert_eq!(t[TREND_DAYS - 1], 2); // today
@@ -312,14 +386,41 @@ mod tests {
     fn by_project_populated_only_when_filter_is_all() {
         let mut db = UsageDb::default();
         let today = day(2026, 7, 16);
-        db.absorb(&line_at(2026, 7, 16, vec![Extracted::Skill { name: "a".into() }]), "alpha", today);
-        db.absorb(&line_at(2026, 7, 16, vec![Extracted::Skill { name: "a".into() }]), "alpha", today);
-        db.absorb(&line_at(2026, 7, 16, vec![Extracted::Skill { name: "a".into() }]), "beta", today);
+        db.absorb(
+            &line_at(2026, 7, 16, vec![Extracted::Skill { name: "a".into() }]),
+            "alpha",
+            today,
+        );
+        db.absorb(
+            &line_at(2026, 7, 16, vec![Extracted::Skill { name: "a".into() }]),
+            "alpha",
+            today,
+        );
+        db.absorb(
+            &line_at(2026, 7, 16, vec![Extracted::Skill { name: "a".into() }]),
+            "beta",
+            today,
+        );
 
-        let all = db.rows(Category::Skill, Window::All, &ProjectFilter::All, SortKey::Count, today);
-        assert_eq!(all[0].by_project, vec![("alpha".into(), 2), ("beta".into(), 1)]);
+        let all = db.rows(
+            Category::Skill,
+            Window::All,
+            &ProjectFilter::All,
+            SortKey::Count,
+            today,
+        );
+        assert_eq!(
+            all[0].by_project,
+            vec![("alpha".into(), 2), ("beta".into(), 1)]
+        );
 
-        let only = db.rows(Category::Skill, Window::All, &ProjectFilter::Only("beta".into()), SortKey::Count, today);
+        let only = db.rows(
+            Category::Skill,
+            Window::All,
+            &ProjectFilter::Only("beta".into()),
+            SortKey::Count,
+            today,
+        );
         assert_eq!(only[0].count, 1);
         assert!(only[0].by_project.is_empty());
     }
@@ -328,9 +429,30 @@ mod tests {
     fn model_rows_accumulate_tokens_and_cost() {
         let mut db = UsageDb::default();
         let today = day(2026, 7, 16);
-        let usage = Usage { input_tokens: 1_000_000, ..Default::default() };
-        db.absorb(&line_at(2026, 7, 16, vec![Extracted::Model { name: "claude-opus-4-8".into(), usage }]), "p", today);
-        let rows = db.rows(Category::Model, Window::All, &ProjectFilter::All, SortKey::Count, today);
+        let usage = Usage {
+            input_tokens: 1_000_000,
+            ..Default::default()
+        };
+        db.absorb(
+            &line_at(
+                2026,
+                7,
+                16,
+                vec![Extracted::Model {
+                    name: "claude-opus-4-8".into(),
+                    usage,
+                }],
+            ),
+            "p",
+            today,
+        );
+        let rows = db.rows(
+            Category::Model,
+            Window::All,
+            &ProjectFilter::All,
+            SortKey::Count,
+            today,
+        );
         assert_eq!(rows[0].name, "claude-opus-4-8");
         assert_eq!(rows[0].count, 1);
         assert_eq!(rows[0].input, 1_000_000);
@@ -341,17 +463,53 @@ mod tests {
     fn sort_orders_are_deterministic() {
         let mut db = UsageDb::default();
         let today = day(2026, 7, 16);
-        db.absorb(&line_at(2026, 7, 16, vec![Extracted::Skill { name: "b".into() }]), "p", today);
-        db.absorb(&line_at(2026, 7, 16, vec![Extracted::Skill { name: "b".into() }]), "p", today);
-        db.absorb(&line_at(2026, 7, 10, vec![Extracted::Skill { name: "a".into() }]), "p", today);
+        db.absorb(
+            &line_at(2026, 7, 16, vec![Extracted::Skill { name: "b".into() }]),
+            "p",
+            today,
+        );
+        db.absorb(
+            &line_at(2026, 7, 16, vec![Extracted::Skill { name: "b".into() }]),
+            "p",
+            today,
+        );
+        db.absorb(
+            &line_at(2026, 7, 10, vec![Extracted::Skill { name: "a".into() }]),
+            "p",
+            today,
+        );
 
-        let by_count = db.rows(Category::Skill, Window::All, &ProjectFilter::All, SortKey::Count, today);
-        assert_eq!(by_count.iter().map(|r| r.name.as_str()).collect::<Vec<_>>(), vec!["b", "a"]);
+        let by_count = db.rows(
+            Category::Skill,
+            Window::All,
+            &ProjectFilter::All,
+            SortKey::Count,
+            today,
+        );
+        assert_eq!(
+            by_count.iter().map(|r| r.name.as_str()).collect::<Vec<_>>(),
+            vec!["b", "a"]
+        );
 
-        let by_name = db.rows(Category::Skill, Window::All, &ProjectFilter::All, SortKey::Name, today);
-        assert_eq!(by_name.iter().map(|r| r.name.as_str()).collect::<Vec<_>>(), vec!["a", "b"]);
+        let by_name = db.rows(
+            Category::Skill,
+            Window::All,
+            &ProjectFilter::All,
+            SortKey::Name,
+            today,
+        );
+        assert_eq!(
+            by_name.iter().map(|r| r.name.as_str()).collect::<Vec<_>>(),
+            vec!["a", "b"]
+        );
 
-        let by_recency = db.rows(Category::Skill, Window::All, &ProjectFilter::All, SortKey::Recency, today);
+        let by_recency = db.rows(
+            Category::Skill,
+            Window::All,
+            &ProjectFilter::All,
+            SortKey::Recency,
+            today,
+        );
         assert_eq!(by_recency[0].name, "b"); // used today > used 7/10
     }
 
@@ -359,11 +517,25 @@ mod tests {
     fn merge_combines_two_stores() {
         let today = day(2026, 7, 16);
         let mut a = UsageDb::default();
-        a.absorb(&line_at(2026, 7, 16, vec![Extracted::Skill { name: "x".into() }]), "p", today);
+        a.absorb(
+            &line_at(2026, 7, 16, vec![Extracted::Skill { name: "x".into() }]),
+            "p",
+            today,
+        );
         let mut b = UsageDb::default();
-        b.absorb(&line_at(2026, 7, 16, vec![Extracted::Skill { name: "x".into() }]), "p", today);
+        b.absorb(
+            &line_at(2026, 7, 16, vec![Extracted::Skill { name: "x".into() }]),
+            "p",
+            today,
+        );
         a.merge(b);
-        let rows = a.rows(Category::Skill, Window::All, &ProjectFilter::All, SortKey::Count, today);
+        let rows = a.rows(
+            Category::Skill,
+            Window::All,
+            &ProjectFilter::All,
+            SortKey::Count,
+            today,
+        );
         assert_eq!(rows[0].count, 2);
     }
 
@@ -371,9 +543,19 @@ mod tests {
     fn fallback_day_used_when_line_has_no_timestamp() {
         let mut db = UsageDb::default();
         let today = day(2026, 7, 16);
-        let line = LineData { timestamp: None, cwd: None, items: vec![Extracted::Skill { name: "a".into() }] };
+        let line = LineData {
+            timestamp: None,
+            cwd: None,
+            items: vec![Extracted::Skill { name: "a".into() }],
+        };
         db.absorb(&line, "p", day(2026, 7, 16));
-        let rows = db.rows(Category::Skill, Window::Days7, &ProjectFilter::All, SortKey::Count, today);
+        let rows = db.rows(
+            Category::Skill,
+            Window::Days7,
+            &ProjectFilter::All,
+            SortKey::Count,
+            today,
+        );
         assert_eq!(rows[0].count, 1);
     }
 
@@ -381,9 +563,21 @@ mod tests {
     fn projects_are_sorted_and_unique() {
         let mut db = UsageDb::default();
         let today = day(2026, 7, 16);
-        db.absorb(&line_at(2026, 7, 16, vec![Extracted::Skill { name: "a".into() }]), "beta", today);
-        db.absorb(&line_at(2026, 7, 16, vec![Extracted::Skill { name: "a".into() }]), "alpha", today);
-        db.absorb(&line_at(2026, 7, 16, vec![Extracted::Skill { name: "a".into() }]), "beta", today);
+        db.absorb(
+            &line_at(2026, 7, 16, vec![Extracted::Skill { name: "a".into() }]),
+            "beta",
+            today,
+        );
+        db.absorb(
+            &line_at(2026, 7, 16, vec![Extracted::Skill { name: "a".into() }]),
+            "alpha",
+            today,
+        );
+        db.absorb(
+            &line_at(2026, 7, 16, vec![Extracted::Skill { name: "a".into() }]),
+            "beta",
+            today,
+        );
         assert_eq!(db.projects(), vec!["alpha".to_string(), "beta".to_string()]);
     }
 }

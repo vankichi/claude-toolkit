@@ -29,7 +29,10 @@ impl ModelInfo {
             Family::Sonnet
         };
         let long_context = m.contains("[1m]") || m.contains("-1m");
-        Self { family, long_context }
+        Self {
+            family,
+            long_context,
+        }
     }
 
     #[must_use]
@@ -105,22 +108,39 @@ mod tests {
 
     #[test]
     fn opus_costs_more_than_sonnet_for_same_usage() {
-        let u = Usage { input_tokens: 1_000_000, ..Default::default() };
-        assert!(ModelInfo::parse("opus").pricing().cost_usd(&u)
-            > ModelInfo::parse("sonnet").pricing().cost_usd(&u));
+        let u = Usage {
+            input_tokens: 1_000_000,
+            ..Default::default()
+        };
+        assert!(
+            ModelInfo::parse("opus").pricing().cost_usd(&u)
+                > ModelInfo::parse("sonnet").pricing().cost_usd(&u)
+        );
     }
 
     #[test]
     fn one_hour_cache_write_costs_more_than_five_min() {
         let p = ModelInfo::parse("opus").pricing();
-        let m5 = Usage { cache_creation_5m: 1_000_000, ..Default::default() };
-        let h1 = Usage { cache_creation_1h: 1_000_000, ..Default::default() };
+        let m5 = Usage {
+            cache_creation_5m: 1_000_000,
+            ..Default::default()
+        };
+        let h1 = Usage {
+            cache_creation_1h: 1_000_000,
+            ..Default::default()
+        };
         assert!((p.cost_usd(&m5) - 18.75).abs() < 0.01);
         assert!((p.cost_usd(&h1) - 30.0).abs() < 0.01);
     }
 
     #[test]
     fn zero_usage_is_free() {
-        assert!(ModelInfo::parse("opus").pricing().cost_usd(&Usage::default()).abs() < f64::EPSILON);
+        assert!(
+            ModelInfo::parse("opus")
+                .pricing()
+                .cost_usd(&Usage::default())
+                .abs()
+                < f64::EPSILON
+        );
     }
 }
