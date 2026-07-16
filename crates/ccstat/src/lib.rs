@@ -3,3 +3,4 @@
 
 pub mod jsonl;
 pub mod model;
+pub mod pricing;
