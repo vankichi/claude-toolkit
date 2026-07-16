@@ -3,10 +3,18 @@
 //! loop (rendering/`run` added in Task 7).
 
 use crate::model::{Category, ProjectFilter, SortKey, Window};
+use crate::pricing::ModelInfo;
 use crate::scan::{self, ScanConfig};
-use crate::usage::{Row, UsageDb};
+use crate::usage::{Row, TREND_DAYS, UsageDb};
 use chrono::NaiveDate;
-use crossterm::event::KeyCode;
+use crossterm::event::{Event as CtEvent, KeyCode, KeyEventKind};
+use ratatui::{
+    DefaultTerminal, Frame,
+    layout::{Constraint, Direction, Layout, Rect},
+    style::{Color, Modifier, Style},
+    text::{Line, Span},
+    widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Tabs, Wrap},
+};
 
 /// Sentinel shown at the top of the project picker for "no filter".
 const ALL_PROJECTS: &str = "(all projects)";
@@ -165,6 +173,12 @@ impl AppState {
     pub fn cancel_picker(&mut self) {
         self.picking = false;
     }
+
+    /// `today` used for slicing; exposed for rescans and the detail pane.
+    #[must_use]
+    pub fn today_for_rescan(&self) -> NaiveDate {
+        self.today
+    }
 }
 
 /// Semantic key intent. `filtering` and `picking` are modal: they capture
@@ -278,19 +292,287 @@ pub fn detail_lines(row: &Row, category: Category, today: NaiveDate) -> Vec<Stri
     lines
 }
 
-/// Runs the ccstat TUI. Filled in in Task 7.
+const TABS_H: u16 = 3;
+const HINT_H: u16 = 1;
+const LIST_PCT: u16 = 45;
+const DETAIL_PCT: u16 = 55;
+
+/// Runs the ccstat TUI to completion: scans logs, enters the alternate
+/// screen + raw mode, and drives the blocking event loop until the user
+/// quits. The terminal is always restored, on success and error alike.
 ///
-/// `cfg` is taken by value because Task 7's event loop needs to own it
-/// (re-scanning on the `R` rescan key reuses `cfg.projects_dir` across the
-/// blocking loop); this stub only borrows it, hence the explicit allow.
+/// `cfg` is taken by value as the crate's public entry-point signature (the
+/// CLI hands off a freshly built, single-use `ScanConfig`); the body only
+/// ever borrows it (for the initial scan and for rescans on `R`), so clippy
+/// would otherwise suggest a reference — kept as an owned param for call-site
+/// ergonomics.
 #[allow(clippy::needless_pass_by_value)]
 pub fn run(cfg: ScanConfig, today: NaiveDate) -> anyhow::Result<()> {
-    let _ = (
-        &cfg,
-        today,
-        scan::scan as fn(&ScanConfig, NaiveDate) -> UsageDb,
+    let db = scan::scan(&cfg, today);
+    let mut state = AppState::new(db, today);
+    let mut terminal = ratatui::try_init().inspect_err(|_| ratatui::restore())?;
+    let result = run_inner(&mut terminal, &cfg, &mut state);
+    ratatui::restore();
+    result
+}
+
+fn run_inner(
+    terminal: &mut DefaultTerminal,
+    cfg: &ScanConfig,
+    state: &mut AppState,
+) -> anyhow::Result<()> {
+    loop {
+        terminal.draw(|f| draw(f, state))?;
+        let CtEvent::Key(key) = crossterm::event::read()? else {
+            continue;
+        };
+        if key.kind != KeyEventKind::Press {
+            continue;
+        }
+        if handle_key(key.code, state, cfg) {
+            return Ok(());
+        }
+    }
+}
+
+/// Applies one keypress. Returns `true` when the user wants to quit.
+fn handle_key(code: KeyCode, state: &mut AppState, cfg: &ScanConfig) -> bool {
+    match classify_key(code, state.filtering, state.picking) {
+        KeyAction::Quit => return true,
+        KeyAction::NextTab => state.next_tab(),
+        KeyAction::PrevTab => state.prev_tab(),
+        KeyAction::Next => state.next(),
+        KeyAction::Prev => state.prev(),
+        KeyAction::CycleWindow => state.cycle_window(),
+        KeyAction::CycleSort => state.cycle_sort(),
+        KeyAction::OpenProjectPicker => state.open_project_picker(),
+        KeyAction::StartFilter => state.filtering = true,
+        KeyAction::FilterChar(c) => {
+            let mut next = state.filter.clone();
+            next.push(c);
+            state.set_filter(next);
+        }
+        KeyAction::FilterBackspace => {
+            let mut next = state.filter.clone();
+            next.pop();
+            state.set_filter(next);
+        }
+        KeyAction::FilterClear => {
+            state.set_filter(String::new());
+            state.filtering = false;
+        }
+        KeyAction::FilterConfirm => state.filtering = false,
+        KeyAction::PickerNext => state.picker_next(),
+        KeyAction::PickerPrev => state.picker_prev(),
+        KeyAction::PickerApply => state.apply_picker(),
+        KeyAction::PickerCancel => state.cancel_picker(),
+        KeyAction::Rescan => state.reload(scan::scan(cfg, state_today(state))),
+        KeyAction::Ignore => {}
+    }
+    false
+}
+
+/// `today` is private to `AppState`; expose it for rescans via this shim.
+fn state_today(state: &AppState) -> NaiveDate {
+    state.today_for_rescan()
+}
+
+fn draw(f: &mut Frame<'_>, state: &AppState) {
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(TABS_H),
+            Constraint::Min(0),
+            Constraint::Length(HINT_H),
+        ])
+        .split(f.area());
+
+    draw_tabs(f, chunks[0], state);
+    draw_body(f, chunks[1], state);
+    draw_hint(f, chunks[2], state);
+
+    if state.picking {
+        draw_project_picker(f, f.area(), state);
+    }
+}
+
+fn draw_tabs(f: &mut Frame<'_>, area: Rect, state: &AppState) {
+    let titles: Vec<&'static str> = Category::ALL.iter().map(|c| c.title()).collect();
+    let selected = Category::ALL
+        .iter()
+        .position(|c| *c == state.tab)
+        .unwrap_or(0);
+    let project = match &state.project {
+        ProjectFilter::All => "(all)".to_string(),
+        ProjectFilter::Only(p) => p.clone(),
+    };
+    let title = format!(
+        " ccstat · window: {} · project: {} · sort: {} ",
+        state.window.label(),
+        project,
+        state.sort.label(),
     );
-    unimplemented!("rendering + event loop added in Task 7")
+    let tabs = Tabs::new(titles)
+        .block(Block::default().borders(Borders::ALL).title(title))
+        .highlight_style(
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        )
+        .select(selected);
+    f.render_widget(tabs, area);
+}
+
+fn draw_body(f: &mut Frame<'_>, area: Rect, state: &AppState) {
+    let chunks = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage(LIST_PCT),
+            Constraint::Percentage(DETAIL_PCT),
+        ])
+        .split(area);
+    draw_list(f, chunks[0], state);
+    draw_detail(f, chunks[1], state);
+}
+
+fn draw_list(f: &mut Frame<'_>, area: Rect, state: &AppState) {
+    let rows = state.rows();
+    let max_count = rows.iter().map(|r| r.count).max().unwrap_or(0).max(1);
+    let items: Vec<ListItem<'_>> = rows
+        .iter()
+        .map(|r| {
+            let bar = count_bar(r.count, max_count);
+            let color = if state.tab == Category::Model {
+                ModelInfo::parse(&r.name).color()
+            } else {
+                Color::White
+            };
+            let label = format!("{:>6}  {}  {}", r.count, bar, r.name);
+            ListItem::new(Line::from(Span::styled(label, Style::default().fg(color))))
+        })
+        .collect();
+
+    let mut list_state = ListState::default();
+    if !rows.is_empty() {
+        list_state.select(Some(state.selected_index()));
+    }
+
+    let title = if state.filtering {
+        format!(" {}  filter: {}_ ", state.tab.title(), state.filter)
+    } else if state.filter.is_empty() {
+        format!(" {} ", state.tab.title())
+    } else {
+        format!(" {}  filter: {} ", state.tab.title(), state.filter)
+    };
+
+    let list = List::new(items)
+        .block(Block::default().borders(Borders::ALL).title(title))
+        .highlight_style(
+            Style::default()
+                .bg(Color::Green)
+                .fg(Color::Black)
+                .add_modifier(Modifier::BOLD),
+        );
+    f.render_stateful_widget(list, area, &mut list_state);
+}
+
+fn draw_detail(f: &mut Frame<'_>, area: Rect, state: &AppState) {
+    let block = Block::default().borders(Borders::ALL).title(" detail ");
+    let Some(row) = state.selected_row() else {
+        f.render_widget(Paragraph::new("(no matching items)").block(block), area);
+        return;
+    };
+    let mut lines = detail_lines(&row, state.tab, state.today_for_rescan());
+    lines.push(String::new());
+    lines.push(format!("trend ({TREND_DAYS}d): {}", sparkline(&row.trend)));
+    let text = lines.join("\n");
+    f.render_widget(
+        Paragraph::new(text).wrap(Wrap { trim: false }).block(block),
+        area,
+    );
+}
+
+fn draw_hint(f: &mut Frame<'_>, area: Rect, state: &AppState) {
+    let text = if state.picking {
+        " j/k move · Enter select · Esc cancel "
+    } else if state.filtering {
+        " type to filter · Enter confirm · Esc clear "
+    } else {
+        " q quit · Tab tabs · j/k move · w window · s sort · p project · / filter · R rescan "
+    };
+    f.render_widget(Paragraph::new(text), area);
+}
+
+fn draw_project_picker(f: &mut Frame<'_>, area: Rect, state: &AppState) {
+    let opts = state.picker_options();
+    let width = area.width.saturating_sub(area.width / 4).clamp(20, 60);
+    #[allow(clippy::cast_possible_truncation)]
+    let opts_h = opts.len() as u16;
+    let height = (opts_h.saturating_add(2))
+        .min(area.height.saturating_sub(4))
+        .max(3);
+    let x = area.x + (area.width.saturating_sub(width)) / 2;
+    let y = area.y + (area.height.saturating_sub(height)) / 2;
+    let popup = Rect {
+        x,
+        y,
+        width,
+        height,
+    };
+
+    let items: Vec<ListItem<'_>> = opts
+        .iter()
+        .map(|o| ListItem::new(Line::from(o.clone())))
+        .collect();
+    let mut ls = ListState::default();
+    ls.select(Some(state.picker_index()));
+
+    f.render_widget(Clear, popup);
+    let list = List::new(items)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" select project "),
+        )
+        .highlight_style(
+            Style::default()
+                .bg(Color::Green)
+                .fg(Color::Black)
+                .add_modifier(Modifier::BOLD),
+        );
+    f.render_stateful_widget(list, popup, &mut ls);
+}
+
+/// A fixed-width unicode block bar scaled to `count / max`.
+fn count_bar(count: u64, max: u64) -> String {
+    const WIDTH: usize = 10;
+    let scaled = (count as f64 / max as f64) * WIDTH as f64;
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let filled = scaled.round() as usize;
+    let filled = filled.min(WIDTH);
+    format!("{}{}", "█".repeat(filled), "·".repeat(WIDTH - filled))
+}
+
+/// A unicode sparkline over daily counts.
+fn sparkline(values: &[u64]) -> String {
+    const BARS: [char; 8] = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
+    let max = values.iter().copied().max().unwrap_or(0);
+    if max == 0 {
+        return "·".repeat(values.len());
+    }
+    values
+        .iter()
+        .map(|&v| {
+            if v == 0 {
+                '·'
+            } else {
+                let scaled = (v as f64 / max as f64) * (BARS.len() - 1) as f64;
+                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                let idx = scaled.round() as usize;
+                BARS[idx.min(BARS.len() - 1)]
+            }
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -624,5 +906,21 @@ mod tests {
         };
         let lines = detail_lines(&row, Category::Model, today);
         assert!(!lines.iter().any(|l| l == "by project:"));
+    }
+
+    #[test]
+    fn count_bar_scales_and_clamps() {
+        assert_eq!(super::count_bar(0, 10), "··········");
+        assert_eq!(super::count_bar(10, 10), "██████████");
+        assert_eq!(super::count_bar(5, 10), "█████·····");
+    }
+
+    #[test]
+    fn sparkline_marks_zero_days_with_dots() {
+        assert_eq!(super::sparkline(&[0, 0, 0]), "···");
+        let s = super::sparkline(&[0, 1, 8]);
+        assert_eq!(s.chars().count(), 3);
+        assert!(s.starts_with('·'));
+        assert!(s.ends_with('█'));
     }
 }
