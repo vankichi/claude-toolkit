@@ -8,14 +8,14 @@ use crate::provenance::ProvenanceMap;
 use crate::scan::{self, ScanConfig};
 use crate::usage::{Row, TREND_DAYS, UsageDb};
 use ccmap::model::Provenance;
-use chrono::NaiveDate;
+use chrono::{Duration, NaiveDate};
 use crossterm::event::{Event as CtEvent, KeyCode, KeyEventKind};
 use ratatui::{
     DefaultTerminal, Frame,
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Tabs, Wrap},
+    widgets::{BarChart, Block, Borders, Clear, List, ListItem, ListState, Paragraph, Tabs, Wrap},
 };
 
 /// Sentinel shown at the top of the project picker for "no filter".
@@ -33,6 +33,7 @@ pub struct AppState {
     pub filter: String,
     pub filtering: bool,
     pub picking: bool,
+    pub showing_graph: bool,
     picker_idx: usize,
     selected: usize,
 }
@@ -51,6 +52,7 @@ impl AppState {
             filter: String::new(),
             filtering: false,
             picking: false,
+            showing_graph: false,
             picker_idx: 0,
             selected: 0,
         }
@@ -193,6 +195,11 @@ impl AppState {
         self.picking = false;
     }
 
+    /// Toggle the full-screen daily bar-chart view of the selected row.
+    pub fn toggle_graph(&mut self) {
+        self.showing_graph = !self.showing_graph;
+    }
+
     /// `today` used for slicing; exposed for rescans and the detail pane.
     #[must_use]
     pub fn today_for_rescan(&self) -> NaiveDate {
@@ -222,11 +229,24 @@ pub enum KeyAction {
     PickerApply,
     PickerCancel,
     Rescan,
+    ToggleGraph,
     Ignore,
 }
 
 #[must_use]
-pub fn classify_key(code: KeyCode, filtering: bool, picking: bool) -> KeyAction {
+pub fn classify_key(
+    code: KeyCode,
+    filtering: bool,
+    picking: bool,
+    showing_graph: bool,
+) -> KeyAction {
+    if showing_graph {
+        return match code {
+            KeyCode::Char('g') | KeyCode::Esc => KeyAction::ToggleGraph,
+            KeyCode::Char('q') => KeyAction::Quit,
+            _ => KeyAction::Ignore,
+        };
+    }
     if picking {
         return match code {
             KeyCode::Char('j') | KeyCode::Down => KeyAction::PickerNext,
@@ -256,6 +276,7 @@ pub fn classify_key(code: KeyCode, filtering: bool, picking: bool) -> KeyAction 
         KeyCode::Char('p') => KeyAction::OpenProjectPicker,
         KeyCode::Char('/') => KeyAction::StartFilter,
         KeyCode::Char('R') => KeyAction::Rescan,
+        KeyCode::Char('g') => KeyAction::ToggleGraph,
         _ => KeyAction::Ignore,
     }
 }
@@ -386,7 +407,7 @@ fn handle_key(
     cfg: &ScanConfig,
     ctx: &ccmap::discover::Context,
 ) -> bool {
-    match classify_key(code, state.filtering, state.picking) {
+    match classify_key(code, state.filtering, state.picking, state.showing_graph) {
         KeyAction::Quit => return true,
         KeyAction::NextTab => state.next_tab(),
         KeyAction::PrevTab => state.prev_tab(),
@@ -420,6 +441,7 @@ fn handle_key(
             let provenance = ProvenanceMap::build(&ccmap::discover::discover_extensions(ctx));
             state.reload_at(today, scan::scan(cfg, today), provenance);
         }
+        KeyAction::ToggleGraph => state.toggle_graph(),
         KeyAction::Ignore => {}
     }
     false
@@ -436,7 +458,11 @@ fn draw(f: &mut Frame<'_>, state: &AppState) {
         .split(f.area());
 
     draw_tabs(f, chunks[0], state);
-    draw_body(f, chunks[1], state);
+    if state.showing_graph && state.selected_row().is_some() {
+        draw_graph(f, chunks[1], state);
+    } else {
+        draw_body(f, chunks[1], state);
+    }
     draw_hint(f, chunks[2], state);
 
     if state.picking {
@@ -481,6 +507,48 @@ fn draw_body(f: &mut Frame<'_>, area: Rect, state: &AppState) {
         .split(area);
     draw_list(f, chunks[0], state);
     draw_detail(f, chunks[1], state);
+}
+
+/// Full-screen daily bar chart of the selected row's `TREND_DAYS`-day trend.
+fn draw_graph(f: &mut Frame<'_>, area: Rect, state: &AppState) {
+    let Some(row) = state.selected_row() else {
+        return;
+    };
+    let today = state.today_for_rescan();
+
+    // Labels: the TREND_DAYS days ending today, oldest→newest (matches Row.trend order).
+    let labels: Vec<String> = (0..TREND_DAYS)
+        .map(|i| {
+            #[allow(clippy::cast_possible_wrap)]
+            let offset = (TREND_DAYS - 1 - i) as i64;
+            (today - Duration::days(offset)).format("%m/%d").to_string()
+        })
+        .collect();
+    let data: Vec<(&str, u64)> = labels
+        .iter()
+        .zip(row.trend.iter())
+        .map(|(l, &v)| (l.as_str(), v))
+        .collect();
+
+    let title = format!(
+        " {}: {} · total {} · last {}  (g/Esc to close) ",
+        state.tab.title(),
+        row.name,
+        row.count,
+        format_recency(row.last_used, today),
+    );
+    // Fit ~TREND_DAYS bars into the inner width; clamp bar width to a sane range.
+    let inner = area.width.saturating_sub(2).max(1) as usize;
+    #[allow(clippy::cast_possible_truncation)]
+    let bar_width = (inner / TREND_DAYS).clamp(1, 6) as u16;
+    let chart = BarChart::default()
+        .block(Block::default().borders(Borders::ALL).title(title))
+        .data(&data)
+        .bar_width(bar_width)
+        .bar_gap(1)
+        .bar_style(Style::default().fg(Color::Green))
+        .value_style(Style::default().fg(Color::Black).bg(Color::Green));
+    f.render_widget(chart, area);
 }
 
 fn draw_list(f: &mut Frame<'_>, area: Rect, state: &AppState) {
@@ -552,12 +620,14 @@ fn draw_detail(f: &mut Frame<'_>, area: Rect, state: &AppState) {
 }
 
 fn draw_hint(f: &mut Frame<'_>, area: Rect, state: &AppState) {
-    let text = if state.picking {
+    let text = if state.showing_graph {
+        " g/Esc close graph · q quit "
+    } else if state.picking {
         " j/k move · Enter select · Esc cancel "
     } else if state.filtering {
         " type to filter · Enter confirm · Esc clear "
     } else {
-        " q quit · Tab tabs · j/k move · w window · s sort · p project · / filter · R rescan "
+        " q quit · Tab tabs · j/k move · w window · s sort · p project · g graph · / filter · R rescan "
     };
     f.render_widget(Paragraph::new(text), area);
 }
@@ -787,32 +857,35 @@ mod tests {
     #[test]
     fn classify_key_normal_mode() {
         assert_eq!(
-            classify_key(KeyCode::Char('q'), false, false),
+            classify_key(KeyCode::Char('q'), false, false, false),
             KeyAction::Quit
         );
-        assert_eq!(classify_key(KeyCode::Tab, false, false), KeyAction::NextTab);
         assert_eq!(
-            classify_key(KeyCode::Char('w'), false, false),
+            classify_key(KeyCode::Tab, false, false, false),
+            KeyAction::NextTab
+        );
+        assert_eq!(
+            classify_key(KeyCode::Char('w'), false, false, false),
             KeyAction::CycleWindow
         );
         assert_eq!(
-            classify_key(KeyCode::Char('s'), false, false),
+            classify_key(KeyCode::Char('s'), false, false, false),
             KeyAction::CycleSort
         );
         assert_eq!(
-            classify_key(KeyCode::Char('p'), false, false),
+            classify_key(KeyCode::Char('p'), false, false, false),
             KeyAction::OpenProjectPicker
         );
         assert_eq!(
-            classify_key(KeyCode::Char('/'), false, false),
+            classify_key(KeyCode::Char('/'), false, false, false),
             KeyAction::StartFilter
         );
         assert_eq!(
-            classify_key(KeyCode::Char('R'), false, false),
+            classify_key(KeyCode::Char('R'), false, false, false),
             KeyAction::Rescan
         );
         assert_eq!(
-            classify_key(KeyCode::Char('z'), false, false),
+            classify_key(KeyCode::Char('z'), false, false, false),
             KeyAction::Ignore
         );
     }
@@ -820,26 +893,74 @@ mod tests {
     #[test]
     fn classify_key_filtering_and_picking_modes_take_priority() {
         assert_eq!(
-            classify_key(KeyCode::Char('w'), true, false),
+            classify_key(KeyCode::Char('w'), true, false, false),
             KeyAction::FilterChar('w')
         );
         assert_eq!(
-            classify_key(KeyCode::Esc, true, false),
+            classify_key(KeyCode::Esc, true, false, false),
             KeyAction::FilterClear
         );
         // picking wins even if filtering is also somehow set.
         assert_eq!(
-            classify_key(KeyCode::Char('j'), true, true),
+            classify_key(KeyCode::Char('j'), true, true, false),
             KeyAction::PickerNext
         );
         assert_eq!(
-            classify_key(KeyCode::Enter, false, true),
+            classify_key(KeyCode::Enter, false, true, false),
             KeyAction::PickerApply
         );
         assert_eq!(
-            classify_key(KeyCode::Esc, false, true),
+            classify_key(KeyCode::Esc, false, true, false),
             KeyAction::PickerCancel
         );
+    }
+
+    #[test]
+    fn classify_key_graph_mode_is_outermost_modal() {
+        // In graph mode, g/Esc close; q quits; navigation is ignored.
+        assert_eq!(
+            classify_key(KeyCode::Char('g'), false, false, true),
+            KeyAction::ToggleGraph
+        );
+        assert_eq!(
+            classify_key(KeyCode::Esc, false, false, true),
+            KeyAction::ToggleGraph
+        );
+        assert_eq!(
+            classify_key(KeyCode::Char('q'), false, false, true),
+            KeyAction::Quit
+        );
+        assert_eq!(
+            classify_key(KeyCode::Char('j'), false, false, true),
+            KeyAction::Ignore
+        );
+        // Graph beats filtering/picking flags if somehow both set.
+        assert_eq!(
+            classify_key(KeyCode::Char('g'), true, true, true),
+            KeyAction::ToggleGraph
+        );
+    }
+
+    #[test]
+    fn classify_key_g_opens_graph_in_normal_mode() {
+        assert_eq!(
+            classify_key(KeyCode::Char('g'), false, false, false),
+            KeyAction::ToggleGraph
+        );
+    }
+
+    #[test]
+    fn toggle_graph_flips_flag() {
+        let mut st = AppState::new(
+            UsageDb::default(),
+            ProvenanceMap::default(),
+            day(2026, 7, 16),
+        );
+        assert!(!st.showing_graph);
+        st.toggle_graph();
+        assert!(st.showing_graph);
+        st.toggle_graph();
+        assert!(!st.showing_graph);
     }
 
     #[test]

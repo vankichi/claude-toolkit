@@ -14,7 +14,7 @@ and timestamps.
 ## Display
 
 ```
-┌ ccstat · window: 30d · project: (all) · sort: count ────────────────┐
+┌ ccstat · window: 7d · project: (all) · sort: count ─────────────────┐
 │  Model   Agents   Skills   Commands   MCP                           │
 ├──────────────────────────────┬──────────────────────────────────────┤
 │    24  ██████████  brainstorm │ Skills: brainstorm                   │
@@ -22,7 +22,7 @@ and timestamps.
 │     8  ███·······  artifact-… │ trend (30d): ▁▂▅▇▆▃▂▁▁▃▅▇…           │
 │                               │ by project: claude-toolkit 14 · …    │
 └──────────────────────────────┴──────────────────────────────────────┘
- q quit · Tab tabs · j/k move · w window · s sort · p project · / filter · R rescan
+ q quit · Tab tabs · j/k move · w window · s sort · p project · g graph · / filter · R rescan
 ```
 
 ## Keys
@@ -31,12 +31,28 @@ and timestamps.
 |---|---|
 | `Tab` / `BackTab` | next / previous category tab |
 | `j` / `k` (↓/↑) | move selection |
-| `w` | cycle time window (all / 30d / 7d) — scopes count/tokens/cost/ranking |
+| `w` | cycle time window (all / 30d / 7d, default 7d) — scopes count/tokens/cost/ranking |
 | `s` | cycle sort (count / recency / name) |
 | `p` | open the project filter picker (`j`/`k`, `Enter` apply, `Esc` cancel) |
+| `g` | toggle a full-screen daily bar chart of the selected row (30-day) |
 | `/` | filter rows by name (Esc clears) |
 | `R` | rescan logs |
 | `q` / `Esc` | quit |
+
+## Provenance colors
+
+Agent/Skill/Command rows are colored by where the item was discovered (via
+[`ccmap`](../ccmap)'s extension discovery), mirroring `ccmap`'s own palette:
+
+| Source | Color |
+|---|---|
+| Local (`~/.claude`) | white |
+| Project | cyan |
+| Official plugin | yellow |
+| Community plugin | magenta |
+| built-in / unknown | gray |
+
+The Model tab uses model-family colors instead, and MCP rows are uncolored.
 
 ## What each column means
 
