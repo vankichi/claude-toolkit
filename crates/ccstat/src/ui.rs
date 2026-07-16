@@ -4,8 +4,10 @@
 
 use crate::model::{Category, ProjectFilter, SortKey, Window};
 use crate::pricing::ModelInfo;
+use crate::provenance::ProvenanceMap;
 use crate::scan::{self, ScanConfig};
 use crate::usage::{Row, TREND_DAYS, UsageDb};
+use ccmap::model::Provenance;
 use chrono::NaiveDate;
 use crossterm::event::{Event as CtEvent, KeyCode, KeyEventKind};
 use ratatui::{
@@ -22,6 +24,7 @@ const ALL_PROJECTS: &str = "(all projects)";
 /// Pure UI state: the aggregated store plus every selector the user can move.
 pub struct AppState {
     db: UsageDb,
+    provenance: ProvenanceMap,
     today: NaiveDate,
     pub tab: Category,
     pub window: Window,
@@ -36,12 +39,13 @@ pub struct AppState {
 
 impl AppState {
     #[must_use]
-    pub fn new(db: UsageDb, today: NaiveDate) -> Self {
+    pub fn new(db: UsageDb, provenance: ProvenanceMap, today: NaiveDate) -> Self {
         Self {
             db,
+            provenance,
             today,
             tab: Category::Model,
-            window: Window::Days30,
+            window: Window::Days7, // default to the most recent activity
             sort: SortKey::Count,
             project: ProjectFilter::All,
             filter: String::new(),
@@ -123,9 +127,17 @@ impl AppState {
 
     /// Refresh the current date and replace the store (used by rescan so
     /// time-relative fields stay correct across day boundaries).
-    pub fn reload_at(&mut self, today: NaiveDate, db: UsageDb) {
+    pub fn reload_at(&mut self, today: NaiveDate, db: UsageDb, provenance: ProvenanceMap) {
         self.today = today;
+        self.provenance = provenance;
         self.reload(db);
+    }
+
+    /// The discovered provenance of a used agent/skill/command, or `None`
+    /// when it wasn't found by discovery (built-in, deleted, other project).
+    #[must_use]
+    pub fn provenance_of(&self, category: Category, name: &str) -> Option<Provenance> {
+        self.provenance.lookup(category, name)
     }
 
     // ---- project picker ----
@@ -264,6 +276,31 @@ pub fn format_recency(last_used: Option<NaiveDate>, today: NaiveDate) -> String 
     }
 }
 
+/// Row color for a provenance (mirrors ccmap's provenance palette); `None`
+/// (built-in / undiscovered) is dim gray.
+#[must_use]
+fn provenance_color(provenance: Option<Provenance>) -> Color {
+    match provenance {
+        Some(Provenance::Local) => Color::White,
+        Some(Provenance::Project) => Color::Cyan,
+        Some(Provenance::Official) => Color::Yellow,
+        Some(Provenance::Community) => Color::Magenta,
+        None => Color::DarkGray,
+    }
+}
+
+/// Human-readable source label for the detail pane.
+#[must_use]
+fn source_label(provenance: Option<Provenance>) -> &'static str {
+    match provenance {
+        Some(Provenance::Local) => "Local (~/.claude)",
+        Some(Provenance::Project) => "Project",
+        Some(Provenance::Official) => "Official plugin",
+        Some(Provenance::Community) => "Community plugin",
+        None => "built-in / unknown",
+    }
+}
+
 /// Detail-pane text for the selected row. Pure and terminal-free.
 #[must_use]
 pub fn detail_lines(row: &Row, category: Category, today: NaiveDate) -> Vec<String> {
@@ -304,14 +341,20 @@ const HINT_H: u16 = 1;
 const LIST_PCT: u16 = 45;
 const DETAIL_PCT: u16 = 55;
 
-/// Runs the ccstat TUI to completion: scans logs, enters the alternate
-/// screen + raw mode, and drives the blocking event loop until the user
-/// quits. The terminal is always restored, on success and error alike.
-pub fn run(cfg: &ScanConfig, today: NaiveDate) -> anyhow::Result<()> {
+/// Runs the ccstat TUI to completion: scans logs, discovers extension
+/// provenance, enters the alternate screen + raw mode, and drives the
+/// blocking event loop until the user quits. The terminal is always
+/// restored, on success and error alike.
+pub fn run(
+    cfg: &ScanConfig,
+    ctx: &ccmap::discover::Context,
+    today: NaiveDate,
+) -> anyhow::Result<()> {
     let db = scan::scan(cfg, today);
-    let mut state = AppState::new(db, today);
+    let provenance = ProvenanceMap::build(&ccmap::discover::discover_extensions(ctx));
+    let mut state = AppState::new(db, provenance, today);
     let mut terminal = ratatui::try_init().inspect_err(|_| ratatui::restore())?;
-    let result = run_inner(&mut terminal, cfg, &mut state);
+    let result = run_inner(&mut terminal, cfg, ctx, &mut state);
     ratatui::restore();
     result
 }
@@ -319,6 +362,7 @@ pub fn run(cfg: &ScanConfig, today: NaiveDate) -> anyhow::Result<()> {
 fn run_inner(
     terminal: &mut DefaultTerminal,
     cfg: &ScanConfig,
+    ctx: &ccmap::discover::Context,
     state: &mut AppState,
 ) -> anyhow::Result<()> {
     loop {
@@ -329,14 +373,19 @@ fn run_inner(
         if key.kind != KeyEventKind::Press {
             continue;
         }
-        if handle_key(key.code, state, cfg) {
+        if handle_key(key.code, state, cfg, ctx) {
             return Ok(());
         }
     }
 }
 
 /// Applies one keypress. Returns `true` when the user wants to quit.
-fn handle_key(code: KeyCode, state: &mut AppState, cfg: &ScanConfig) -> bool {
+fn handle_key(
+    code: KeyCode,
+    state: &mut AppState,
+    cfg: &ScanConfig,
+    ctx: &ccmap::discover::Context,
+) -> bool {
     match classify_key(code, state.filtering, state.picking) {
         KeyAction::Quit => return true,
         KeyAction::NextTab => state.next_tab(),
@@ -368,7 +417,8 @@ fn handle_key(code: KeyCode, state: &mut AppState, cfg: &ScanConfig) -> bool {
         KeyAction::PickerCancel => state.cancel_picker(),
         KeyAction::Rescan => {
             let today = chrono::Utc::now().date_naive();
-            state.reload_at(today, scan::scan(cfg, today));
+            let provenance = ProvenanceMap::build(&ccmap::discover::discover_extensions(ctx));
+            state.reload_at(today, scan::scan(cfg, today), provenance);
         }
         KeyAction::Ignore => {}
     }
@@ -440,10 +490,12 @@ fn draw_list(f: &mut Frame<'_>, area: Rect, state: &AppState) {
         .iter()
         .map(|r| {
             let bar = count_bar(r.count, max_count);
-            let color = if state.tab == Category::Model {
-                ModelInfo::parse(&r.name).color()
-            } else {
-                Color::White
+            let color = match state.tab {
+                Category::Model => ModelInfo::parse(&r.name).color(),
+                Category::Agent | Category::Skill | Category::Command => {
+                    provenance_color(state.provenance_of(state.tab, &r.name))
+                }
+                Category::Mcp => Color::White,
             };
             let label = format!("{:>6}  {}  {}", r.count, bar, r.name);
             ListItem::new(Line::from(Span::styled(label, Style::default().fg(color))))
@@ -481,6 +533,15 @@ fn draw_detail(f: &mut Frame<'_>, area: Rect, state: &AppState) {
         return;
     };
     let mut lines = detail_lines(&row, state.tab, state.today_for_rescan());
+    if matches!(
+        state.tab,
+        Category::Agent | Category::Skill | Category::Command
+    ) {
+        lines.push(format!(
+            "source: {}",
+            source_label(state.provenance_of(state.tab, &row.name))
+        ));
+    }
     lines.push(String::new());
     lines.push(format!("trend ({TREND_DAYS}d): {}", sparkline(&row.trend)));
     let text = lines.join("\n");
@@ -580,6 +641,7 @@ fn sparkline(values: &[u64]) -> String {
 mod tests {
     use super::*;
     use crate::jsonl::{Extracted, LineData};
+    use crate::provenance::ProvenanceMap;
     use crate::usage::TREND_DAYS;
     use chrono::TimeZone;
 
@@ -617,18 +679,44 @@ mod tests {
     }
 
     #[test]
-    fn starts_on_model_tab_30d_count_sort() {
-        let st = AppState::new(UsageDb::default(), day(2026, 7, 16));
+    fn starts_on_model_tab_7d_count_sort() {
+        let st = AppState::new(
+            UsageDb::default(),
+            ProvenanceMap::default(),
+            day(2026, 7, 16),
+        );
         assert_eq!(st.tab, Category::Model);
-        assert_eq!(st.window, Window::Days30);
+        assert_eq!(st.window, Window::Days7);
         assert_eq!(st.sort, SortKey::Count);
         assert_eq!(st.project, ProjectFilter::All);
     }
 
     #[test]
+    fn provenance_color_maps_each_case() {
+        use ccmap::model::Provenance;
+        assert_eq!(
+            super::provenance_color(Some(Provenance::Local)),
+            Color::White
+        );
+        assert_eq!(
+            super::provenance_color(Some(Provenance::Project)),
+            Color::Cyan
+        );
+        assert_eq!(
+            super::provenance_color(Some(Provenance::Official)),
+            Color::Yellow
+        );
+        assert_eq!(
+            super::provenance_color(Some(Provenance::Community)),
+            Color::Magenta
+        );
+        assert_eq!(super::provenance_color(None), Color::DarkGray);
+    }
+
+    #[test]
     fn tab_switch_moves_to_the_right_category_and_resets_selection() {
         let db = db_with(&[(Category::Skill, "a", "p"), (Category::Skill, "b", "p")]);
-        let mut st = AppState::new(db, day(2026, 7, 16));
+        let mut st = AppState::new(db, ProvenanceMap::default(), day(2026, 7, 16));
         st.next(); // select second model row (none) — no-op, but exercises reset
         st.tab = Category::Skill;
         assert_eq!(st.rows().len(), 2);
@@ -640,7 +728,7 @@ mod tests {
             (Category::Skill, "Alpha", "p"),
             (Category::Skill, "beta", "p"),
         ]);
-        let mut st = AppState::new(db, day(2026, 7, 16));
+        let mut st = AppState::new(db, ProvenanceMap::default(), day(2026, 7, 16));
         st.tab = Category::Skill;
         st.set_filter("alp".to_string());
         let names: Vec<String> = st.rows().into_iter().map(|r| r.name).collect();
@@ -650,7 +738,7 @@ mod tests {
     #[test]
     fn selection_clamps_and_tracks() {
         let db = db_with(&[(Category::Skill, "a", "p"), (Category::Skill, "b", "p")]);
-        let mut st = AppState::new(db, day(2026, 7, 16));
+        let mut st = AppState::new(db, ProvenanceMap::default(), day(2026, 7, 16));
         st.tab = Category::Skill;
         st.window = Window::All;
         assert_eq!(st.selected_index(), 0);
@@ -669,7 +757,7 @@ mod tests {
             (Category::Skill, "a", "alpha"),
             (Category::Skill, "a", "beta"),
         ]);
-        let mut st = AppState::new(db, day(2026, 7, 16));
+        let mut st = AppState::new(db, ProvenanceMap::default(), day(2026, 7, 16));
         st.tab = Category::Skill;
         st.window = Window::All;
         st.open_project_picker();
@@ -688,7 +776,7 @@ mod tests {
     #[test]
     fn project_picker_cancel_keeps_filter() {
         let db = db_with(&[(Category::Skill, "a", "alpha")]);
-        let mut st = AppState::new(db, day(2026, 7, 16));
+        let mut st = AppState::new(db, ProvenanceMap::default(), day(2026, 7, 16));
         st.open_project_picker();
         st.picker_next();
         st.cancel_picker();
@@ -799,7 +887,7 @@ mod tests {
             (Category::Skill, "b", "p"),
             (Category::Agent, "x", "p"),
         ]);
-        let mut st = AppState::new(db, day(2026, 7, 16));
+        let mut st = AppState::new(db, ProvenanceMap::default(), day(2026, 7, 16));
         st.window = Window::All;
         st.tab = Category::Skill;
         st.next();
@@ -815,7 +903,7 @@ mod tests {
             (Category::Skill, "b", "p"),
             (Category::Agent, "x", "p"),
         ]);
-        let mut st = AppState::new(db, day(2026, 7, 16));
+        let mut st = AppState::new(db, ProvenanceMap::default(), day(2026, 7, 16));
         st.window = Window::All;
         st.tab = Category::Skill;
         st.next();
@@ -827,7 +915,7 @@ mod tests {
     #[test]
     fn cycle_window_resets_selection() {
         let db = db_with(&[(Category::Skill, "a", "p"), (Category::Skill, "b", "p")]);
-        let mut st = AppState::new(db, day(2026, 7, 16));
+        let mut st = AppState::new(db, ProvenanceMap::default(), day(2026, 7, 16));
         st.tab = Category::Skill;
         st.window = Window::All;
         st.next();
@@ -839,7 +927,7 @@ mod tests {
     #[test]
     fn cycle_sort_resets_selection() {
         let db = db_with(&[(Category::Skill, "a", "p"), (Category::Skill, "b", "p")]);
-        let mut st = AppState::new(db, day(2026, 7, 16));
+        let mut st = AppState::new(db, ProvenanceMap::default(), day(2026, 7, 16));
         st.tab = Category::Skill;
         st.window = Window::All;
         st.next();
@@ -851,7 +939,7 @@ mod tests {
     #[test]
     fn reload_clamps_selection_when_new_db_is_smaller() {
         let db = db_with(&[(Category::Skill, "a", "p"), (Category::Skill, "b", "p")]);
-        let mut st = AppState::new(db, day(2026, 7, 16));
+        let mut st = AppState::new(db, ProvenanceMap::default(), day(2026, 7, 16));
         st.tab = Category::Skill;
         st.window = Window::All;
         st.next();
@@ -871,7 +959,7 @@ mod tests {
     #[test]
     fn reload_at_refreshes_today_so_recency_reflects_the_new_date() {
         let db = db_with(&[(Category::Skill, "a", "p")]);
-        let mut st = AppState::new(db, day(2026, 7, 16));
+        let mut st = AppState::new(db, ProvenanceMap::default(), day(2026, 7, 16));
         st.tab = Category::Skill;
         st.window = Window::All;
 
@@ -887,7 +975,7 @@ mod tests {
         // though its own last-used date didn't change.
         let later = day(2026, 7, 17);
         let refreshed = db_with(&[(Category::Skill, "a", "p")]);
-        st.reload_at(later, refreshed);
+        st.reload_at(later, refreshed, ProvenanceMap::default());
 
         assert_eq!(st.today_for_rescan(), later);
         let after = st.selected_row().expect("row exists");
