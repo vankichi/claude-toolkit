@@ -4,6 +4,7 @@
 pub mod jsonl;
 pub mod model;
 pub mod pricing;
+pub mod provenance;
 pub mod scan;
 pub mod ui;
 pub mod usage;

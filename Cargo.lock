@@ -194,6 +194,7 @@ name = "ccstat"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "ccmap",
  "chrono",
  "clap",
  "crossterm",
