@@ -508,4 +508,121 @@ mod tests {
         assert!(!sl.iter().any(|l| l.contains("tokens:")));
         assert!(sl.iter().any(|l| l.contains("by project:")));
     }
+
+    #[test]
+    fn next_tab_resets_selection() {
+        let db = db_with(&[
+            (Category::Skill, "a", "p"),
+            (Category::Skill, "b", "p"),
+            (Category::Agent, "x", "p"),
+        ]);
+        let mut st = AppState::new(db, day(2026, 7, 16));
+        st.window = Window::All;
+        st.tab = Category::Skill;
+        st.next();
+        assert_eq!(st.selected_index(), 1);
+        st.next_tab();
+        assert_eq!(st.selected_index(), 0);
+    }
+
+    #[test]
+    fn prev_tab_resets_selection() {
+        let db = db_with(&[
+            (Category::Skill, "a", "p"),
+            (Category::Skill, "b", "p"),
+            (Category::Agent, "x", "p"),
+        ]);
+        let mut st = AppState::new(db, day(2026, 7, 16));
+        st.window = Window::All;
+        st.tab = Category::Skill;
+        st.next();
+        assert_eq!(st.selected_index(), 1);
+        st.prev_tab();
+        assert_eq!(st.selected_index(), 0);
+    }
+
+    #[test]
+    fn cycle_window_resets_selection() {
+        let db = db_with(&[(Category::Skill, "a", "p"), (Category::Skill, "b", "p")]);
+        let mut st = AppState::new(db, day(2026, 7, 16));
+        st.tab = Category::Skill;
+        st.window = Window::All;
+        st.next();
+        assert_eq!(st.selected_index(), 1);
+        st.cycle_window();
+        assert_eq!(st.selected_index(), 0);
+    }
+
+    #[test]
+    fn cycle_sort_resets_selection() {
+        let db = db_with(&[(Category::Skill, "a", "p"), (Category::Skill, "b", "p")]);
+        let mut st = AppState::new(db, day(2026, 7, 16));
+        st.tab = Category::Skill;
+        st.window = Window::All;
+        st.next();
+        assert_eq!(st.selected_index(), 1);
+        st.cycle_sort();
+        assert_eq!(st.selected_index(), 0);
+    }
+
+    #[test]
+    fn reload_clamps_selection_when_new_db_is_smaller() {
+        let db = db_with(&[(Category::Skill, "a", "p"), (Category::Skill, "b", "p")]);
+        let mut st = AppState::new(db, day(2026, 7, 16));
+        st.tab = Category::Skill;
+        st.window = Window::All;
+        st.next();
+        assert_eq!(st.selected_index(), 1);
+
+        let smaller = db_with(&[(Category::Skill, "only", "p")]);
+        st.reload(smaller);
+        assert_eq!(st.selected_index(), 0);
+        assert_eq!(st.selected_row().map(|r| r.name), Some("only".to_string()));
+
+        let empty = db_with(&[]);
+        st.reload(empty);
+        assert_eq!(st.selected_index(), 0);
+        assert!(st.selected_row().is_none());
+    }
+
+    #[test]
+    fn detail_lines_suppresses_tokens_for_zero_count_model_row() {
+        let today = day(2026, 7, 16);
+        let row = Row {
+            name: "opus".into(),
+            count: 0,
+            last_used: Some(today),
+            first_used: Some(day(2026, 7, 1)),
+            trend: vec![0; TREND_DAYS],
+            input: 0,
+            output: 0,
+            cache_creation: 0,
+            cache_read: 0,
+            cost_usd: 0.0,
+            by_project: vec![],
+        };
+        let lines = detail_lines(&row, Category::Model, today);
+        assert!(!lines.iter().any(|l| l.starts_with("tokens:")));
+        assert!(!lines.iter().any(|l| l.starts_with("est. cost:")));
+    }
+
+    #[test]
+    fn detail_lines_omits_by_project_section_when_empty() {
+        let today = day(2026, 7, 16);
+        let row = Row {
+            name: "opus".into(),
+            count: 3,
+            last_used: Some(today),
+            first_used: Some(day(2026, 7, 1)),
+            trend: vec![0; TREND_DAYS],
+            input: 100,
+            output: 200,
+            cache_creation: 0,
+            cache_read: 50,
+            cost_usd: 1.23,
+            by_project: vec![],
+        };
+        let lines = detail_lines(&row, Category::Model, today);
+        assert!(!lines.iter().any(|l| l == "by project:"));
+    }
 }
