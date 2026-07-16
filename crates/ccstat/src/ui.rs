@@ -196,7 +196,12 @@ impl AppState {
     }
 
     /// Toggle the full-screen daily bar-chart view of the selected row.
+    /// Turning the graph on is a no-op without a selected row (nothing to
+    /// plot); turning it off always succeeds.
     pub fn toggle_graph(&mut self) {
+        if !self.showing_graph && self.selected_row().is_none() {
+            return;
+        }
         self.showing_graph = !self.showing_graph;
     }
 
@@ -531,10 +536,12 @@ fn draw_graph(f: &mut Frame<'_>, area: Rect, state: &AppState) {
         .collect();
 
     let title = format!(
-        " {}: {} · total {} · last {}  (g/Esc to close) ",
+        " {}: {} · {} in {} · {}-day trend · last {} (g/Esc close) ",
         state.tab.title(),
         row.name,
         row.count,
+        state.window.label(),
+        TREND_DAYS,
         format_recency(row.last_used, today),
     );
     // Fit ~TREND_DAYS bars into the inner width; clamp bar width to a sane range.
@@ -951,14 +958,26 @@ mod tests {
 
     #[test]
     fn toggle_graph_flips_flag() {
+        let db = db_with(&[(Category::Skill, "a", "p")]);
+        let mut st = AppState::new(db, ProvenanceMap::default(), day(2026, 7, 16));
+        st.tab = Category::Skill;
+        st.window = Window::All;
+        assert!(st.selected_row().is_some());
+        assert!(!st.showing_graph);
+        st.toggle_graph();
+        assert!(st.showing_graph);
+        st.toggle_graph();
+        assert!(!st.showing_graph);
+    }
+
+    #[test]
+    fn toggle_graph_noop_without_selected_row() {
         let mut st = AppState::new(
             UsageDb::default(),
             ProvenanceMap::default(),
             day(2026, 7, 16),
         );
         assert!(!st.showing_graph);
-        st.toggle_graph();
-        assert!(st.showing_graph);
         st.toggle_graph();
         assert!(!st.showing_graph);
     }
