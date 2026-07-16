@@ -121,6 +121,13 @@ impl AppState {
         };
     }
 
+    /// Refresh the current date and replace the store (used by rescan so
+    /// time-relative fields stay correct across day boundaries).
+    pub fn reload_at(&mut self, today: NaiveDate, db: UsageDb) {
+        self.today = today;
+        self.reload(db);
+    }
+
     // ---- project picker ----
 
     /// Options shown in the picker: `(all projects)` first, then every project.
@@ -359,15 +366,13 @@ fn handle_key(code: KeyCode, state: &mut AppState, cfg: &ScanConfig) -> bool {
         KeyAction::PickerPrev => state.picker_prev(),
         KeyAction::PickerApply => state.apply_picker(),
         KeyAction::PickerCancel => state.cancel_picker(),
-        KeyAction::Rescan => state.reload(scan::scan(cfg, state_today(state))),
+        KeyAction::Rescan => {
+            let today = chrono::Utc::now().date_naive();
+            state.reload_at(today, scan::scan(cfg, today));
+        }
         KeyAction::Ignore => {}
     }
     false
-}
-
-/// `today` is private to `AppState`; expose it for rescans via this shim.
-fn state_today(state: &AppState) -> NaiveDate {
-    state.today_for_rescan()
 }
 
 fn draw(f: &mut Frame<'_>, state: &AppState) {
@@ -861,6 +866,35 @@ mod tests {
         st.reload(empty);
         assert_eq!(st.selected_index(), 0);
         assert!(st.selected_row().is_none());
+    }
+
+    #[test]
+    fn reload_at_refreshes_today_so_recency_reflects_the_new_date() {
+        let db = db_with(&[(Category::Skill, "a", "p")]);
+        let mut st = AppState::new(db, day(2026, 7, 16));
+        st.tab = Category::Skill;
+        st.window = Window::All;
+
+        // Row was last used on the (initial) today -> "today".
+        let before = st.selected_row().expect("row exists");
+        assert_eq!(
+            format_recency(before.last_used, st.today_for_rescan()),
+            "today"
+        );
+
+        // Simulate `R` after midnight UTC has rolled over: reload_at moves
+        // `today` forward a day, so the same row is now "1d ago" even
+        // though its own last-used date didn't change.
+        let later = day(2026, 7, 17);
+        let refreshed = db_with(&[(Category::Skill, "a", "p")]);
+        st.reload_at(later, refreshed);
+
+        assert_eq!(st.today_for_rescan(), later);
+        let after = st.selected_row().expect("row exists");
+        assert_eq!(
+            format_recency(after.last_used, st.today_for_rescan()),
+            "1d ago"
+        );
     }
 
     #[test]

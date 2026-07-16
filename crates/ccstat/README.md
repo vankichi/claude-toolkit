@@ -78,3 +78,6 @@ ccstat --projects-dir /path   # override the projects directory
 - **Per-project by cwd basename.** Git worktrees with distinct paths appear
   as separate projects.
 - **MCP is server-level.** Per-tool breakdown is not shown in v1.
+- **Day buckets are UTC.** Events (and `today`) are keyed by UTC date, so for
+  users far from UTC a late-evening local session can land on the next UTC
+  day, shifting counts/recency near day boundaries.
