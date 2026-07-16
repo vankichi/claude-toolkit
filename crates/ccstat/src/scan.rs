@@ -47,9 +47,10 @@ pub fn scan(cfg: &ScanConfig, today: NaiveDate) -> UsageDb {
             })
             .collect();
         for h in handles {
-            if let Ok(db) = h.join() {
-                total.merge(db);
-            }
+            // A worker panic is a bug (the parse path is panic-free by design); fail
+            // loudly rather than silently under-reporting. In release builds
+            // (panic = "abort") a worker panic aborts the process before this point.
+            total.merge(h.join().expect("ccstat scan worker thread panicked"));
         }
     });
 
@@ -73,7 +74,9 @@ pub fn session_files(projects_dir: &Path) -> Vec<PathBuf> {
         };
         for se in sessions.flatten() {
             let path = se.path();
-            if path.extension().and_then(|e| e.to_str()) == Some("jsonl") {
+            let is_jsonl = path.extension().and_then(|e| e.to_str()) == Some("jsonl");
+            let is_file = se.file_type().is_ok_and(|t| t.is_file());
+            if is_jsonl && is_file {
                 out.push(path);
             }
         }
@@ -163,11 +166,49 @@ mod tests {
         assert!(files.iter().all(|p| p.extension().unwrap() == "jsonl"));
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn session_files_excludes_symlinks() {
+        let tmp = tempfile::tempdir().unwrap();
+        let real = write_session(tmp.path(), "proj-a", "s1.jsonl", &["{}"]);
+
+        // A symlink named *.jsonl one level down, pointing OUTSIDE the
+        // projects tree, must not be collected (read-only contract: only
+        // real *.jsonl files under projects_dir may be opened).
+        let outside = tempfile::NamedTempFile::new().unwrap();
+        let pd = tmp.path().join("proj-a");
+        let evil = pd.join("evil.jsonl");
+        std::os::unix::fs::symlink(outside.path(), &evil).unwrap();
+
+        let mut files = session_files(tmp.path());
+        files.sort();
+        assert_eq!(files, vec![real]);
+    }
+
+    #[test]
+    fn session_files_ignores_top_level_jsonl() {
+        let tmp = tempfile::tempdir().unwrap();
+        // A .jsonl placed directly in projects_dir (zero levels deep) must
+        // not be collected; session_files only recurses into directories.
+        std::fs::write(tmp.path().join("top-level.jsonl"), "{}").unwrap();
+        write_session(tmp.path(), "proj-a", "s1.jsonl", &["{}"]);
+
+        let files = session_files(tmp.path());
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].file_name().unwrap(), "s1.jsonl");
+    }
+
     #[test]
     fn project_label_prefers_cwd_basename() {
         let file = Path::new("/x/-Users-me-repo/session.jsonl");
-        assert_eq!(project_label(file, Some("/Users/me/work/my-repo")), "my-repo");
-        assert_eq!(project_label(file, Some("/Users/me/work/my-repo/")), "my-repo");
+        assert_eq!(
+            project_label(file, Some("/Users/me/work/my-repo")),
+            "my-repo"
+        );
+        assert_eq!(
+            project_label(file, Some("/Users/me/work/my-repo/")),
+            "my-repo"
+        );
     }
 
     #[test]
@@ -184,8 +225,19 @@ mod tests {
         write_session(tmp.path(), "-home-u-alpha", "s1.jsonl", &[skill]);
         write_session(tmp.path(), "-home-u-alpha", "s2.jsonl", &[skill]);
 
-        let db = scan(&ScanConfig { projects_dir: tmp.path().to_path_buf() }, today);
-        let rows = db.rows(Category::Skill, Window::All, &ProjectFilter::All, SortKey::Count, today);
+        let db = scan(
+            &ScanConfig {
+                projects_dir: tmp.path().to_path_buf(),
+            },
+            today,
+        );
+        let rows = db.rows(
+            Category::Skill,
+            Window::All,
+            &ProjectFilter::All,
+            SortKey::Count,
+            today,
+        );
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].name, "brainstorm");
         assert_eq!(rows[0].count, 2);
@@ -196,14 +248,24 @@ mod tests {
     fn scan_of_empty_dir_is_empty() {
         let tmp = tempfile::tempdir().unwrap();
         let today = NaiveDate::from_ymd_opt(2026, 7, 16).unwrap();
-        let db = scan(&ScanConfig { projects_dir: tmp.path().to_path_buf() }, today);
+        let db = scan(
+            &ScanConfig {
+                projects_dir: tmp.path().to_path_buf(),
+            },
+            today,
+        );
         assert!(db.is_empty());
     }
 
     #[test]
     fn scan_of_missing_dir_is_empty() {
         let today = NaiveDate::from_ymd_opt(2026, 7, 16).unwrap();
-        let db = scan(&ScanConfig { projects_dir: PathBuf::from("/no/such/dir/xyz") }, today);
+        let db = scan(
+            &ScanConfig {
+                projects_dir: PathBuf::from("/no/such/dir/xyz"),
+            },
+            today,
+        );
         assert!(db.is_empty());
     }
 }
