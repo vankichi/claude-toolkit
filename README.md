@@ -1,5 +1,11 @@
 # claude-toolkit
 
+[English](README.md) | [日本語](README.ja.md)
+
+[![CI](https://github.com/vankichi/claude-toolkit/actions/workflows/ci.yml/badge.svg)](https://github.com/vankichi/claude-toolkit/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/vankichi/claude-toolkit?sort=semver)](https://github.com/vankichi/claude-toolkit/releases/latest)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 A Cargo workspace of small terminal tools for working with Claude Code.
 
 ## Tools
@@ -10,32 +16,78 @@ A Cargo workspace of small terminal tools for working with Claude Code.
 | [`ccmap`](crates/ccmap) | Read-only TUI to browse available agents, skills, commands, plugins, and MCP servers. |
 | [`ccstat`](crates/ccstat) | Read-only TUI ranking model/agent/skill/command/MCP usage aggregated across all session logs. |
 
-## Build & install
+## Install
+
+### Prebuilt binaries (recommended)
+
+macOS / Linux — one command downloads the latest release, verifies its SHA-256
+checksum, and installs all three tools into `~/.local/bin`, replacing any older
+copies:
 
 ```sh
-make help                # 全レシピ一覧
-make build               # debug build
-make release             # release build (lto=fat / panic=abort)
-make test                # cargo test --workspace
-make ci                  # fmt-check + clippy + test
-make install             # release ビルド → ~/.local/bin にコピー
-make install PREFIX=/opt/homebrew/bin   # install 先を変える
-make uninstall           # 各 binary を $(PREFIX) から削除
+curl -fsSL https://raw.githubusercontent.com/vankichi/claude-toolkit/main/install.sh | sh
 ```
 
-`~/.local/bin` が PATH に通っていれば `make install` 後すぐ叩ける。通っていなければ
-`~/.zshrc` 等に以下を追加:
+Prefer to read the script before running it? Download, inspect, then execute:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/vankichi/claude-toolkit/main/install.sh -o install.sh
+less install.sh
+sh install.sh
+```
+
+Environment variables:
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `PREFIX` | `$HOME/.local/bin` | Install destination |
+| `VERSION` | latest release | Release tag to install, e.g. `v0.1.0` |
+
+Make sure the install destination is on your `PATH`:
 
 ```sh
 export PATH="$HOME/.local/bin:$PATH"
 ```
 
+**Windows**: download the `*-x86_64-pc-windows-msvc.zip` asset from the
+[latest release](https://github.com/vankichi/claude-toolkit/releases/latest),
+verify it against `SHA256SUMS`, and extract the binaries onto your `PATH`.
+
+### From source
+
+```sh
+make help                # list all recipes
+make build               # debug build
+make release             # release build (lto=fat / panic=abort)
+make test                # cargo test --workspace
+make ci                  # fmt-check + clippy + test
+make install             # release build → copy into ~/.local/bin
+make install PREFIX=/opt/homebrew/bin   # change install destination
+make uninstall           # remove each binary from $(PREFIX)
+```
+
+If `~/.local/bin` is on your `PATH`, the tools are runnable right after
+`make install`. Otherwise add it (see the export above).
+
+## Releasing
+
+Pushing a `v*` tag triggers [`.github/workflows/release.yml`](.github/workflows/release.yml),
+which builds every binary on its native runner (macOS / Linux / Windows),
+bundles the three tools per target, generates `SHA256SUMS`, and publishes a
+GitHub Release with the archives attached.
+
+```sh
+git tag v0.1.0
+git push origin v0.1.0
+```
+
 ## Adding a new tool
 
-1. Create `crates/<new-name>/Cargo.toml`、workspace から各種 metadata を継承
-   (`edition.workspace = true` 等)
-2. `[lints] workspace = true` で lint 設定も継承
-3. このルート README の tools 表に行を追加
-4. `make ci` が通ることを確認
+1. Create `crates/<new-name>/Cargo.toml`, inheriting workspace metadata
+   (`edition.workspace = true`, etc.)
+2. Inherit lints with `[lints] workspace = true`
+3. Add a row to the tools table in this README **and** `README.ja.md`
+4. Confirm `make ci` passes
 
-`/add-rust-crate` skill が雛形を出すので、それを使えば手作業が減る。
+The `/add-rust-crate` skill scaffolds this, so most of the manual work is
+handled for you.

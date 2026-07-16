@@ -1,0 +1,113 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            os: macos-latest
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: release-${{ matrix.target }}
+
+      - name: Build
+        run: cargo build --release --locked --workspace --target ${{ matrix.target }}
+
+      - name: Package (unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          staging="claude-toolkit-${version}-${{ matrix.target }}"
+          mkdir "$staging"
+          for bin in ccwatch ccmap ccstat; do
+            cp "target/${{ matrix.target }}/release/$bin" "$staging/"
+          done
+          cp LICENSE "$staging/"
+          tar -czf "${staging}.tar.gz" "$staging"
+          shasum -a 256 "${staging}.tar.gz" > "${staging}.tar.gz.sha256"
+
+      - name: Package (windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $version = "$env:GITHUB_REF_NAME".TrimStart("v")
+          $staging = "claude-toolkit-$version-${{ matrix.target }}"
+          New-Item -ItemType Directory -Path $staging | Out-Null
+          foreach ($bin in "ccwatch", "ccmap", "ccstat") {
+            Copy-Item "target/${{ matrix.target }}/release/$bin.exe" $staging
+          }
+          Copy-Item "LICENSE" $staging
+          Compress-Archive -Path $staging -DestinationPath "$staging.zip"
+          $hash = (Get-FileHash "$staging.zip" -Algorithm SHA256).Hash.ToLower()
+          "$hash  $staging.zip" | Out-File -Encoding ascii -NoNewline "$staging.zip.sha256"
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: bundle-${{ matrix.target }}
+          path: |
+            claude-toolkit-*.tar.gz
+            claude-toolkit-*.zip
+            claude-toolkit-*.sha256
+          if-no-files-found: error
+          retention-days: 1
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: bundle-*
+          merge-multiple: true
+
+      - name: Assemble SHA256SUMS
+        working-directory: dist
+        run: |
+          # Each *.sha256 holds one "<hash>  <archive>" line. `awk 1` normalizes
+          # line endings (some producers omit the trailing newline) into a single
+          # SHA256SUMS without blank lines, then the per-target parts are dropped.
+          awk 1 *.sha256 > SHA256SUMS
+          rm -f *.sha256
+          echo "== SHA256SUMS =="
+          cat SHA256SUMS
+
+      - name: Create release
+        working-directory: dist
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "$GITHUB_REF_NAME" \
+            --generate-notes \
+            claude-toolkit-*.tar.gz claude-toolkit-*.zip SHA256SUMS
