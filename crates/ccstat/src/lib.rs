@@ -4,3 +4,4 @@
 pub mod jsonl;
 pub mod model;
 pub mod pricing;
+pub mod usage;
