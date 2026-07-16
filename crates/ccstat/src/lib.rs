@@ -5,4 +5,5 @@ pub mod jsonl;
 pub mod model;
 pub mod pricing;
 pub mod scan;
+pub mod ui;
 pub mod usage;
