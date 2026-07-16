@@ -27,5 +27,6 @@ fn main() -> Result<()> {
         let home = std::env::home_dir().context("could not determine home directory")?;
         home.join(".claude").join("projects")
     };
-    ui::run(ScanConfig { projects_dir }, Utc::now().date_naive())
+    let cfg = ScanConfig { projects_dir };
+    ui::run(&cfg, Utc::now().date_naive())
 }

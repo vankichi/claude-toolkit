@@ -300,18 +300,11 @@ const DETAIL_PCT: u16 = 55;
 /// Runs the ccstat TUI to completion: scans logs, enters the alternate
 /// screen + raw mode, and drives the blocking event loop until the user
 /// quits. The terminal is always restored, on success and error alike.
-///
-/// `cfg` is taken by value as the crate's public entry-point signature (the
-/// CLI hands off a freshly built, single-use `ScanConfig`); the body only
-/// ever borrows it (for the initial scan and for rescans on `R`), so clippy
-/// would otherwise suggest a reference — kept as an owned param for call-site
-/// ergonomics.
-#[allow(clippy::needless_pass_by_value)]
-pub fn run(cfg: ScanConfig, today: NaiveDate) -> anyhow::Result<()> {
-    let db = scan::scan(&cfg, today);
+pub fn run(cfg: &ScanConfig, today: NaiveDate) -> anyhow::Result<()> {
+    let db = scan::scan(cfg, today);
     let mut state = AppState::new(db, today);
     let mut terminal = ratatui::try_init().inspect_err(|_| ratatui::restore())?;
-    let result = run_inner(&mut terminal, &cfg, &mut state);
+    let result = run_inner(&mut terminal, cfg, &mut state);
     ratatui::restore();
     result
 }
@@ -546,6 +539,9 @@ fn draw_project_picker(f: &mut Frame<'_>, area: Rect, state: &AppState) {
 /// A fixed-width unicode block bar scaled to `count / max`.
 fn count_bar(count: u64, max: u64) -> String {
     const WIDTH: usize = 10;
+    if max == 0 {
+        return "·".repeat(WIDTH);
+    }
     let scaled = (count as f64 / max as f64) * WIDTH as f64;
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     let filled = scaled.round() as usize;
@@ -913,6 +909,11 @@ mod tests {
         assert_eq!(super::count_bar(0, 10), "··········");
         assert_eq!(super::count_bar(10, 10), "██████████");
         assert_eq!(super::count_bar(5, 10), "█████·····");
+    }
+
+    #[test]
+    fn count_bar_zero_max_is_all_dots() {
+        assert_eq!(super::count_bar(5, 0), "··········");
     }
 
     #[test]
