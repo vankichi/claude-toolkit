@@ -12,12 +12,17 @@ keywords.workspace = true
 categories.workspace = true
 publish.workspace = true
 
+[lib]
+name = "ccwatch"
+path = "src/lib.rs"
+
 [[bin]]
 name = "ccwatch"
 path = "src/main.rs"
 
 [dependencies]
 anyhow.workspace = true
+cctk = { path = "../cctk", version = "0.1.1", features = ["tail"] }
 chrono.workspace = true
 clap.workspace = true
 crossterm.workspace = true
