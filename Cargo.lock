@@ -178,7 +178,7 @@ dependencies = [
 
 [[package]]
 name = "ccmap"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -191,7 +191,7 @@ dependencies = [
 
 [[package]]
 name = "ccstat"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "ccmap",
@@ -206,7 +206,7 @@ dependencies = [
 
 [[package]]
 name = "ccwatch"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "chrono",

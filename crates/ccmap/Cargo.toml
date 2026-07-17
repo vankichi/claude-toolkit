@@ -1,6 +1,6 @@
 [package]
 name = "ccmap"
-version = "0.1.0"
+version = "0.1.1"
 description = "Terminal explorer for Claude Code agents, skills, commands, plugins, and MCP servers"
 edition.workspace = true
 rust-version.workspace = true

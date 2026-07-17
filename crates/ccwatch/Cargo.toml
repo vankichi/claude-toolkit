@@ -1,6 +1,6 @@
 [package]
 name = "ccwatch"
-version = "0.1.0"
+version = "0.1.1"
 description = "Real-time terminal monitor for Claude Code session usage"
 edition.workspace = true
 rust-version.workspace = true
