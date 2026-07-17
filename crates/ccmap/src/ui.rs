@@ -257,7 +257,11 @@ fn classify_key(code: KeyCode, filtering: bool) -> KeyAction {
 /// list/tab/filter mutation goes through `AppState`'s safe methods; only the
 /// `filtering` UI-mode flag is toggled directly. Returns `true` when the
 /// caller should exit the event loop.
-fn handle_key(
+///
+/// Part of the re-entrant view API: a host (e.g. `cctop` drill-down) can own
+/// the terminal and event loop, calling [`draw`] each frame and `handle_key`
+/// per keypress. A `true` return means "leave this view" (back to the host).
+pub fn handle_key(
     code: KeyCode,
     state: &mut AppState,
     ctx: &discover::Context,
@@ -351,8 +355,9 @@ fn copy_to_clipboard(text: &str) {
 }
 
 /// Renders one frame: tab bar on top, item list + detail pane in the
-/// middle, key hints on the bottom.
-fn draw(f: &mut Frame<'_>, state: &AppState) {
+/// middle, key hints on the bottom. Public so a host (e.g. `cctop`
+/// drill-down) can render this view without ccmap owning the terminal.
+pub fn draw(f: &mut Frame<'_>, state: &AppState) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([

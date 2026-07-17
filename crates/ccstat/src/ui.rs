@@ -546,7 +546,11 @@ fn run_inner(
 }
 
 /// Applies one keypress. Returns `true` when the user wants to quit.
-fn handle_key(
+///
+/// Part of the re-entrant view API: a host (e.g. `cctop` drill-down) can own
+/// the terminal and event loop, calling [`draw`] each frame and `handle_key`
+/// per keypress. A `true` return means "leave this view" (back to the host).
+pub fn handle_key(
     code: KeyCode,
     state: &mut AppState,
     cfg: &ScanConfig,
@@ -592,7 +596,9 @@ fn handle_key(
     false
 }
 
-fn draw(f: &mut Frame<'_>, state: &AppState) {
+/// Render the full ccstat view into `f`. Public so a host (e.g. `cctop`
+/// drill-down) can render this view without ccstat owning the terminal.
+pub fn draw(f: &mut Frame<'_>, state: &AppState) {
     // Watch mode inserts a one-line running summary between the tabs and body.
     let mut constraints = vec![Constraint::Length(TABS_H)];
     if state.watch {
