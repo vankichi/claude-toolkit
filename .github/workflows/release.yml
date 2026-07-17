@@ -67,7 +67,7 @@ jobs:
           "$hash  $staging.zip" | Out-File -Encoding ascii -NoNewline "$staging.zip.sha256"
 
       - name: Upload build artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: bundle-${{ matrix.target }}
           path: |
@@ -84,7 +84,7 @@ jobs:
       contents: write
     steps:
       - name: Download build artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: dist
           pattern: bundle-*
