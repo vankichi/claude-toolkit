@@ -9,8 +9,6 @@
 use crate::jsonl::{self, LineData};
 use crate::usage::UsageDb;
 use chrono::{DateTime, NaiveDate, Utc};
-use std::fs::File;
-use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 
 pub struct ScanConfig {
@@ -101,16 +99,21 @@ pub fn project_label(file: &Path, cwd: Option<&str>) -> String {
 
 fn parse_file(path: &Path, today: NaiveDate) -> UsageDb {
     let fallback_day = file_mtime_date(path).unwrap_or(today);
-    let Ok(file) = File::open(path) else {
+    let Ok(bytes) = std::fs::read(path) else {
         return UsageDb::default();
     };
+    // Lossy UTF-8 decode keeps every line even when a byte is invalid, so one
+    // corrupt line can't truncate the rest of the session file. (A lazy
+    // `Lines` + `filter_map(Result::ok)` would instead risk an infinite loop
+    // on a persistent read error; a single read avoids both failure modes.)
+    let content = String::from_utf8_lossy(&bytes);
 
     // Buffer this file's parsed lines so we can resolve the project label
     // (which comes from a cwd that may appear on any line) before folding.
     let mut lines: Vec<LineData> = Vec::new();
     let mut cwd: Option<String> = None;
-    for line in BufReader::new(file).lines().map_while(Result::ok) {
-        let data = jsonl::parse_line(&line);
+    for line in content.lines() {
+        let data = jsonl::parse_line(line);
         if cwd.is_none()
             && let Some(c) = &data.cwd
         {
@@ -139,6 +142,7 @@ fn file_mtime_date(path: &Path) -> Option<NaiveDate> {
 mod tests {
     use super::*;
     use crate::model::{Category, ProjectFilter, SortKey, Window};
+    use std::fs::File;
     use std::io::Write;
 
     fn write_session(dir: &Path, project_dir: &str, file: &str, lines: &[&str]) -> PathBuf {

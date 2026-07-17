@@ -7,9 +7,13 @@ session log.
 Where [`ccmap`](../ccmap) shows what you *can* use and [`ccwatch`](../ccwatch)
 shows live token/cost for the *current* session, `ccstat` answers the
 historical question: *what have I been using, how often, when last, and in
-which project?* It is **read-only** — it reads `~/.claude/projects/**/*.jsonl`
-and nothing else (never `~/.claude.json`), and extracts only names, counts,
-and timestamps.
+which project?* It is **read-only**: it reads your session logs under
+`~/.claude/projects/**/*.jsonl`, and — to color agent/skill/command rows by
+where each item comes from — the extension and plugin metadata under
+`~/.claude` that [`ccmap`](../ccmap) also scans (`agents/`, `skills/`,
+`commands/`, and plugin catalogs). It never reads `~/.claude.json`, never
+writes anything, and from the logs it extracts only names, counts, token
+totals, and timestamps — not message content or secrets.
 
 ## Display
 
@@ -91,8 +95,15 @@ ccstat --projects-dir /path   # override the projects directory
   `ccwatch`'s job).
 - **No cost attribution beyond models.** Agents/skills/commands/MCP show
   counts only — attributing tokens to them is inherently fuzzy.
-- **Per-project by cwd basename.** Git worktrees with distinct paths appear
-  as separate projects.
+- **Per-project by cwd basename.** Projects are keyed by the last path
+  component of the session's working directory. Git worktrees with distinct
+  paths appear as separate projects; conversely, two different repos that
+  share a directory name (e.g. `/work/api` and `/personal/api`) are merged
+  under one `api` entry.
+- **Historical items stay listed at count 0 in a narrow window.** In the 7d
+  and 30d views, an item with no activity in the window still appears (count
+  0, empty bar) so its all-time recency stays visible; it sinks to the bottom
+  under count sort.
 - **MCP is server-level.** Per-tool breakdown is not shown in v1.
 - **Day buckets are UTC.** Events (and `today`) are keyed by UTC date, so for
   users far from UTC a late-evening local session can land on the next UTC
