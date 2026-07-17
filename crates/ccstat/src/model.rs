@@ -2,8 +2,10 @@
 //! time-window / sort / project-filter selectors that slice the aggregated
 //! usage store.
 
-/// One usage category, each a tab in the TUI.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+/// One usage category, each a tab in the TUI. `Ord` follows declaration order
+/// (Model < Agent < Skill < Command < Mcp), which the live-activity summary
+/// relies on for a stable, tab-ordered listing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Category {
     Model,
     Agent,

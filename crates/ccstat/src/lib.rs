@@ -2,6 +2,7 @@
 //! usage aggregated across all local session logs.
 
 pub mod jsonl;
+pub mod live;
 pub mod model;
 pub mod pricing;
 pub mod provenance;

@@ -1,7 +1,9 @@
 //! ccstat TUI: pure `AppState` (fully testable without a terminal), key
-//! classification, detail formatting, plus rendering and the blocking event
-//! loop (rendering/`run` added in Task 7).
+//! classification, detail formatting, rendering, and the two event loops —
+//! the blocking snapshot loop and the `--watch` live loop that animates the
+//! running-item spinner and auto-refreshes.
 
+use crate::live::{self, ActiveSet};
 use crate::model::{Category, ProjectFilter, SortKey, Window};
 use crate::pricing::ModelInfo;
 use crate::provenance::ProvenanceMap;
@@ -22,6 +24,8 @@ use ratatui::{
 const ALL_PROJECTS: &str = "(all projects)";
 
 /// Pure UI state: the aggregated store plus every selector the user can move.
+// The flags are independent modal toggles, not a state to hoist into an enum.
+#[allow(clippy::struct_excessive_bools)]
 pub struct AppState {
     db: UsageDb,
     provenance: ProvenanceMap,
@@ -34,6 +38,11 @@ pub struct AppState {
     pub filtering: bool,
     pub picking: bool,
     pub showing_graph: bool,
+    /// `--watch` live mode: drives the running-summary line and per-row
+    /// spinners. Off means the classic snapshot rendering is unchanged.
+    pub watch: bool,
+    active: ActiveSet,
+    spinner_tick: u64,
     picker_idx: usize,
     selected: usize,
 }
@@ -53,6 +62,9 @@ impl AppState {
             filtering: false,
             picking: false,
             showing_graph: false,
+            watch: false,
+            active: ActiveSet::default(),
+            spinner_tick: 0,
             picker_idx: 0,
             selected: 0,
         }
@@ -210,6 +222,61 @@ impl AppState {
     pub fn today_for_rescan(&self) -> NaiveDate {
         self.today
     }
+
+    // ---- live (`--watch`) mode ----
+
+    /// Replace the set of items running "now" (recomputed on the active poll).
+    pub fn set_active(&mut self, active: ActiveSet) {
+        self.active = active;
+    }
+
+    /// Advance the spinner animation by one frame.
+    pub fn tick_spinner(&mut self) {
+        self.spinner_tick = self.spinner_tick.wrapping_add(1);
+    }
+
+    /// Current spinner glyph for the animation frame.
+    #[must_use]
+    pub fn spinner_char(&self) -> char {
+        live::spinner_frame(self.spinner_tick)
+    }
+
+    /// Is `(category, name)` running now? Always false outside watch mode.
+    #[must_use]
+    pub fn is_active(&self, category: Category, name: &str) -> bool {
+        self.watch && self.active.is_active(category, name)
+    }
+
+    /// Text for the running-summary line (without the animated leading glyph,
+    /// so it is frame-independent). `"idle"` when nothing identifiable is
+    /// running; otherwise the deduplicated running names plus the live-session
+    /// count, e.g. `running: opus · go-feature-tdd · brainstorm · 2 active`.
+    #[must_use]
+    pub fn running_summary(&self) -> String {
+        const MAX: usize = 8;
+        if self.active.is_empty() {
+            return "idle".to_string();
+        }
+        let mut seen = std::collections::HashSet::new();
+        let mut names: Vec<&str> = Vec::new();
+        for (_, n) in self.active.iter() {
+            if seen.insert(n.as_str()) {
+                names.push(n.as_str());
+            }
+        }
+        let shown = names.len().min(MAX);
+        let mut body = names[..shown].join(" · ");
+        if names.len() > MAX {
+            body.push_str(" …");
+        }
+        format!("running: {body} · {} active", self.active.session_count())
+    }
+
+    /// Whether anything is currently running (drives the leading glyph choice).
+    #[must_use]
+    pub fn has_active(&self) -> bool {
+        self.watch && !self.active.is_empty()
+    }
 }
 
 /// Semantic key intent. `filtering` and `picking` are modal: they capture
@@ -363,26 +430,100 @@ pub fn detail_lines(row: &Row, category: Category, today: NaiveDate) -> Vec<Stri
 }
 
 const TABS_H: u16 = 3;
+const RUN_H: u16 = 1;
 const HINT_H: u16 = 1;
 const LIST_PCT: u16 = 45;
 const DETAIL_PCT: u16 = 55;
 
+/// Spinner animation frame interval (and the max time an idle watch loop
+/// blocks on input before redrawing).
+const SPINNER_TICK: std::time::Duration = std::time::Duration::from_millis(100);
+/// How often watch mode recomputes the "running now" set (cheap tail reads).
+const ACTIVE_POLL: std::time::Duration = std::time::Duration::from_secs(2);
+/// A session counts as live if its log was modified within this many seconds.
+const ACTIVE_WINDOW_SECS: i64 = 90;
+/// Bytes read from the end of each live session log for activity detection.
+const TAIL_BYTES: u64 = 16 * 1024;
+
 /// Runs the ccstat TUI to completion: scans logs, discovers extension
-/// provenance, enters the alternate screen + raw mode, and drives the
-/// blocking event loop until the user quits. The terminal is always
-/// restored, on success and error alike.
+/// provenance, enters the alternate screen + raw mode, and drives the event
+/// loop until the user quits. `watch` selects the loop: `None` is the classic
+/// blocking snapshot loop; `Some(interval)` is the live loop that animates the
+/// spinner, polls activity, and re-aggregates every `interval`. The terminal
+/// is always restored, on success and error alike.
 pub fn run(
     cfg: &ScanConfig,
     ctx: &ccmap::discover::Context,
     today: NaiveDate,
+    watch: Option<std::time::Duration>,
 ) -> anyhow::Result<()> {
     let db = scan::scan(cfg, today);
     let provenance = ProvenanceMap::build(&ccmap::discover::discover_extensions(ctx));
     let mut state = AppState::new(db, provenance, today);
+    state.watch = watch.is_some();
     let mut terminal = ratatui::try_init().inspect_err(|_| ratatui::restore())?;
-    let result = run_inner(&mut terminal, cfg, ctx, &mut state);
+    let result = match watch {
+        Some(interval) => run_watch_inner(&mut terminal, cfg, ctx, &mut state, interval),
+        None => run_inner(&mut terminal, cfg, ctx, &mut state),
+    };
     ratatui::restore();
     result
+}
+
+/// Live event loop for `--watch`. Uses `event::poll` so the loop wakes on the
+/// spinner timer even without input: each timeout advances the animation,
+/// `ACTIVE_POLL` recomputes the running set from live-session tails, and
+/// `rescan_interval` re-aggregates the whole corpus (like pressing `R`).
+fn run_watch_inner(
+    terminal: &mut DefaultTerminal,
+    cfg: &ScanConfig,
+    ctx: &ccmap::discover::Context,
+    state: &mut AppState,
+    rescan_interval: std::time::Duration,
+) -> anyhow::Result<()> {
+    let window = Duration::seconds(ACTIVE_WINDOW_SECS);
+    // Seed the running set so the very first frame reflects live activity.
+    state.set_active(scan::compute_active(
+        cfg,
+        chrono::Utc::now(),
+        window,
+        TAIL_BYTES,
+    ));
+    let mut last_active = std::time::Instant::now();
+    let mut last_rescan = std::time::Instant::now();
+
+    loop {
+        terminal.draw(|f| draw(f, state))?;
+
+        if crossterm::event::poll(SPINNER_TICK)? {
+            if let CtEvent::Key(key) = crossterm::event::read()?
+                && key.kind == KeyEventKind::Press
+                && handle_key(key.code, state, cfg, ctx)
+            {
+                return Ok(());
+            }
+        } else {
+            // Poll timed out with no input: advance the spinner animation.
+            state.tick_spinner();
+        }
+
+        let now = std::time::Instant::now();
+        if now.duration_since(last_active) >= ACTIVE_POLL {
+            state.set_active(scan::compute_active(
+                cfg,
+                chrono::Utc::now(),
+                window,
+                TAIL_BYTES,
+            ));
+            last_active = now;
+        }
+        if now.duration_since(last_rescan) >= rescan_interval {
+            let today = chrono::Utc::now().date_naive();
+            let provenance = ProvenanceMap::build(&ccmap::discover::discover_extensions(ctx));
+            state.reload_at(today, scan::scan(cfg, today), provenance);
+            last_rescan = now;
+        }
+    }
 }
 
 fn run_inner(
@@ -453,26 +594,59 @@ fn handle_key(
 }
 
 fn draw(f: &mut Frame<'_>, state: &AppState) {
+    // Watch mode inserts a one-line running summary between the tabs and body.
+    let mut constraints = vec![Constraint::Length(TABS_H)];
+    if state.watch {
+        constraints.push(Constraint::Length(RUN_H));
+    }
+    constraints.push(Constraint::Min(0));
+    constraints.push(Constraint::Length(HINT_H));
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(TABS_H),
-            Constraint::Min(0),
-            Constraint::Length(HINT_H),
-        ])
+        .constraints(constraints)
         .split(f.area());
 
-    draw_tabs(f, chunks[0], state);
-    if state.showing_graph && state.selected_row().is_some() {
-        draw_graph(f, chunks[1], state);
-    } else {
-        draw_body(f, chunks[1], state);
+    let mut idx = 0;
+    draw_tabs(f, chunks[idx], state);
+    idx += 1;
+    if state.watch {
+        draw_running(f, chunks[idx], state);
+        idx += 1;
     }
-    draw_hint(f, chunks[2], state);
+    let body = chunks[idx];
+    idx += 1;
+    let hint = chunks[idx];
+
+    if state.showing_graph && state.selected_row().is_some() {
+        draw_graph(f, body, state);
+    } else {
+        draw_body(f, body, state);
+    }
+    draw_hint(f, hint, state);
 
     if state.picking {
         draw_project_picker(f, f.area(), state);
     }
+}
+
+/// One-line running summary shown in watch mode: an animated spinner (or a dim
+/// `○` when idle) followed by the running-item names and live-session count.
+fn draw_running(f: &mut Frame<'_>, area: Rect, state: &AppState) {
+    let (glyph, glyph_style) = if state.has_active() {
+        (
+            state.spinner_char(),
+            Style::default()
+                .fg(Color::Green)
+                .add_modifier(Modifier::BOLD),
+        )
+    } else {
+        ('○', Style::default().fg(Color::DarkGray))
+    };
+    let line = Line::from(vec![
+        Span::styled(format!(" {glyph} "), glyph_style),
+        Span::styled(state.running_summary(), Style::default().fg(Color::Gray)),
+    ]);
+    f.render_widget(Paragraph::new(line), area);
 }
 
 fn draw_tabs(f: &mut Frame<'_>, area: Rect, state: &AppState) {
@@ -485,8 +659,9 @@ fn draw_tabs(f: &mut Frame<'_>, area: Rect, state: &AppState) {
         ProjectFilter::All => "(all)".to_string(),
         ProjectFilter::Only(p) => p.clone(),
     };
+    let watch = if state.watch { " · watch" } else { "" };
     let title = format!(
-        " ccstat · window: {} · project: {} · sort: {} ",
+        " ccstat · window: {} · project: {} · sort: {}{watch} ",
         state.window.label(),
         project,
         state.sort.label(),
@@ -572,8 +747,30 @@ fn draw_list(f: &mut Frame<'_>, area: Rect, state: &AppState) {
                 }
                 Category::Mcp => Color::White,
             };
-            let label = format!("{:>6}  {}  {}", r.count, bar, r.name);
-            ListItem::new(Line::from(Span::styled(label, Style::default().fg(color))))
+            // In watch mode a leading column carries the spinner for rows that
+            // are running now; idle rows (and all rows in snapshot mode) keep
+            // the classic layout.
+            if state.watch {
+                let spin = if state.is_active(state.tab, &r.name) {
+                    state.spinner_char()
+                } else {
+                    ' '
+                };
+                let spin_span = Span::styled(
+                    spin.to_string(),
+                    Style::default()
+                        .fg(Color::Green)
+                        .add_modifier(Modifier::BOLD),
+                );
+                let rest = Span::styled(
+                    format!(" {:>6}  {}  {}", r.count, bar, r.name),
+                    Style::default().fg(color),
+                );
+                ListItem::new(Line::from(vec![spin_span, rest]))
+            } else {
+                let label = format!("{:>6}  {}  {}", r.count, bar, r.name);
+                ListItem::new(Line::from(Span::styled(label, Style::default().fg(color))))
+            }
         })
         .collect();
 
@@ -1185,5 +1382,120 @@ mod tests {
         assert_eq!(s.chars().count(), 3);
         assert!(s.starts_with('·'));
         assert!(s.ends_with('█'));
+    }
+
+    #[test]
+    fn watch_gates_is_active_and_summary() {
+        let mut st = AppState::new(
+            UsageDb::default(),
+            ProvenanceMap::default(),
+            day(2026, 7, 16),
+        );
+        let mut active = ActiveSet::default();
+        active.absorb(vec![
+            (Category::Model, "opus".into()),
+            (Category::Skill, "brainstorm".into()),
+        ]);
+        active.record_session();
+        st.set_active(active);
+
+        // watch off: no row is marked active.
+        assert!(!st.is_active(Category::Model, "opus"));
+        assert!(!st.has_active());
+
+        st.watch = true;
+        assert!(st.is_active(Category::Model, "opus"));
+        assert!(st.is_active(Category::Skill, "brainstorm"));
+        assert!(!st.is_active(Category::Agent, "opus")); // wrong category
+        assert!(st.has_active());
+        // (Model,opus) sorts before (Skill,brainstorm).
+        assert_eq!(
+            st.running_summary(),
+            "running: opus · brainstorm · 1 active"
+        );
+    }
+
+    #[test]
+    fn running_summary_is_idle_when_empty() {
+        let st = AppState::new(
+            UsageDb::default(),
+            ProvenanceMap::default(),
+            day(2026, 7, 16),
+        );
+        assert_eq!(st.running_summary(), "idle");
+        assert!(!st.has_active());
+    }
+
+    #[test]
+    fn spinner_advances_by_frame() {
+        let mut st = AppState::new(
+            UsageDb::default(),
+            ProvenanceMap::default(),
+            day(2026, 7, 16),
+        );
+        let first = st.spinner_char();
+        st.tick_spinner();
+        assert_ne!(st.spinner_char(), first);
+    }
+
+    #[test]
+    fn watch_mode_renders_running_line_and_active_spinner() {
+        use ratatui::{Terminal, backend::TestBackend};
+
+        let db = db_with(&[
+            (Category::Skill, "brainstorm", "p"),
+            (Category::Skill, "idle-one", "p"),
+        ]);
+        let mut st = AppState::new(db, ProvenanceMap::default(), day(2026, 7, 16));
+        st.tab = Category::Skill;
+        st.window = Window::All;
+        st.watch = true;
+        let mut active = ActiveSet::default();
+        active.absorb(vec![(Category::Skill, "brainstorm".into())]);
+        active.record_session();
+        st.set_active(active);
+
+        let mut terminal = Terminal::new(TestBackend::new(80, 12)).unwrap();
+        terminal.draw(|f| draw(f, &st)).unwrap();
+        let grid: String = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(ratatui::buffer::Cell::symbol)
+            .collect();
+
+        // The running-summary line is present.
+        assert!(
+            grid.contains("running: brainstorm · 1 active"),
+            "grid: {grid}"
+        );
+        // Some spinner frame is drawn (the active row / header glyph).
+        let frames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+        assert!(frames.iter().any(|g| grid.contains(*g)), "no spinner frame");
+    }
+
+    #[test]
+    fn snapshot_mode_has_no_running_line() {
+        use ratatui::{Terminal, backend::TestBackend};
+
+        let db = db_with(&[(Category::Skill, "brainstorm", "p")]);
+        let mut st = AppState::new(db, ProvenanceMap::default(), day(2026, 7, 16));
+        st.tab = Category::Skill;
+        st.window = Window::All;
+        // watch stays false.
+
+        let mut terminal = Terminal::new(TestBackend::new(80, 12)).unwrap();
+        terminal.draw(|f| draw(f, &st)).unwrap();
+        let grid: String = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(ratatui::buffer::Cell::symbol)
+            .collect();
+
+        assert!(!grid.contains("running:"));
+        assert!(!grid.contains("· watch"));
     }
 }

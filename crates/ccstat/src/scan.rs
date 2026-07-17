@@ -7,8 +7,11 @@
 //! directory name.
 
 use crate::jsonl::{self, LineData};
+use crate::live::{self, ActiveSet};
 use crate::usage::UsageDb;
-use chrono::{DateTime, NaiveDate, Utc};
+use chrono::{DateTime, Duration, NaiveDate, Utc};
+use std::fs::File;
+use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
 pub struct ScanConfig {
@@ -132,10 +135,82 @@ fn parse_file(path: &Path, today: NaiveDate) -> UsageDb {
     db
 }
 
+fn file_mtime(path: &Path) -> Option<DateTime<Utc>> {
+    Some(std::fs::metadata(path).ok()?.modified().ok()?.into())
+}
+
 fn file_mtime_date(path: &Path) -> Option<NaiveDate> {
-    let modified = std::fs::metadata(path).ok()?.modified().ok()?;
-    let dt: DateTime<Utc> = modified.into();
-    Some(dt.date_naive())
+    Some(file_mtime(path)?.date_naive())
+}
+
+/// Read the last `max_bytes` of `path`, trimmed to start on a line boundary so
+/// callers always see whole lines. Returns the whole file when it is smaller
+/// than `max_bytes`, and an empty buffer on any I/O error or when the tail
+/// window holds no newline (a single over-long line we can't safely split).
+#[must_use]
+pub fn read_tail(path: &Path, max_bytes: u64) -> Vec<u8> {
+    let Ok(mut f) = File::open(path) else {
+        return Vec::new();
+    };
+    let Ok(meta) = f.metadata() else {
+        return Vec::new();
+    };
+    let len = meta.len();
+    if len == 0 {
+        return Vec::new();
+    }
+    if len <= max_bytes {
+        // Whole file: byte 0 is already a line boundary.
+        let mut buf = Vec::with_capacity(usize::try_from(len).unwrap_or(0));
+        return match f.read_to_end(&mut buf) {
+            Ok(_) => buf,
+            Err(_) => Vec::new(),
+        };
+    }
+    if f.seek(SeekFrom::Start(len - max_bytes)).is_err() {
+        return Vec::new();
+    }
+    let mut buf = Vec::with_capacity(usize::try_from(max_bytes).unwrap_or(0));
+    if f.read_to_end(&mut buf).is_err() {
+        return Vec::new();
+    }
+    // Drop the (probably partial) first line so we begin on a boundary.
+    match buf.iter().position(|&b| b == b'\n') {
+        Some(pos) => {
+            buf.drain(0..=pos);
+            buf
+        }
+        None => Vec::new(),
+    }
+}
+
+/// The set of `(category, name)` pairs running "now": for every session whose
+/// log was modified within `window` of `now`, read the last `tail_bytes` and
+/// collect the items whose line timestamp is within the window. Only active
+/// files are read (never the full corpus), so this is cheap enough to poll on
+/// a short interval.
+#[must_use]
+pub fn compute_active(
+    cfg: &ScanConfig,
+    now: DateTime<Utc>,
+    window: Duration,
+    tail_bytes: u64,
+) -> ActiveSet {
+    let mut set = ActiveSet::default();
+    for file in session_files(&cfg.projects_dir) {
+        let Some(mtime) = file_mtime(&file) else {
+            continue;
+        };
+        // Last write older than the window -> the session is idle. A future
+        // mtime (clock skew) yields a negative delta and stays active.
+        if now - mtime > window {
+            continue;
+        }
+        set.record_session();
+        let tail = read_tail(&file, tail_bytes);
+        set.absorb(live::active_items_in_tail(&tail, now, window));
+    }
+    set
 }
 
 #[cfg(test)]
@@ -271,5 +346,82 @@ mod tests {
             today,
         );
         assert!(db.is_empty());
+    }
+
+    #[test]
+    fn read_tail_returns_whole_small_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = write_session(tmp.path(), "p", "s.jsonl", &["line1", "line2"]);
+        assert_eq!(
+            String::from_utf8(read_tail(&path, 1024)).unwrap(),
+            "line1\nline2\n"
+        );
+    }
+
+    #[test]
+    fn read_tail_starts_on_line_boundary_after_seek() {
+        let tmp = tempfile::tempdir().unwrap();
+        // 33 bytes: "aaaaaaaaaa\nbbbbbbbbbb\ncccccccccc\n". A 15-byte tail seeks
+        // into the b-line; the partial leading line is dropped.
+        let path = write_session(
+            tmp.path(),
+            "p",
+            "s.jsonl",
+            &["aaaaaaaaaa", "bbbbbbbbbb", "cccccccccc"],
+        );
+        assert_eq!(
+            String::from_utf8(read_tail(&path, 15)).unwrap(),
+            "cccccccccc\n"
+        );
+    }
+
+    #[test]
+    fn read_tail_empty_when_no_newline_in_window() {
+        let tmp = tempfile::tempdir().unwrap();
+        let pd = tmp.path().join("p");
+        std::fs::create_dir_all(&pd).unwrap();
+        let path = pd.join("s.jsonl");
+        std::fs::write(&path, "x".repeat(100)).unwrap();
+        assert!(read_tail(&path, 10).is_empty());
+    }
+
+    #[test]
+    fn compute_active_excludes_sessions_stale_by_mtime() {
+        let tmp = tempfile::tempdir().unwrap();
+        let line = r#"{"type":"assistant","timestamp":"2026-07-17T11:59:30Z","message":{"model":"opus","content":[],"usage":{"input_tokens":1,"output_tokens":1}}}"#;
+        write_session(tmp.path(), "p", "s.jsonl", &[line]);
+        // `now` far ahead of the file's real mtime -> the session reads as idle.
+        let set = compute_active(
+            &ScanConfig {
+                projects_dir: tmp.path().to_path_buf(),
+            },
+            Utc::now() + Duration::days(2),
+            Duration::seconds(90),
+            16 * 1024,
+        );
+        assert!(set.is_empty());
+        assert_eq!(set.session_count(), 0);
+    }
+
+    #[test]
+    fn compute_active_picks_up_a_live_session() {
+        let tmp = tempfile::tempdir().unwrap();
+        let now = Utc::now();
+        let line = format!(
+            r#"{{"type":"assistant","timestamp":"{}","message":{{"model":"opus","content":[{{"type":"tool_use","name":"Skill","input":{{"skill":"brainstorm"}}}}],"usage":{{"input_tokens":1,"output_tokens":1}}}}}}"#,
+            now.to_rfc3339()
+        );
+        write_session(tmp.path(), "p", "s.jsonl", &[&line]);
+        let set = compute_active(
+            &ScanConfig {
+                projects_dir: tmp.path().to_path_buf(),
+            },
+            now,
+            Duration::days(1),
+            16 * 1024,
+        );
+        assert_eq!(set.session_count(), 1);
+        assert!(set.is_active(Category::Model, "opus"));
+        assert!(set.is_active(Category::Skill, "brainstorm"));
     }
 }

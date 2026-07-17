@@ -14,7 +14,7 @@ A Cargo workspace of small terminal tools for working with Claude Code.
 |---|---|
 | [`ccwatch`](crates/ccwatch) | Real-time TUI monitor for Claude Code session usage (tokens, cost, context, tools). |
 | [`ccmap`](crates/ccmap) | Read-only TUI to browse available agents, skills, commands, plugins, and MCP servers. |
-| [`ccstat`](crates/ccstat) | Read-only TUI ranking model/agent/skill/command/MCP usage aggregated across all session logs. |
+| [`ccstat`](crates/ccstat) | Read-only TUI ranking model/agent/skill/command/MCP usage aggregated across all session logs; `--watch` adds a live view with a running indicator. |
 
 ## Install
 
