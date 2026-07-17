@@ -1427,6 +1427,25 @@ mod tests {
     }
 
     #[test]
+    fn running_summary_truncates_beyond_eight_names() {
+        let mut st = AppState::new(
+            UsageDb::default(),
+            ProvenanceMap::default(),
+            day(2026, 7, 16),
+        );
+        let mut active = ActiveSet::default();
+        // Ten distinct names in a known order; only the first eight are shown.
+        active.absorb((1..=10).map(|i| (Category::Skill, format!("s{i:02}"))));
+        active.record_session();
+        st.set_active(active);
+
+        assert_eq!(
+            st.running_summary(),
+            "running: s01 · s02 · s03 · s04 · s05 · s06 · s07 · s08 … · 1 active"
+        );
+    }
+
+    #[test]
     fn spinner_advances_by_frame() {
         let mut st = AppState::new(
             UsageDb::default(),
