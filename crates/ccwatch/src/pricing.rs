@@ -46,16 +46,17 @@ impl ModelInfo {
     /// Public per-model rate card (USD per million tokens) covering input,
     /// output, cache writes (5min and 1hr ephemeral) and cache reads.
     /// Cache write rates: 5min ephemeral = 1.25× input, 1hr ephemeral = 2.00× input.
-    /// Cache read = 0.10× input. (Anthropic public pricing as of 2026-04.)
+    /// Cache read = 0.10× input. (Anthropic public pricing as of 2026-07; the
+    /// current Opus tier is $5/$25 in/out, not the legacy $15/$75.)
     #[must_use]
     pub fn pricing(self) -> Pricing {
         match self.family {
             Family::Opus => Pricing {
-                input_per_mtok: 15.0,
-                output_per_mtok: 75.0,
-                cache_write_5m_per_mtok: 18.75,
-                cache_write_1h_per_mtok: 30.0,
-                cache_read_per_mtok: 1.50,
+                input_per_mtok: 5.0,
+                output_per_mtok: 25.0,
+                cache_write_5m_per_mtok: 6.25,
+                cache_write_1h_per_mtok: 10.0,
+                cache_read_per_mtok: 0.50,
             },
             Family::Haiku => Pricing {
                 input_per_mtok: 1.0,
@@ -237,9 +238,9 @@ mod tests {
             }),
             ..Default::default()
         };
-        // Opus: 5m write = $18.75, 1h write = $30.00 per million.
-        assert!((p.cost_usd(&five_min) - 18.75).abs() < 0.01);
-        assert!((p.cost_usd(&one_hour) - 30.0).abs() < 0.01);
+        // Opus: 5m write = $6.25, 1h write = $10.00 per million.
+        assert!((p.cost_usd(&five_min) - 6.25).abs() < 0.01);
+        assert!((p.cost_usd(&one_hour) - 10.0).abs() < 0.01);
     }
 
     #[test]
@@ -250,8 +251,8 @@ mod tests {
             cache_creation: None, // legacy / missing
             ..Default::default()
         };
-        // Should treat all as 5min: $18.75/M
-        assert!((p.cost_usd(&usage) - 18.75).abs() < 0.01);
+        // Should treat all as 5min: $6.25/M
+        assert!((p.cost_usd(&usage) - 6.25).abs() < 0.01);
     }
 
     #[test]

@@ -190,6 +190,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "ccstat"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "ccmap",
+ "chrono",
+ "clap",
+ "crossterm",
+ "ratatui",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "ccwatch"
 version = "0.1.0"
 dependencies = [

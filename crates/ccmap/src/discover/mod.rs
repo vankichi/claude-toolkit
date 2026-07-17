@@ -111,10 +111,13 @@ fn build_item(kind: Kind, source: &Source, file: &Path, default_name: &str) -> O
     })
 }
 
-/// Discovers agents, skills, commands, plugins, and MCP servers from user,
-/// project, and enabled-plugin sources.
+/// Discovers agents, skills, and commands (user + project + enabled plugins)
+/// plus the plugin catalog. Does NOT read `~/.claude.json` or discover MCP
+/// servers — that is `discover_all`'s additional step. Split out so callers
+/// that only need extensions (e.g. usage-provenance lookups) avoid the
+/// `~/.claude.json` read.
 #[must_use]
-pub fn discover_all(ctx: &Context) -> Discovered {
+pub fn discover_extensions(ctx: &Context) -> Vec<Item> {
     let specs = [
         (Kind::Agent, "agents", Layout::FlatMd),
         (Kind::Skill, "skills", Layout::SkillDir),
@@ -163,6 +166,14 @@ pub fn discover_all(ctx: &Context) -> Discovered {
         ));
     }
     items.extend(plugin_discovery.items);
+    items
+}
+
+/// Discovers agents, skills, commands, plugins, and MCP servers from user,
+/// project, and enabled-plugin sources.
+#[must_use]
+pub fn discover_all(ctx: &Context) -> Discovered {
+    let mut items = discover_extensions(ctx);
 
     // `--claude-dir` overrides `~/.claude`, and `~/.claude.json` lives as its
     // sibling on disk (not inside it), so the equivalent override path is
@@ -412,6 +423,49 @@ mod tests {
         assert_eq!(count(Kind::Command), 1);
         assert_eq!(count(Kind::Plugin), 2);
         assert_eq!(count(Kind::Mcp), 2);
+    }
+
+    #[test]
+    fn discover_extensions_excludes_mcp_and_matches_discover_all_minus_mcp() {
+        let tmp = tempfile::tempdir().unwrap();
+        let claude_dir = build_plugin_fixture(tmp.path());
+        fs::create_dir_all(claude_dir.join("agents")).unwrap();
+        fs::write(
+            claude_dir.join("agents/a.md"),
+            "---\nname: agent-a\ndescription: user agent\n---\n",
+        )
+        .unwrap();
+        let project_dir = tmp.path().join("project");
+        fs::create_dir_all(&project_dir).unwrap();
+        // An .mcp.json that discover_all WOULD pick up, to prove extensions ignores MCP.
+        write_json(
+            &project_dir.join(".mcp.json"),
+            &serde_json::json!({ "mcpServers": { "srv2": {} } }),
+        );
+
+        let ctx = Context {
+            claude_dir,
+            project_dir,
+        };
+        let ext = discover_extensions(&ctx);
+        // No MCP items from discover_extensions.
+        assert!(ext.iter().all(|i| i.kind != Kind::Mcp));
+        // But it does surface agents/skills/plugins.
+        assert!(
+            ext.iter()
+                .any(|i| i.kind == Kind::Agent && i.name == "agent-a")
+        );
+        assert!(
+            ext.iter()
+                .any(|i| i.kind == Kind::Skill && i.name == "demo")
+        );
+        assert!(ext.iter().any(|i| i.kind == Kind::Plugin));
+
+        // discover_all = discover_extensions + MCP (same non-MCP set).
+        let all = discover_all(&ctx).items;
+        let all_non_mcp = all.iter().filter(|i| i.kind != Kind::Mcp).count();
+        assert_eq!(all_non_mcp, ext.len());
+        assert!(all.iter().any(|i| i.kind == Kind::Mcp)); // MCP only via discover_all
     }
 
     #[test]
