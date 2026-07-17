@@ -5,3 +5,4 @@
 //! read the same data the same way instead of maintaining parallel copies.
 
 pub mod jsonl;
+pub mod pricing;
