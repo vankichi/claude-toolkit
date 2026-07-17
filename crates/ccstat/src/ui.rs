@@ -5,7 +5,7 @@
 
 use crate::live::{self, ActiveSet};
 use crate::model::{Category, ProjectFilter, SortKey, Window};
-use crate::pricing::ModelInfo;
+use cctk::pricing::ModelInfo;
 use crate::provenance::ProvenanceMap;
 use crate::scan::{self, ScanConfig};
 use crate::usage::{Row, TREND_DAYS, UsageDb};
@@ -914,7 +914,8 @@ fn sparkline(values: &[u64]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::jsonl::{Extracted, LineData};
+    use crate::usage::LineData;
+    use cctk::jsonl::Extracted;
     use crate::provenance::ProvenanceMap;
     use crate::usage::TREND_DAYS;
     use chrono::TimeZone;

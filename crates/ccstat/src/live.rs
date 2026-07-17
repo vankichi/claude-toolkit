@@ -11,8 +11,8 @@
 //! skill/agent/command `tool_use` is an instantaneous event, so this reflects
 //! *recent* activity in a live session rather than a still-executing process.
 
-use crate::jsonl::{self, Extracted};
 use crate::model::Category;
+use cctk::jsonl::{Extracted, Line};
 use chrono::{DateTime, Duration, Utc};
 use std::collections::BTreeSet;
 
@@ -91,15 +91,19 @@ pub fn active_items_in_tail(
     // collapse to empty and contribute nothing.
     let content = String::from_utf8_lossy(tail);
     let mut out = Vec::new();
-    for line in content.lines() {
-        let data = jsonl::parse_line(line);
+    for raw in content.lines() {
+        let Some(parsed) = Line::parse(raw) else {
+            continue;
+        };
         // No timestamp -> can't judge liveness; skip. Future timestamps (clock
         // skew) still count as active (only the lower bound is enforced).
-        let Some(ts) = data.timestamp else { continue };
+        let Some(ts) = parsed.timestamp_utc() else {
+            continue;
+        };
         if ts < cutoff {
             continue;
         }
-        for item in &data.items {
+        for item in &parsed.extracted() {
             out.push(item_key(item));
         }
     }
