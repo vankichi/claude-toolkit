@@ -193,7 +193,10 @@ mod tests {
             "s.jsonl",
             &["aaaaaaaaaa", "bbbbbbbbbb", "cccccccccc"],
         );
-        assert_eq!(String::from_utf8(read_tail(&path, 15)).unwrap(), "cccccccccc\n");
+        assert_eq!(
+            String::from_utf8(read_tail(&path, 15)).unwrap(),
+            "cccccccccc\n"
+        );
     }
 
     #[test]

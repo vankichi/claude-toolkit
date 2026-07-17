@@ -412,9 +412,11 @@ mod tests {
             {"type":"tool_use","name":"Task","input":{"subagent_type":"general-purpose"}}
         ]}}"#;
         let l = Line::parse(line).unwrap();
-        assert!(l.extracted().iter().any(
-            |e| matches!(e, Extracted::Agent { name } if name == "general-purpose")
-        ));
+        assert!(
+            l.extracted()
+                .iter()
+                .any(|e| matches!(e, Extracted::Agent { name } if name == "general-purpose"))
+        );
     }
 
     #[test]

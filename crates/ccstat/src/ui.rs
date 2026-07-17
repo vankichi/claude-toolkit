@@ -5,11 +5,11 @@
 
 use crate::live::{self, ActiveSet};
 use crate::model::{Category, ProjectFilter, SortKey, Window};
-use cctk::pricing::ModelInfo;
 use crate::provenance::ProvenanceMap;
 use crate::scan::{self, ScanConfig};
 use crate::usage::{Row, TREND_DAYS, UsageDb};
 use ccmap::model::Provenance;
+use cctk::pricing::ModelInfo;
 use chrono::{Duration, NaiveDate};
 use crossterm::event::{Event as CtEvent, KeyCode, KeyEventKind};
 use ratatui::{
@@ -914,10 +914,10 @@ fn sparkline(values: &[u64]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::usage::LineData;
-    use cctk::jsonl::Extracted;
     use crate::provenance::ProvenanceMap;
+    use crate::usage::LineData;
     use crate::usage::TREND_DAYS;
+    use cctk::jsonl::Extracted;
     use chrono::TimeZone;
 
     fn day(y: i32, m: u32, d: u32) -> NaiveDate {
