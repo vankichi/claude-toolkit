@@ -221,6 +221,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "cctop"
+version = "0.1.1"
+dependencies = [
+ "anyhow",
+ "ccmap",
+ "ccstat",
+ "cctk",
+ "chrono",
+ "clap",
+ "crossterm",
+ "futures",
+ "ratatui",
+ "serde_json",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
 name = "ccwatch"
 version = "0.1.1"
 dependencies = [

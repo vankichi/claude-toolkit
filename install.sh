@@ -2,7 +2,7 @@
 # claude-toolkit installer.
 #
 # Downloads the latest (or a pinned) release, verifies its SHA-256 checksum,
-# and installs ccwatch / ccmap / ccstat into PREFIX, replacing older copies.
+# and installs ccwatch / ccmap / ccstat / cctop into PREFIX, replacing older copies.
 #
 # Usage:
 #   curl -fsSL https://raw.githubusercontent.com/vankichi/claude-toolkit/main/install.sh | sh
@@ -18,7 +18,7 @@
 set -eu
 
 REPO="vankichi/claude-toolkit"
-BINS="ccwatch ccmap ccstat"
+BINS="ccwatch ccmap ccstat cctop"
 PREFIX="${PREFIX:-$HOME/.local/bin}"
 VERSION="${VERSION:-latest}"
 
