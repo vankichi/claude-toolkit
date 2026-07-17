@@ -81,18 +81,45 @@ The Model tab uses model-family colors instead, and MCP rows are uncolored.
 (you typed it) *and* a skill (it ran). MCP servers from claude.ai connectors
 show up here (unlike in `ccmap`) because their tool calls appear in the log.
 
+## Live mode (`--watch`)
+
+`ccstat --watch` keeps the dashboard fresh instead of taking a one-shot
+snapshot:
+
+- **Auto-refresh.** The full aggregate re-reads every 5 minutes (override the
+  interval with `--watch <seconds>`), the same work as pressing `R`.
+- **Running indicator.** A Braille spinner (`⠋⠙⠹…`) animates next to every
+  model/agent/skill/command/MCP server that is *running now*, and a summary
+  line under the tabs lists them across all categories plus the live-session
+  count. Idle rows show no spinner; when nothing is active the line reads
+  `○ idle`.
+
+An item counts as "running" when it appears on a log line — in a session whose
+file was modified within the last 90 seconds — carrying a timestamp inside that
+same 90-second window. This is a heuristic over the logs, **not** a hook into a
+live process: a skill/agent/command invocation is an instantaneous log event,
+so the spinner reflects *recent activity in a live session*, not a guarantee
+that something is still executing. Snapshot mode (no `--watch`) is unchanged.
+
 ## Install / run
 
 ```sh
 make install                  # → ~/.local/bin/ccstat
-ccstat                        # aggregate ~/.claude/projects
+ccstat                        # aggregate ~/.claude/projects (snapshot)
 ccstat --projects-dir /path   # override the projects directory
+ccstat --watch                # live mode: spinner on running items + 5-min auto-refresh
+ccstat --watch 60             # live mode with a 60-second refresh interval
 ```
 
 ## Known limitations
 
-- **Snapshot, not live.** Press `R` to re-read logs (live monitoring is
-  `ccwatch`'s job).
+- **Snapshot by default.** Without `--watch`, press `R` to re-read logs. The
+  `--watch` live mode auto-refreshes and shows a running indicator, but
+  per-session token/cost monitoring remains `ccwatch`'s job.
+- **Running indicator is mtime + tail based.** Only sessions whose log changed
+  in the last 90 seconds are inspected, and only their last 16 KiB is read; a
+  burst of activity older than the window (or a session paused mid-run longer
+  than 90s) shows no spinner.
 - **No cost attribution beyond models.** Agents/skills/commands/MCP show
   counts only — attributing tokens to them is inherently fuzzy.
 - **Per-project by cwd basename.** Projects are keyed by the last path
