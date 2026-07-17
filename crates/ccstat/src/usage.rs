@@ -456,7 +456,7 @@ mod tests {
         assert_eq!(rows[0].name, "claude-opus-4-8");
         assert_eq!(rows[0].count, 1);
         assert_eq!(rows[0].input, 1_000_000);
-        assert!((rows[0].cost_usd - 15.0).abs() < 0.01); // opus input = $15/M
+        assert!((rows[0].cost_usd - 5.0).abs() < 0.01); // opus input = $5/M
     }
 
     #[test]

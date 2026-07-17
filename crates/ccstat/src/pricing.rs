@@ -1,5 +1,6 @@
 //! Per-model pricing and accent color. Ported from ccwatch; prices are USD
-//! per **million** tokens (Anthropic public pricing as of 2026-04).
+//! per **million** tokens (Anthropic public pricing as of 2026-07). The
+//! current Opus tier (4.5+) is $5/$25 in/out — not the legacy $15/$75.
 
 use crate::jsonl::Usage;
 use ratatui::style::Color;
@@ -39,11 +40,11 @@ impl ModelInfo {
     pub fn pricing(self) -> Pricing {
         match self.family {
             Family::Opus => Pricing {
-                input_per_mtok: 15.0,
-                output_per_mtok: 75.0,
-                cache_write_5m_per_mtok: 18.75,
-                cache_write_1h_per_mtok: 30.0,
-                cache_read_per_mtok: 1.50,
+                input_per_mtok: 5.0,
+                output_per_mtok: 25.0,
+                cache_write_5m_per_mtok: 6.25,
+                cache_write_1h_per_mtok: 10.0,
+                cache_read_per_mtok: 0.50,
             },
             Family::Haiku => Pricing {
                 input_per_mtok: 1.0,
@@ -129,8 +130,8 @@ mod tests {
             cache_creation_1h: 1_000_000,
             ..Default::default()
         };
-        assert!((p.cost_usd(&m5) - 18.75).abs() < 0.01);
-        assert!((p.cost_usd(&h1) - 30.0).abs() < 0.01);
+        assert!((p.cost_usd(&m5) - 6.25).abs() < 0.01);
+        assert!((p.cost_usd(&h1) - 10.0).abs() < 0.01);
     }
 
     #[test]
