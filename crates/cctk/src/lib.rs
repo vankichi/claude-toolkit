@@ -7,3 +7,6 @@
 pub mod jsonl;
 pub mod paths;
 pub mod pricing;
+
+#[cfg(feature = "tail")]
+pub mod tail;
