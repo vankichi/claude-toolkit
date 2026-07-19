@@ -7,7 +7,7 @@ use crate::live::{self, ActiveSet};
 use crate::model::{Category, ProjectFilter, SortKey, Window};
 use crate::provenance::ProvenanceMap;
 use crate::scan::{self, ScanConfig};
-use crate::usage::{Row, TREND_DAYS, UsageDb};
+use crate::usage::{GraphMetric, Row, TREND_DAYS, UsageDb};
 use ccmap::model::Provenance;
 use cctk::pricing::ModelInfo;
 use chrono::{Duration, NaiveDate};
@@ -38,6 +38,8 @@ pub struct AppState {
     pub filtering: bool,
     pub picking: bool,
     pub showing_graph: bool,
+    /// Metric plotted by the always-on top trends graph (toggled with `m`).
+    pub graph_metric: GraphMetric,
     /// `--watch` live mode: drives the running-summary line and per-row
     /// spinners. Off means the classic snapshot rendering is unchanged.
     pub watch: bool,
@@ -62,6 +64,7 @@ impl AppState {
             filtering: false,
             picking: false,
             showing_graph: false,
+            graph_metric: GraphMetric::Tokens,
             watch: false,
             active: ActiveSet::default(),
             spinner_tick: 0,
@@ -216,6 +219,11 @@ impl AppState {
         self.showing_graph = !self.showing_graph;
     }
 
+    /// Cycle the always-on top trends graph metric (tokens → cost → messages).
+    pub fn cycle_graph_metric(&mut self) {
+        self.graph_metric = self.graph_metric.next();
+    }
+
     /// `today` used for slicing; exposed for rescans and the detail pane.
     #[must_use]
     pub fn today_for_rescan(&self) -> NaiveDate {
@@ -301,6 +309,7 @@ pub enum KeyAction {
     PickerCancel,
     Rescan,
     ToggleGraph,
+    CycleMetric,
     Ignore,
 }
 
@@ -348,6 +357,7 @@ pub fn classify_key(
         KeyCode::Char('/') => KeyAction::StartFilter,
         KeyCode::Char('R') => KeyAction::Rescan,
         KeyCode::Char('g') => KeyAction::ToggleGraph,
+        KeyCode::Char('m') => KeyAction::CycleMetric,
         _ => KeyAction::Ignore,
     }
 }
@@ -433,6 +443,19 @@ const RUN_H: u16 = 1;
 const HINT_H: u16 = 1;
 const LIST_PCT: u16 = 45;
 const DETAIL_PCT: u16 = 55;
+/// Height of the always-on top trends graph band.
+const TRENDS_H: u16 = 9;
+/// How many series the trends graph overlays.
+const TRENDS_TOP_N: usize = 5;
+/// Distinct line colors for non-Model tabs (Model tabs use family colors).
+const TRENDS_PALETTE: [Color; 6] = [
+    Color::Cyan,
+    Color::Yellow,
+    Color::Green,
+    Color::Magenta,
+    Color::Blue,
+    Color::Red,
+];
 
 /// Spinner animation frame interval (and the max time an idle watch loop
 /// blocks on input before redrawing).
@@ -591,6 +614,7 @@ pub fn handle_key(
             state.reload_at(today, scan::scan(cfg, today), provenance);
         }
         KeyAction::ToggleGraph => state.toggle_graph(),
+        KeyAction::CycleMetric => state.cycle_graph_metric(),
         KeyAction::Ignore => {}
     }
     false
@@ -625,12 +649,125 @@ pub fn draw(f: &mut Frame<'_>, state: &AppState) {
     if state.showing_graph && state.selected_row().is_some() {
         draw_graph(f, body, state);
     } else {
-        draw_body(f, body, state);
+        // Always-on top trends graph, then the list + detail beneath it.
+        let split = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Length(TRENDS_H), Constraint::Min(0)])
+            .split(body);
+        draw_trends(f, split[0], state);
+        draw_body(f, split[1], state);
     }
     draw_hint(f, hint, state);
 
     if state.picking {
         draw_project_picker(f, f.area(), state);
+    }
+}
+
+/// Always-on top band: an overlaid braille line chart of the top series'
+/// daily trend for the current metric, with a colored legend and a date
+/// x-axis. Model rows are colored by family; other tabs cycle a palette.
+fn draw_trends(f: &mut Frame<'_>, area: Rect, state: &AppState) {
+    let metric = state.graph_metric;
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::DarkGray))
+        .title(format!(
+            " Trends · {} · top {} · window {} · (m: metric) ",
+            metric.label(),
+            TRENDS_TOP_N,
+            state.window.label(),
+        ));
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    let rows = state.rows();
+    if rows.is_empty() || inner.height < 2 {
+        f.render_widget(
+            Paragraph::new(Span::styled(
+                "no data in the selected window",
+                Style::default().fg(Color::DarkGray),
+            )),
+            inner,
+        );
+        return;
+    }
+
+    let series: Vec<cctk::chart::LineSeries> = rows
+        .iter()
+        .take(TRENDS_TOP_N)
+        .enumerate()
+        .map(|(i, r)| {
+            let color = match state.tab {
+                Category::Model => ModelInfo::parse(&r.name).color(),
+                _ => TRENDS_PALETTE[i % TRENDS_PALETTE.len()],
+            };
+            let points: Vec<(f64, f64)> = r
+                .trend_series(metric)
+                .into_iter()
+                .enumerate()
+                .map(|(x, y)| (x as f64, y))
+                .collect();
+            cctk::chart::LineSeries {
+                points,
+                label: r.name.clone(),
+                color,
+            }
+        })
+        .collect();
+
+    // Manual colored legend (ratatui's auto-legend hides at this size) + chart.
+    let parts = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(1), Constraint::Min(0)])
+        .split(inner);
+
+    let legend: Vec<Span> = series
+        .iter()
+        .map(|s| {
+            let name: String = s.label.chars().take(16).collect();
+            Span::styled(format!("▉ {name}   "), Style::default().fg(s.color))
+        })
+        .collect();
+    f.render_widget(Paragraph::new(Line::from(legend)), parts[0]);
+
+    let y_max = series
+        .iter()
+        .flat_map(|s| s.points.iter().map(|&(_, y)| y))
+        .fold(0.0_f64, f64::max)
+        .max(1.0);
+
+    let today = state.today_for_rescan();
+    #[allow(clippy::cast_possible_wrap)] // TREND_DAYS is a small constant
+    let oldest = (today - Duration::days(TREND_DAYS as i64 - 1))
+        .format("%m/%d")
+        .to_string();
+    let newest = today.format("%m/%d").to_string();
+    let last_x = (TREND_DAYS.saturating_sub(1)).max(1) as f64;
+
+    let chart = cctk::chart::braille_multi_line(&series, y_max, metric_top_label(metric, y_max))
+        .x_axis(
+            Axis::default()
+                .bounds([0.0, last_x])
+                .labels([Line::from(oldest), Line::from(newest)])
+                .style(Style::default().fg(Color::DarkGray)),
+        );
+    f.render_widget(chart, parts[1]);
+}
+
+/// Y-axis top label for the trends graph, formatted for the metric.
+fn metric_top_label(metric: GraphMetric, y_max: f64) -> String {
+    if metric == GraphMetric::Cost {
+        return format!("${y_max:.2}");
+    }
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let v = y_max.round() as u64;
+    if v >= 1_000_000 {
+        format!("{:.1}M", v as f64 / 1_000_000.0)
+    } else if v >= 1_000 {
+        format!("{:.0}k", v as f64 / 1_000.0)
+    } else {
+        v.to_string()
     }
 }
 
@@ -837,7 +974,7 @@ fn draw_hint(f: &mut Frame<'_>, area: Rect, state: &AppState) {
     } else if state.filtering {
         " type to filter · Enter confirm · Esc clear "
     } else {
-        " q quit · Tab tabs · j/k move · w window · s sort · p project · g graph · / filter · R rescan "
+        " q quit · Tab tabs · j/k move · w window · s sort · p project · m metric · g graph · / filter · R rescan "
     };
     f.render_widget(Paragraph::new(text), area);
 }
@@ -1186,6 +1323,8 @@ mod tests {
             last_used: Some(today),
             first_used: Some(day(2026, 7, 1)),
             trend: vec![0; TREND_DAYS],
+            trend_tokens: vec![0; TREND_DAYS],
+            trend_cost: vec![0.0; TREND_DAYS],
             input: 100,
             output: 200,
             cache_creation: 0,
@@ -1320,6 +1459,8 @@ mod tests {
             last_used: Some(today),
             first_used: Some(day(2026, 7, 1)),
             trend: vec![0; TREND_DAYS],
+            trend_tokens: vec![0; TREND_DAYS],
+            trend_cost: vec![0.0; TREND_DAYS],
             input: 0,
             output: 0,
             cache_creation: 0,
@@ -1341,6 +1482,8 @@ mod tests {
             last_used: Some(today),
             first_used: Some(day(2026, 7, 1)),
             trend: vec![0; TREND_DAYS],
+            trend_tokens: vec![0; TREND_DAYS],
+            trend_cost: vec![0.0; TREND_DAYS],
             input: 100,
             output: 200,
             cache_creation: 0,

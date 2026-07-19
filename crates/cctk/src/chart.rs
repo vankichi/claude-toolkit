@@ -37,6 +37,49 @@ pub fn braille_line(
         )
 }
 
+/// One colored series for [`braille_multi_line`]. Owns its points so the
+/// caller can build a `Vec<LineSeries>` and pass it by reference.
+pub struct LineSeries {
+    pub points: Vec<(f64, f64)>,
+    pub label: String,
+    pub color: Color,
+}
+
+/// Build an overlaid multi-series braille line chart sharing one `[0, y_max]`
+/// y-axis. Each series draws in its own color and contributes its label to the
+/// auto-rendered legend. The x-axis spans `[0, max last x]` with no labels.
+#[must_use]
+pub fn braille_multi_line(
+    series: &[LineSeries],
+    y_max: f64,
+    y_top_label: impl Into<String>,
+) -> Chart<'_> {
+    let last_x = series
+        .iter()
+        .filter_map(|s| s.points.last())
+        .map(|&(x, _)| x)
+        .fold(1.0_f64, f64::max);
+    let datasets: Vec<Dataset> = series
+        .iter()
+        .map(|s| {
+            Dataset::default()
+                .name(Line::from(s.label.clone()).style(Style::default().fg(s.color)))
+                .marker(Marker::Braille)
+                .graph_type(GraphType::Line)
+                .style(Style::default().fg(s.color))
+                .data(&s.points)
+        })
+        .collect();
+    Chart::new(datasets)
+        .x_axis(Axis::default().bounds([0.0, last_x]))
+        .y_axis(
+            Axis::default()
+                .bounds([0.0, y_max.max(1.0)])
+                .labels([Line::from("0"), Line::from(y_top_label.into())])
+                .style(Style::default().fg(Color::DarkGray)),
+        )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -79,5 +122,40 @@ mod tests {
         // The custom top label and the "0" baseline should render.
         assert!(out.contains("max"));
         assert!(out.contains('0'));
+    }
+
+    #[test]
+    fn multi_line_plots_all_series() {
+        let series = vec![
+            LineSeries {
+                points: (0..10).map(|i| (f64::from(i), f64::from(i))).collect(),
+                label: "opus".into(),
+                color: Color::Magenta,
+            },
+            LineSeries {
+                points: (0..10).map(|i| (f64::from(i), f64::from(9 - i))).collect(),
+                label: "haiku".into(),
+                color: Color::Cyan,
+            },
+        ];
+        let mut terminal = Terminal::new(TestBackend::new(50, 8)).unwrap();
+        terminal
+            .draw(|f| {
+                let chart = braille_multi_line(&series, 9.0, "9");
+                f.render_widget(chart, f.area());
+            })
+            .unwrap();
+        let buf = terminal.backend().buffer().clone();
+        let mut out = String::new();
+        for y in 0..8 {
+            for x in 0..50 {
+                out.push_str(buf[(x, y)].symbol());
+            }
+        }
+        assert!(
+            out.chars()
+                .any(|ch| ('\u{2800}'..='\u{28FF}').contains(&ch)),
+            "expected braille glyphs from the overlaid series"
+        );
     }
 }

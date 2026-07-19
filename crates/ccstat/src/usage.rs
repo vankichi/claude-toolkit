@@ -70,13 +70,60 @@ pub struct Row {
     pub count: u64,
     pub last_used: Option<NaiveDate>,
     pub first_used: Option<NaiveDate>,
+    /// Per-day invocation count over the last `TREND_DAYS`, oldest→newest.
     pub trend: Vec<u64>,
+    /// Per-day total tokens (in+out+cache) over the last `TREND_DAYS`.
+    pub trend_tokens: Vec<u64>,
+    /// Per-day cost (USD) over the last `TREND_DAYS`.
+    pub trend_cost: Vec<f64>,
     pub input: u64,
     pub output: u64,
     pub cache_creation: u64,
     pub cache_read: u64,
     pub cost_usd: f64,
     pub by_project: Vec<(String, u64)>,
+}
+
+impl Row {
+    /// The per-day series for `metric` as `f64`, oldest→newest.
+    #[must_use]
+    pub fn trend_series(&self, metric: GraphMetric) -> Vec<f64> {
+        match metric {
+            GraphMetric::Tokens => self.trend_tokens.iter().map(|&v| v as f64).collect(),
+            GraphMetric::Cost => self.trend_cost.clone(),
+            GraphMetric::Messages => self.trend.iter().map(|&v| v as f64).collect(),
+        }
+    }
+}
+
+/// Which metric the top trends graph plots. Cycled by a key in the UI.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GraphMetric {
+    Tokens,
+    Cost,
+    Messages,
+}
+
+impl GraphMetric {
+    /// Next metric in the toggle cycle.
+    #[must_use]
+    pub fn next(self) -> Self {
+        match self {
+            GraphMetric::Tokens => GraphMetric::Cost,
+            GraphMetric::Cost => GraphMetric::Messages,
+            GraphMetric::Messages => GraphMetric::Tokens,
+        }
+    }
+
+    /// Short label for the graph title.
+    #[must_use]
+    pub fn label(self) -> &'static str {
+        match self {
+            GraphMetric::Tokens => "tokens",
+            GraphMetric::Cost => "cost",
+            GraphMetric::Messages => "messages",
+        }
+    }
 }
 
 /// Pre-aggregated usage store.
@@ -181,6 +228,9 @@ impl UsageDb {
                     let idx = (*day - trend_start).num_days() as usize;
                     if idx < TREND_DAYS {
                         row.trend[idx] += stat.count;
+                        row.trend_tokens[idx] +=
+                            stat.input + stat.output + stat.cache_creation + stat.cache_read;
+                        row.trend_cost[idx] += stat.cost_usd;
                     }
                 }
                 // windowed aggregates.
@@ -228,6 +278,8 @@ struct RowAcc {
     last_used: Option<NaiveDate>,
     first_used: Option<NaiveDate>,
     trend: Vec<u64>,
+    trend_tokens: Vec<u64>,
+    trend_cost: Vec<f64>,
     input: u64,
     output: u64,
     cache_creation: u64,
@@ -243,6 +295,8 @@ impl Default for RowAcc {
             last_used: None,
             first_used: None,
             trend: vec![0; TREND_DAYS],
+            trend_tokens: vec![0; TREND_DAYS],
+            trend_cost: vec![0.0; TREND_DAYS],
             input: 0,
             output: 0,
             cache_creation: 0,
@@ -263,6 +317,8 @@ impl RowAcc {
             last_used: self.last_used,
             first_used: self.first_used,
             trend: self.trend,
+            trend_tokens: self.trend_tokens,
+            trend_cost: self.trend_cost,
             input: self.input,
             output: self.output,
             cache_creation: self.cache_creation,
@@ -602,5 +658,49 @@ mod tests {
             today,
         );
         assert_eq!(db.projects(), vec!["alpha".to_string(), "beta".to_string()]);
+    }
+
+    #[test]
+    fn trend_series_selects_metric_and_populates_daily_tokens_cost() {
+        let mut db = UsageDb::default();
+        let today = day(2026, 7, 16);
+        let usage = Usage {
+            input_tokens: 100,
+            output_tokens: 50,
+            cache_read_input_tokens: 10,
+            ..Default::default()
+        };
+        db.absorb(
+            &line_at(
+                2026,
+                7,
+                16,
+                vec![Extracted::Model {
+                    name: "opus".into(),
+                    usage,
+                }],
+            ),
+            "p",
+            today,
+        );
+        let rows = db.rows(
+            Category::Model,
+            Window::All,
+            &ProjectFilter::All,
+            SortKey::Count,
+            today,
+        );
+        let r = &rows[0];
+        // The last trend bucket (today) holds this event's metrics.
+        assert!((r.trend_series(GraphMetric::Tokens).last().unwrap() - 160.0).abs() < f64::EPSILON);
+        assert!((r.trend_series(GraphMetric::Messages).last().unwrap() - 1.0).abs() < f64::EPSILON);
+        assert!(*r.trend_series(GraphMetric::Cost).last().unwrap() > 0.0);
+    }
+
+    #[test]
+    fn graph_metric_cycles() {
+        assert_eq!(GraphMetric::Tokens.next(), GraphMetric::Cost);
+        assert_eq!(GraphMetric::Cost.next(), GraphMetric::Messages);
+        assert_eq!(GraphMetric::Messages.next(), GraphMetric::Tokens);
     }
 }
