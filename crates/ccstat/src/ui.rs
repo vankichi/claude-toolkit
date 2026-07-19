@@ -17,7 +17,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{BarChart, Block, Borders, Clear, List, ListItem, ListState, Paragraph, Tabs, Wrap},
+    widgets::{Axis, Block, Borders, Clear, List, ListItem, ListState, Paragraph, Tabs, Wrap},
 };
 
 /// Sentinel shown at the top of the project picker for "no filter".
@@ -694,26 +694,29 @@ fn draw_body(f: &mut Frame<'_>, area: Rect, state: &AppState) {
     draw_detail(f, chunks[1], state);
 }
 
-/// Full-screen daily bar chart of the selected row's `TREND_DAYS`-day trend.
+/// Full-screen bottom-style braille line chart of the selected row's
+/// `TREND_DAYS`-day trend.
 fn draw_graph(f: &mut Frame<'_>, area: Rect, state: &AppState) {
     let Some(row) = state.selected_row() else {
         return;
     };
     let today = state.today_for_rescan();
 
-    // Labels: the TREND_DAYS days ending today, oldest→newest (matches Row.trend order).
-    let labels: Vec<String> = (0..TREND_DAYS)
-        .map(|i| {
-            #[allow(clippy::cast_possible_wrap)]
-            let offset = (TREND_DAYS - 1 - i) as i64;
-            (today - Duration::days(offset)).format("%m/%d").to_string()
-        })
-        .collect();
-    let data: Vec<(&str, u64)> = labels
+    #[allow(clippy::cast_possible_wrap)] // TREND_DAYS is a small constant
+    let oldest_offset = (TREND_DAYS - 1) as i64;
+    let oldest = (today - Duration::days(oldest_offset))
+        .format("%m/%d")
+        .to_string();
+    let newest = today.format("%m/%d").to_string();
+
+    let points: Vec<(f64, f64)> = row
+        .trend
         .iter()
-        .zip(row.trend.iter())
-        .map(|(l, &v)| (l.as_str(), v))
+        .enumerate()
+        .map(|(i, &v)| (i as f64, v as f64))
         .collect();
+    let peak = row.trend.iter().copied().max().unwrap_or(0).max(1);
+    let last_x = (TREND_DAYS.saturating_sub(1)).max(1) as f64;
 
     let title = format!(
         " {}: {} · {} in {} · {}-day trend · last {} (g/Esc close) ",
@@ -724,17 +727,15 @@ fn draw_graph(f: &mut Frame<'_>, area: Rect, state: &AppState) {
         TREND_DAYS,
         format_recency(row.last_used, today),
     );
-    // Fit ~TREND_DAYS bars into the inner width; clamp bar width to a sane range.
-    let inner = area.width.saturating_sub(2).max(1) as usize;
-    #[allow(clippy::cast_possible_truncation)]
-    let bar_width = (inner / TREND_DAYS).clamp(1, 6) as u16;
-    let chart = BarChart::default()
+
+    let chart = cctk::chart::braille_line(&points, peak as f64, peak.to_string(), Color::Green)
         .block(Block::default().borders(Borders::ALL).title(title))
-        .data(&data)
-        .bar_width(bar_width)
-        .bar_gap(1)
-        .bar_style(Style::default().fg(Color::Green))
-        .value_style(Style::default().fg(Color::Black).bg(Color::Green));
+        .x_axis(
+            Axis::default()
+                .bounds([0.0, last_x])
+                .labels([Line::from(oldest), Line::from(newest)])
+                .style(Style::default().fg(Color::DarkGray)),
+        );
     f.render_widget(chart, area);
 }
 

@@ -5,6 +5,7 @@
 //! `ccwatch`, `ccstat`, `ccmap`, and (later) `cctop` all share one core instead
 //! of maintaining parallel copies.
 
+pub mod chart;
 pub mod fuzzy;
 pub mod jsonl;
 pub mod paths;

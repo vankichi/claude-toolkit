@@ -12,9 +12,8 @@ use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
     style::{Color, Modifier, Style},
-    symbols::Marker,
     text::{Line, Span},
-    widgets::{Axis, Block, Borders, Chart, Dataset, GraphType, Paragraph},
+    widgets::{Block, Borders, Paragraph},
 };
 
 /// How many usage rows the compact Top-usage panel shows.
@@ -129,27 +128,13 @@ fn draw_rate_chart(f: &mut Frame<'_>, area: Rect, series: &[f64]) {
         .map(|(i, &v)| (i as f64, v))
         .collect();
     let peak = series.iter().copied().fold(0.0_f64, f64::max).max(1.0);
-    let last_x = (series.len() - 1) as f64;
-
-    let dataset = Dataset::default()
-        .marker(Marker::Braille)
-        .graph_type(GraphType::Line)
-        .style(Style::default().fg(Color::Cyan))
-        .data(&points);
 
     // `peak` is derived from u64 token counts (non-negative, small), so the
     // round-trip cast for the axis label cannot truncate or lose a sign.
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     let peak_label = fmt_tokens(peak.round() as u64);
 
-    let chart = Chart::new(vec![dataset])
-        .x_axis(Axis::default().bounds([0.0, last_x]))
-        .y_axis(
-            Axis::default()
-                .bounds([0.0, peak])
-                .labels([Line::from("0"), Line::from(peak_label)])
-                .style(Style::default().fg(Color::DarkGray)),
-        );
+    let chart = cctk::chart::braille_line(&points, peak, peak_label, Color::Cyan);
     f.render_widget(chart, area);
 }
 
