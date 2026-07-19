@@ -70,15 +70,14 @@ impl AppState {
         }
     }
 
-    /// Rows for the current tab/window/project/sort, then narrowed by the
-    /// case-insensitive name filter.
+    /// Rows for the current tab/window/project/sort, then narrowed by a
+    /// case-insensitive fuzzy (subsequence) match on the name.
     #[must_use]
     pub fn rows(&self) -> Vec<Row> {
-        let needle = self.filter.to_lowercase();
         self.db
             .rows(self.tab, self.window, &self.project, self.sort, self.today)
             .into_iter()
-            .filter(|r| needle.is_empty() || r.name.to_lowercase().contains(&needle))
+            .filter(|r| cctk::fuzzy::matches(&self.filter, &r.name))
             .collect()
     }
 
@@ -876,39 +875,21 @@ fn draw_project_picker(f: &mut Frame<'_>, area: Rect, state: &AppState) {
     f.render_stateful_widget(list, popup, &mut ls);
 }
 
-/// A fixed-width unicode block bar scaled to `count / max`.
+/// A fixed-width braille dot bar scaled to `count / max`.
 fn count_bar(count: u64, max: u64) -> String {
     const WIDTH: usize = 10;
-    if max == 0 {
-        return "·".repeat(WIDTH);
-    }
-    let scaled = (count as f64 / max as f64) * WIDTH as f64;
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    let filled = scaled.round() as usize;
-    let filled = filled.min(WIDTH);
-    format!("{}{}", "█".repeat(filled), "·".repeat(WIDTH - filled))
+    let ratio = if max == 0 {
+        0.0
+    } else {
+        count as f64 / max as f64
+    };
+    cctk::viz::dot_bar(ratio, WIDTH)
 }
 
-/// A unicode sparkline over daily counts.
+/// A braille dot sparkline over daily counts (one cell per value).
 fn sparkline(values: &[u64]) -> String {
-    const BARS: [char; 8] = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
-    let max = values.iter().copied().max().unwrap_or(0);
-    if max == 0 {
-        return "·".repeat(values.len());
-    }
-    values
-        .iter()
-        .map(|&v| {
-            if v == 0 {
-                '·'
-            } else {
-                let scaled = (v as f64 / max as f64) * (BARS.len() - 1) as f64;
-                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-                let idx = scaled.round() as usize;
-                BARS[idx.min(BARS.len() - 1)]
-            }
-        })
-        .collect()
+    let floats: Vec<f64> = values.iter().map(|&v| v as f64).collect();
+    cctk::viz::sparkline(&floats, values.len())
 }
 
 #[cfg(test)]
@@ -1366,23 +1347,24 @@ mod tests {
 
     #[test]
     fn count_bar_scales_and_clamps() {
-        assert_eq!(super::count_bar(0, 10), "··········");
-        assert_eq!(super::count_bar(10, 10), "██████████");
-        assert_eq!(super::count_bar(5, 10), "█████·····");
+        // 10 cells = 20 braille columns.
+        assert_eq!(super::count_bar(0, 10), "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀");
+        assert_eq!(super::count_bar(10, 10), "⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿");
+        assert_eq!(super::count_bar(5, 10), "⣿⣿⣿⣿⣿⠀⠀⠀⠀⠀");
     }
 
     #[test]
-    fn count_bar_zero_max_is_all_dots() {
-        assert_eq!(super::count_bar(5, 0), "··········");
+    fn count_bar_zero_max_is_blank() {
+        assert_eq!(super::count_bar(5, 0), "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀");
     }
 
     #[test]
-    fn sparkline_marks_zero_days_with_dots() {
-        assert_eq!(super::sparkline(&[0, 0, 0]), "···");
+    fn sparkline_marks_zero_days_as_blank_and_scales_up() {
+        assert_eq!(super::sparkline(&[0, 0, 0]), "⠀⠀⠀");
         let s = super::sparkline(&[0, 1, 8]);
         assert_eq!(s.chars().count(), 3);
-        assert!(s.starts_with('·'));
-        assert!(s.ends_with('█'));
+        assert!(s.starts_with('⠀'));
+        assert_ne!(s.chars().last().unwrap(), '⠀');
     }
 
     #[test]

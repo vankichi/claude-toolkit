@@ -75,19 +75,17 @@ impl AppState {
         }
     }
 
-    /// Items in the active tab whose name or description contains the
-    /// current filter text as a case-insensitive substring. An empty
-    /// filter matches everything.
+    /// Items in the active tab whose name or description fuzzy-matches the
+    /// current filter text (case-insensitive subsequence). An empty filter
+    /// matches everything.
     #[must_use]
     pub fn visible(&self) -> Vec<&Item> {
-        let needle = self.filter.to_lowercase();
         self.all
             .iter()
             .filter(|item| item.kind == self.tab)
             .filter(|item| {
-                needle.is_empty()
-                    || item.name.to_lowercase().contains(&needle)
-                    || item.description.to_lowercase().contains(&needle)
+                cctk::fuzzy::matches(&self.filter, &item.name)
+                    || cctk::fuzzy::matches(&self.filter, &item.description)
             })
             .collect()
     }
