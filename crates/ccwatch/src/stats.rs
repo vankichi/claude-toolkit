@@ -1,5 +1,5 @@
-use crate::jsonl::{ContentBlock, Event, Usage};
-use crate::pricing::{ModelInfo, Pricing};
+use cctk::jsonl::{Kind, Line, Usage};
+use cctk::pricing::{ModelInfo, Pricing};
 use chrono::{DateTime, Utc};
 use ratatui::style::Color;
 use std::collections::{HashMap, VecDeque};
@@ -96,20 +96,24 @@ impl SessionStats {
     /// first occurrence per name), tool counts, token totals, session cost,
     /// last context size, sliding-window history, output token history, and
     /// active-session timestamp.
-    pub(crate) fn ingest(&mut self, event: &Event) {
-        if let Event::PermissionMode(p) = event {
-            self.permission_mode = Some(p.permission_mode.clone());
+    pub(crate) fn ingest(&mut self, line: &Line) {
+        if line.kind == Kind::PermissionMode {
+            if let Some(mode) = &line.permission_mode {
+                self.permission_mode = Some(mode.clone());
+            }
             return;
         }
-        let Event::Assistant(a) = event else { return };
+        if line.kind != Kind::Assistant {
+            return;
+        }
 
         if self.cwd.is_none()
-            && let Some(cwd) = &a.cwd
+            && let Some(cwd) = &line.cwd
         {
             self.cwd = Some(cwd.clone());
         }
 
-        if let Some(model) = &a.message.model
+        if let Some(model) = &line.model
             && self.model_raw.as_deref() != Some(model.as_str())
         {
             self.model_raw = Some(model.clone());
@@ -117,25 +121,20 @@ impl SessionStats {
             self.pricing = self.model_info.pricing();
         }
 
-        for block in &a.message.content {
-            if let ContentBlock::ToolUse { name } = block
-                && !name.is_empty()
-            {
-                *self.tool_counts.entry(name.clone()).or_insert(0) += 1;
+        for name in line.tool_use_names() {
+            if !name.is_empty() {
+                *self.tool_counts.entry(name.to_string()).or_insert(0) += 1;
             }
         }
 
-        let Some(usage) = a.message.usage else { return };
+        let Some(usage) = line.usage else { return };
         self.total += usage;
         self.last_context_size = usage.context_size();
         self.assistant_messages += 1;
         let event_cost = self.pricing.cost_usd(&usage);
         self.session_cost_usd += event_cost;
 
-        if let Some(ts_raw) = a.timestamp.as_deref()
-            && let Ok(parsed) = DateTime::parse_from_rfc3339(ts_raw)
-        {
-            let at = parsed.with_timezone(&Utc);
+        if let Some(at) = line.timestamp_utc() {
             self.last_event_at = Some(at);
             let tokens =
                 usage.input_tokens + usage.output_tokens + usage.cache_creation_input_tokens;
@@ -310,9 +309,9 @@ impl SessionStats {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::jsonl::{AssistantEvent, AssistantMessage, ContentBlock, Usage};
+    use serde_json::json;
 
-    fn assistant(model: &str, tools: &[&str], usage: (u64, u64, u64, u64)) -> Event {
+    fn assistant(model: &str, tools: &[&str], usage: (u64, u64, u64, u64)) -> Line {
         assistant_full(model, tools, usage, None, None)
     }
 
@@ -321,7 +320,7 @@ mod tests {
         tools: &[&str],
         usage: (u64, u64, u64, u64),
         cwd: Option<&str>,
-    ) -> Event {
+    ) -> Line {
         assistant_full(model, tools, usage, cwd, None)
     }
 
@@ -330,7 +329,7 @@ mod tests {
         tools: &[&str],
         usage: (u64, u64, u64, u64),
         timestamp: &str,
-    ) -> Event {
+    ) -> Line {
         assistant_full(model, tools, usage, None, Some(timestamp))
     }
 
@@ -340,26 +339,41 @@ mod tests {
         usage: (u64, u64, u64, u64),
         cwd: Option<&str>,
         timestamp: Option<&str>,
-    ) -> Event {
+    ) -> Line {
         let (i, o, cw, cr) = usage;
-        Event::Assistant(AssistantEvent {
-            message: AssistantMessage {
-                model: Some(model.into()),
-                content: tools
-                    .iter()
-                    .map(|t| ContentBlock::ToolUse { name: (*t).into() })
-                    .collect(),
-                usage: Some(Usage {
-                    input_tokens: i,
-                    output_tokens: o,
-                    cache_creation_input_tokens: cw,
-                    cache_read_input_tokens: cr,
-                    cache_creation: None,
-                }),
+        let content: Vec<serde_json::Value> = tools
+            .iter()
+            .map(|t| json!({"type": "tool_use", "name": t}))
+            .collect();
+        let mut obj = json!({
+            "type": "assistant",
+            "message": {
+                "model": model,
+                "content": content,
+                "usage": {
+                    "input_tokens": i,
+                    "output_tokens": o,
+                    "cache_creation_input_tokens": cw,
+                    "cache_read_input_tokens": cr,
+                },
             },
-            cwd: cwd.map(String::from),
-            timestamp: timestamp.map(String::from),
-        })
+        });
+        if let Some(c) = cwd {
+            obj["cwd"] = json!(c);
+        }
+        if let Some(t) = timestamp {
+            obj["timestamp"] = json!(t);
+        }
+        Line::parse(&obj.to_string()).expect("valid assistant JSON")
+    }
+
+    fn other() -> Line {
+        Line::parse(r#"{"type":"file-history-snapshot","messageId":"x"}"#).unwrap()
+    }
+
+    fn permission_mode(mode: &str) -> Line {
+        Line::parse(&json!({"type": "permission-mode", "permissionMode": mode}).to_string())
+            .unwrap()
     }
 
     #[test]
@@ -379,7 +393,7 @@ mod tests {
     #[test]
     fn ignores_non_assistant() {
         let mut s = SessionStats::default();
-        s.ingest(&Event::Other);
+        s.ingest(&other());
         assert_eq!(s.assistant_messages(), 0);
     }
 
@@ -496,17 +510,12 @@ mod tests {
 
     #[test]
     fn ingests_permission_mode_event() {
-        use crate::jsonl::PermissionModeEvent;
         let mut s = SessionStats::default();
         assert_eq!(s.permission_mode(), None);
-        s.ingest(&Event::PermissionMode(PermissionModeEvent {
-            permission_mode: "plan".to_string(),
-        }));
+        s.ingest(&permission_mode("plan"));
         assert_eq!(s.permission_mode(), Some("plan"));
         // Later events overwrite.
-        s.ingest(&Event::PermissionMode(PermissionModeEvent {
-            permission_mode: "acceptEdits".to_string(),
-        }));
+        s.ingest(&permission_mode("acceptEdits"));
         assert_eq!(s.permission_mode(), Some("acceptEdits"));
     }
 

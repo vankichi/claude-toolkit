@@ -195,6 +195,7 @@ version = "0.1.1"
 dependencies = [
  "anyhow",
  "ccmap",
+ "cctk",
  "chrono",
  "clap",
  "crossterm",
@@ -205,10 +206,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "cctk"
+version = "0.1.1"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "futures",
+ "ratatui",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
 name = "ccwatch"
 version = "0.1.1"
 dependencies = [
  "anyhow",
+ "cctk",
  "chrono",
  "clap",
  "crossterm",

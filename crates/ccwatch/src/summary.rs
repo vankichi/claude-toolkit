@@ -351,26 +351,29 @@ fn family_color(family: &str) -> Color {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::jsonl::{AssistantEvent, AssistantMessage, ContentBlock, Event, Usage};
+    use cctk::jsonl::Line;
+    use serde_json::json;
     use std::path::PathBuf;
 
-    fn assistant_event(model: &str, usage: (u64, u64, u64, u64), ts: Option<&str>) -> Event {
+    fn assistant_event(model: &str, usage: (u64, u64, u64, u64), ts: Option<&str>) -> Line {
         let (i, o, cw, cr) = usage;
-        Event::Assistant(AssistantEvent {
-            message: AssistantMessage {
-                model: Some(model.into()),
-                content: vec![ContentBlock::Other],
-                usage: Some(Usage {
-                    input_tokens: i,
-                    output_tokens: o,
-                    cache_creation_input_tokens: cw,
-                    cache_read_input_tokens: cr,
-                    cache_creation: None,
-                }),
+        let mut obj = json!({
+            "type": "assistant",
+            "message": {
+                "model": model,
+                "content": [],
+                "usage": {
+                    "input_tokens": i,
+                    "output_tokens": o,
+                    "cache_creation_input_tokens": cw,
+                    "cache_read_input_tokens": cr,
+                },
             },
-            cwd: None,
-            timestamp: ts.map(String::from),
-        })
+        });
+        if let Some(t) = ts {
+            obj["timestamp"] = json!(t);
+        }
+        Line::parse(&obj.to_string()).expect("valid assistant JSON")
     }
 
     fn entry<'a>(

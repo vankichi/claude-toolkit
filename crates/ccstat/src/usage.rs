@@ -2,14 +2,37 @@
 //! project) daily buckets; queries re-slice by time-window + project on
 //! demand without rescanning the raw logs.
 
-use crate::jsonl::{Extracted, LineData};
 use crate::model::{Category, ProjectFilter, SortKey, Window};
-use crate::pricing::ModelInfo;
-use chrono::{Duration, NaiveDate};
+use cctk::jsonl::{Extracted, Line};
+use cctk::pricing::ModelInfo;
+use chrono::{DateTime, Duration, NaiveDate, Utc};
 use std::collections::HashMap;
 
 /// Number of trailing days shown in the trend sparkline.
 pub const TREND_DAYS: usize = 30;
+
+/// One session-log line's contribution to the store: its timestamp (for day
+/// bucketing) and the usage records it carries. Built from a parsed
+/// [`cctk::jsonl::Line`] via [`LineData::from_line`]; `cwd` is retained so the
+/// scanner can resolve a project label from any line in the file.
+#[derive(Debug, Default)]
+pub struct LineData {
+    pub timestamp: Option<DateTime<Utc>>,
+    pub cwd: Option<String>,
+    pub items: Vec<Extracted>,
+}
+
+impl LineData {
+    /// Project a parsed canonical line into the fields the store needs.
+    #[must_use]
+    pub fn from_line(line: &Line) -> Self {
+        LineData {
+            timestamp: line.timestamp_utc(),
+            cwd: line.cwd.clone(),
+            items: line.extracted(),
+        }
+    }
+}
 
 /// Per-day aggregate for one (category, name, project) entry.
 #[derive(Debug, Default, Clone, Copy)]
@@ -267,7 +290,7 @@ fn sort_rows(rows: &mut [Row], sort: SortKey) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::jsonl::{Extracted, LineData, Usage};
+    use cctk::jsonl::Usage;
     use chrono::TimeZone;
 
     fn day(y: i32, m: u32, d: u32) -> NaiveDate {

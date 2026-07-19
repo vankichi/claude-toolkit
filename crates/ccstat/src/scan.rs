@@ -4,14 +4,13 @@
 //! each worker builds a partial `UsageDb` over a slice of the file list, and
 //! the partials are merged. Each session's project label comes from the `cwd`
 //! recorded in its events (basename), falling back to the encoded parent
-//! directory name.
+//! directory name. Path/tail primitives live in [`cctk::paths`].
 
-use crate::jsonl::{self, LineData};
 use crate::live::{self, ActiveSet};
-use crate::usage::UsageDb;
+use crate::usage::{LineData, UsageDb};
+use cctk::jsonl::Line;
+use cctk::paths::{project_label, read_tail, session_files};
 use chrono::{DateTime, Duration, NaiveDate, Utc};
-use std::fs::File;
-use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
 pub struct ScanConfig {
@@ -58,70 +57,29 @@ pub fn scan(cfg: &ScanConfig, today: NaiveDate) -> UsageDb {
     total
 }
 
-/// All `*.jsonl` files exactly one directory below `projects_dir`
-/// (`projects_dir/<encoded-project>/<session>.jsonl`).
-#[must_use]
-pub fn session_files(projects_dir: &Path) -> Vec<PathBuf> {
-    let mut out = Vec::new();
-    let Ok(project_dirs) = std::fs::read_dir(projects_dir) else {
-        return out;
-    };
-    for pd in project_dirs.flatten() {
-        if !pd.file_type().is_ok_and(|t| t.is_dir()) {
-            continue;
-        }
-        let Ok(sessions) = std::fs::read_dir(pd.path()) else {
-            continue;
-        };
-        for se in sessions.flatten() {
-            let path = se.path();
-            let is_jsonl = path.extension().and_then(|e| e.to_str()) == Some("jsonl");
-            let is_file = se.file_type().is_ok_and(|t| t.is_file());
-            if is_jsonl && is_file {
-                out.push(path);
-            }
-        }
-    }
-    out
-}
-
-/// Basename of `cwd` if present, else the file's parent directory name.
-#[must_use]
-pub fn project_label(file: &Path, cwd: Option<&str>) -> String {
-    if let Some(cwd) = cwd
-        && let Some(base) = cwd.rsplit(['/', '\\']).find(|s| !s.is_empty())
-    {
-        return base.to_string();
-    }
-    file.parent()
-        .and_then(|p| p.file_name())
-        .and_then(|n| n.to_str())
-        .unwrap_or("(unknown)")
-        .to_string()
-}
-
 fn parse_file(path: &Path, today: NaiveDate) -> UsageDb {
     let fallback_day = file_mtime_date(path).unwrap_or(today);
     let Ok(bytes) = std::fs::read(path) else {
         return UsageDb::default();
     };
     // Lossy UTF-8 decode keeps every line even when a byte is invalid, so one
-    // corrupt line can't truncate the rest of the session file. (A lazy
-    // `Lines` + `filter_map(Result::ok)` would instead risk an infinite loop
-    // on a persistent read error; a single read avoids both failure modes.)
+    // corrupt line can't truncate the rest of the session file.
     let content = String::from_utf8_lossy(&bytes);
 
     // Buffer this file's parsed lines so we can resolve the project label
     // (which comes from a cwd that may appear on any line) before folding.
     let mut lines: Vec<LineData> = Vec::new();
     let mut cwd: Option<String> = None;
-    for line in content.lines() {
-        let data = jsonl::parse_line(line);
+    for raw in content.lines() {
+        let Some(parsed) = Line::parse(raw) else {
+            continue;
+        };
         if cwd.is_none()
-            && let Some(c) = &data.cwd
+            && let Some(c) = &parsed.cwd
         {
             cwd = Some(c.clone());
         }
+        let data = LineData::from_line(&parsed);
         if !data.items.is_empty() {
             lines.push(data);
         }
@@ -141,47 +99,6 @@ fn file_mtime(path: &Path) -> Option<DateTime<Utc>> {
 
 fn file_mtime_date(path: &Path) -> Option<NaiveDate> {
     Some(file_mtime(path)?.date_naive())
-}
-
-/// Read the last `max_bytes` of `path`, trimmed to start on a line boundary so
-/// callers always see whole lines. Returns the whole file when it is smaller
-/// than `max_bytes`, and an empty buffer on any I/O error or when the tail
-/// window holds no newline (a single over-long line we can't safely split).
-#[must_use]
-pub fn read_tail(path: &Path, max_bytes: u64) -> Vec<u8> {
-    let Ok(mut f) = File::open(path) else {
-        return Vec::new();
-    };
-    let Ok(meta) = f.metadata() else {
-        return Vec::new();
-    };
-    let len = meta.len();
-    if len == 0 {
-        return Vec::new();
-    }
-    if len <= max_bytes {
-        // Whole file: byte 0 is already a line boundary.
-        let mut buf = Vec::with_capacity(usize::try_from(len).unwrap_or(0));
-        return match f.read_to_end(&mut buf) {
-            Ok(_) => buf,
-            Err(_) => Vec::new(),
-        };
-    }
-    if f.seek(SeekFrom::Start(len - max_bytes)).is_err() {
-        return Vec::new();
-    }
-    let mut buf = Vec::with_capacity(usize::try_from(max_bytes).unwrap_or(0));
-    if f.read_to_end(&mut buf).is_err() {
-        return Vec::new();
-    }
-    // Drop the (probably partial) first line so we begin on a boundary.
-    match buf.iter().position(|&b| b == b'\n') {
-        Some(pos) => {
-            buf.drain(0..=pos);
-            buf
-        }
-        None => Vec::new(),
-    }
 }
 
 /// The set of `(category, name)` pairs running "now": for every session whose
@@ -229,71 +146,6 @@ mod tests {
             writeln!(f, "{line}").unwrap();
         }
         path
-    }
-
-    #[test]
-    fn session_files_finds_jsonl_one_level_down() {
-        let tmp = tempfile::tempdir().unwrap();
-        write_session(tmp.path(), "proj-a", "s1.jsonl", &["{}"]);
-        write_session(tmp.path(), "proj-a", "s2.jsonl", &["{}"]);
-        write_session(tmp.path(), "proj-b", "s3.jsonl", &["{}"]);
-        // A non-jsonl file must be ignored.
-        write_session(tmp.path(), "proj-b", "notes.txt", &["x"]);
-        let mut files = session_files(tmp.path());
-        files.sort();
-        assert_eq!(files.len(), 3);
-        assert!(files.iter().all(|p| p.extension().unwrap() == "jsonl"));
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn session_files_excludes_symlinks() {
-        let tmp = tempfile::tempdir().unwrap();
-        let real = write_session(tmp.path(), "proj-a", "s1.jsonl", &["{}"]);
-
-        // A symlink named *.jsonl one level down, pointing OUTSIDE the
-        // projects tree, must not be collected (read-only contract: only
-        // real *.jsonl files under projects_dir may be opened).
-        let outside = tempfile::NamedTempFile::new().unwrap();
-        let pd = tmp.path().join("proj-a");
-        let evil = pd.join("evil.jsonl");
-        std::os::unix::fs::symlink(outside.path(), &evil).unwrap();
-
-        let mut files = session_files(tmp.path());
-        files.sort();
-        assert_eq!(files, vec![real]);
-    }
-
-    #[test]
-    fn session_files_ignores_top_level_jsonl() {
-        let tmp = tempfile::tempdir().unwrap();
-        // A .jsonl placed directly in projects_dir (zero levels deep) must
-        // not be collected; session_files only recurses into directories.
-        std::fs::write(tmp.path().join("top-level.jsonl"), "{}").unwrap();
-        write_session(tmp.path(), "proj-a", "s1.jsonl", &["{}"]);
-
-        let files = session_files(tmp.path());
-        assert_eq!(files.len(), 1);
-        assert_eq!(files[0].file_name().unwrap(), "s1.jsonl");
-    }
-
-    #[test]
-    fn project_label_prefers_cwd_basename() {
-        let file = Path::new("/x/-Users-me-repo/session.jsonl");
-        assert_eq!(
-            project_label(file, Some("/Users/me/work/my-repo")),
-            "my-repo"
-        );
-        assert_eq!(
-            project_label(file, Some("/Users/me/work/my-repo/")),
-            "my-repo"
-        );
-    }
-
-    #[test]
-    fn project_label_falls_back_to_dir_name() {
-        let file = Path::new("/x/-Users-me-repo/session.jsonl");
-        assert_eq!(project_label(file, None), "-Users-me-repo");
     }
 
     #[test]
@@ -346,43 +198,6 @@ mod tests {
             today,
         );
         assert!(db.is_empty());
-    }
-
-    #[test]
-    fn read_tail_returns_whole_small_file() {
-        let tmp = tempfile::tempdir().unwrap();
-        let path = write_session(tmp.path(), "p", "s.jsonl", &["line1", "line2"]);
-        assert_eq!(
-            String::from_utf8(read_tail(&path, 1024)).unwrap(),
-            "line1\nline2\n"
-        );
-    }
-
-    #[test]
-    fn read_tail_starts_on_line_boundary_after_seek() {
-        let tmp = tempfile::tempdir().unwrap();
-        // 33 bytes: "aaaaaaaaaa\nbbbbbbbbbb\ncccccccccc\n". A 15-byte tail seeks
-        // into the b-line; the partial leading line is dropped.
-        let path = write_session(
-            tmp.path(),
-            "p",
-            "s.jsonl",
-            &["aaaaaaaaaa", "bbbbbbbbbb", "cccccccccc"],
-        );
-        assert_eq!(
-            String::from_utf8(read_tail(&path, 15)).unwrap(),
-            "cccccccccc\n"
-        );
-    }
-
-    #[test]
-    fn read_tail_empty_when_no_newline_in_window() {
-        let tmp = tempfile::tempdir().unwrap();
-        let pd = tmp.path().join("p");
-        std::fs::create_dir_all(&pd).unwrap();
-        let path = pd.join("s.jsonl");
-        std::fs::write(&path, "x".repeat(100)).unwrap();
-        assert!(read_tail(&path, 10).is_empty());
     }
 
     #[test]

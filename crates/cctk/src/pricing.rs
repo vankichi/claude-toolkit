@@ -1,13 +1,14 @@
 //! Per-model pricing and metadata.
 //!
-//! Prices are USD per **million** tokens. Adjust as Anthropic updates pricing.
+//! Prices are USD per **million** tokens (Anthropic public pricing as of
+//! 2026-07). The current Opus tier is $5/$25 in/out, not the legacy $15/$75.
 
 use crate::jsonl::Usage;
 use ratatui::style::Color;
 
 /// Anthropic model family. Determines pricing and the default UI accent color.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Family {
+pub enum Family {
     Opus,
     Sonnet,
     Haiku,
@@ -17,13 +18,13 @@ pub(crate) enum Family {
 /// model name string. Carries everything downstream code needs (pricing,
 /// context window, accent color) without re-parsing the raw name repeatedly.
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct ModelInfo {
+pub struct ModelInfo {
     pub family: Family,
     pub long_context: bool,
 }
 
 impl ModelInfo {
-    /// Classify a raw model identifier (e.g. `claude-opus-4-7[1m]`) into a
+    /// Classify a raw model identifier (e.g. `claude-opus-4-8[1m]`) into a
     /// `Family` and detect the 1M-context variant marker. Falls back to
     /// `Sonnet` (the default tier) when the family is unrecognized.
     #[must_use]
@@ -46,8 +47,7 @@ impl ModelInfo {
     /// Public per-model rate card (USD per million tokens) covering input,
     /// output, cache writes (5min and 1hr ephemeral) and cache reads.
     /// Cache write rates: 5min ephemeral = 1.25× input, 1hr ephemeral = 2.00× input.
-    /// Cache read = 0.10× input. (Anthropic public pricing as of 2026-07; the
-    /// current Opus tier is $5/$25 in/out, not the legacy $15/$75.)
+    /// Cache read = 0.10× input.
     #[must_use]
     pub fn pricing(self) -> Pricing {
         match self.family {
@@ -77,8 +77,7 @@ impl ModelInfo {
 
     /// Maximum context window in tokens for this model. Defaults to 1M for
     /// every family because Claude Code now defaults to the 1M-context tier
-    /// and JSONL doesn't surface the variant on assistant events. Users on
-    /// the 200k tier can opt down with `CCWATCH_CONTEXT_WINDOW=200000`.
+    /// and JSONL doesn't surface the variant on assistant events.
     #[must_use]
     pub fn context_window(self) -> u64 {
         // `long_context` is still consulted by `pricing()` (1M-tier billing
@@ -87,8 +86,8 @@ impl ModelInfo {
         1_000_000
     }
 
-    /// Family-coded accent color used in the header `model:` field so each
-    /// model tier is visually distinguishable at a glance.
+    /// Family-coded accent color used so each model tier is visually
+    /// distinguishable at a glance.
     #[must_use]
     pub fn color(self) -> Color {
         match self.family {
@@ -100,8 +99,8 @@ impl ModelInfo {
 }
 
 impl Default for ModelInfo {
-    /// Defaults to Sonnet at 200k. Used as the initial value before any
-    /// assistant event has been ingested (model name unknown yet).
+    /// Defaults to Sonnet. Used as the initial value before any assistant
+    /// event has been ingested (model name unknown yet).
     fn default() -> Self {
         Self {
             family: Family::Sonnet,
@@ -112,7 +111,7 @@ impl Default for ModelInfo {
 
 /// Per-million-token rate card for a single model. All fields are USD/M.
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct Pricing {
+pub struct Pricing {
     pub input_per_mtok: f64,
     pub output_per_mtok: f64,
     pub cache_write_5m_per_mtok: f64,
@@ -122,10 +121,8 @@ pub(crate) struct Pricing {
 
 impl Pricing {
     /// Compute the dollar cost of a single assistant turn given its `Usage`.
-    /// Splits `cache_creation` tokens into 5min vs 1hr buckets when the
-    /// breakdown is present (Anthropic charges 1hr writes at 2× input vs
-    /// 1.25× for 5min). Falls back to treating all cache writes as 5min when
-    /// the breakdown is absent in the JSONL.
+    /// Splits cache-creation tokens into 5min vs 1hr buckets when the breakdown
+    /// is present (Anthropic charges 1hr writes at 2× input vs 1.25× for 5min).
     #[must_use]
     #[allow(clippy::similar_names)] // 5m / 1h pair is the natural cache TTL distinction
     pub fn cost_usd(&self, u: &Usage) -> f64 {
@@ -143,16 +140,10 @@ impl Pricing {
 mod tests {
     use super::*;
 
-    fn one_million(field: fn(&mut Usage)) -> Usage {
-        let mut u = Usage::default();
-        field(&mut u);
-        u
-    }
-
     #[test]
     fn detects_family_from_model_name() {
-        assert_eq!(ModelInfo::parse("claude-opus-4-7").family, Family::Opus);
-        assert_eq!(ModelInfo::parse("claude-sonnet-4-6").family, Family::Sonnet);
+        assert_eq!(ModelInfo::parse("claude-opus-4-8").family, Family::Opus);
+        assert_eq!(ModelInfo::parse("claude-sonnet-5").family, Family::Sonnet);
         assert_eq!(ModelInfo::parse("haiku").family, Family::Haiku);
         // Unknown falls back to Sonnet (the default tier).
         assert_eq!(ModelInfo::parse("foobar").family, Family::Sonnet);
@@ -160,10 +151,10 @@ mod tests {
 
     #[test]
     fn detects_long_context_variants() {
-        assert!(ModelInfo::parse("claude-opus-4-7[1m]").long_context);
-        assert!(ModelInfo::parse("claude-sonnet-4-6-1m").long_context);
-        assert!(ModelInfo::parse("CLAUDE-OPUS-4-7[1M]").long_context);
-        assert!(!ModelInfo::parse("claude-sonnet-4-6").long_context);
+        assert!(ModelInfo::parse("claude-opus-4-8[1m]").long_context);
+        assert!(ModelInfo::parse("claude-sonnet-5-1m").long_context);
+        assert!(ModelInfo::parse("CLAUDE-OPUS-4-8[1M]").long_context);
+        assert!(!ModelInfo::parse("claude-sonnet-5").long_context);
     }
 
     #[test]
@@ -181,8 +172,16 @@ mod tests {
     }
 
     #[test]
+    fn default_model_info_is_sonnet() {
+        assert_eq!(ModelInfo::default().family, Family::Sonnet);
+    }
+
+    #[test]
     fn opus_costs_more_than_sonnet_for_same_usage() {
-        let usage = one_million(|u| u.input_tokens = 1_000_000);
+        let usage = Usage {
+            input_tokens: 1_000_000,
+            ..Default::default()
+        };
         let opus = ModelInfo::parse("opus").pricing().cost_usd(&usage);
         let sonnet = ModelInfo::parse("sonnet").pricing().cost_usd(&usage);
         assert!(opus > sonnet, "opus {opus} should exceed sonnet {sonnet}");
@@ -191,22 +190,37 @@ mod tests {
     #[test]
     fn output_costs_more_than_input() {
         let p = ModelInfo::parse("sonnet").pricing();
-        let only_input = one_million(|u| u.input_tokens = 1_000_000);
-        let only_output = one_million(|u| u.output_tokens = 1_000_000);
+        let only_input = Usage {
+            input_tokens: 1_000_000,
+            ..Default::default()
+        };
+        let only_output = Usage {
+            output_tokens: 1_000_000,
+            ..Default::default()
+        };
         assert!(p.cost_usd(&only_output) > p.cost_usd(&only_input));
     }
 
     #[test]
     fn cache_read_is_cheapest() {
         let p = ModelInfo::parse("sonnet").pricing();
-        let only_input = one_million(|u| u.input_tokens = 1_000_000);
-        let only_read = one_million(|u| u.cache_read_input_tokens = 1_000_000);
+        let only_input = Usage {
+            input_tokens: 1_000_000,
+            ..Default::default()
+        };
+        let only_read = Usage {
+            cache_read_input_tokens: 1_000_000,
+            ..Default::default()
+        };
         assert!(p.cost_usd(&only_read) < p.cost_usd(&only_input));
     }
 
     #[test]
     fn haiku_is_cheaper_than_sonnet() {
-        let usage = one_million(|u| u.output_tokens = 1_000_000);
+        let usage = Usage {
+            output_tokens: 1_000_000,
+            ..Default::default()
+        };
         let haiku = ModelInfo::parse("haiku").pricing().cost_usd(&usage);
         let sonnet = ModelInfo::parse("sonnet").pricing().cost_usd(&usage);
         assert!(haiku < sonnet);
@@ -220,22 +234,13 @@ mod tests {
 
     #[test]
     fn one_hour_cache_write_costs_more_than_five_minute() {
-        use crate::jsonl::CacheCreation;
         let p = ModelInfo::parse("opus").pricing();
         let five_min = Usage {
-            cache_creation_input_tokens: 1_000_000,
-            cache_creation: Some(CacheCreation {
-                ephemeral_5m_input_tokens: 1_000_000,
-                ephemeral_1h_input_tokens: 0,
-            }),
+            cache_creation_5m: 1_000_000,
             ..Default::default()
         };
         let one_hour = Usage {
-            cache_creation_input_tokens: 1_000_000,
-            cache_creation: Some(CacheCreation {
-                ephemeral_5m_input_tokens: 0,
-                ephemeral_1h_input_tokens: 1_000_000,
-            }),
+            cache_creation_1h: 1_000_000,
             ..Default::default()
         };
         // Opus: 5m write = $6.25, 1h write = $10.00 per million.
@@ -248,7 +253,6 @@ mod tests {
         let p = ModelInfo::parse("opus").pricing();
         let usage = Usage {
             cache_creation_input_tokens: 1_000_000,
-            cache_creation: None, // legacy / missing
             ..Default::default()
         };
         // Should treat all as 5min: $6.25/M

@@ -1,14 +1,7 @@
 //! ccwatch — real-time terminal monitor for Claude Code session usage.
 
-mod jsonl;
-mod pricing;
-mod session;
-mod stats;
-mod summary;
-mod ui;
-mod watcher;
-
 use anyhow::{Context, Result};
+use ccwatch::ui;
 use clap::Parser;
 use std::path::PathBuf;
 

@@ -26,13 +26,13 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
-use crate::jsonl::Event;
 use crate::session::{self, DiscoveredSession};
 use crate::stats::SessionStats;
 use crate::summary::{self, AgentStatus, EntryView};
-use crate::watcher;
+use cctk::jsonl::Line as SessionLine;
+use cctk::tail;
 
-/// Bounded mpsc channel capacity for the shared (idx, Event) bus.
+/// Bounded mpsc channel capacity for the shared `(idx, SessionLine)` bus.
 /// Scales with the number of watchers; 1024 leaves plenty of headroom
 /// for bursts even with dozens of sessions.
 const EVENT_CHANNEL_CAPACITY: usize = 1024;
@@ -51,7 +51,7 @@ const SPARKLINE_MIN_H: u16 = 3;
 const FOOTER_H: u16 = 1;
 
 /// Runtime configuration for `ui::run`. Built once from CLI flags + env vars.
-pub(crate) struct Config {
+pub struct Config {
     pub projects_dir: PathBuf,
     pub explicit_session: Option<PathBuf>,
     pub refresh_ms: u64,
@@ -126,7 +126,7 @@ fn classify_key(code: KeyCode, mode: ViewMode, pinned: bool) -> KeyAction {
 
 /// Public entry point. Owns terminal init/restore around `run_inner`. Any
 /// error that escapes propagates after the terminal has been restored.
-pub(crate) async fn run(cfg: Config) -> Result<()> {
+pub async fn run(cfg: Config) -> Result<()> {
     let mut terminal = ratatui::init();
     let res = run_inner(&mut terminal, cfg).await;
     ratatui::restore();
@@ -136,7 +136,7 @@ pub(crate) async fn run(cfg: Config) -> Result<()> {
 /// Core event loop. Drains the shared watcher bus into per-session stats,
 /// redraws each tick, and handles key input per the active view mode.
 async fn run_inner(terminal: &mut DefaultTerminal, cfg: Config) -> Result<()> {
-    let (event_tx, mut event_rx) = mpsc::channel::<(usize, Event)>(EVENT_CHANNEL_CAPACITY);
+    let (event_tx, mut event_rx) = mpsc::channel::<(usize, SessionLine)>(EVENT_CHANNEL_CAPACITY);
 
     let (mut entries, pinned, mut mode) = if let Some(path) = cfg.explicit_session.clone() {
         // `--session <path>` mode: single pinned entry, no summary toggle.
@@ -146,7 +146,7 @@ async fn run_inner(terminal: &mut DefaultTerminal, cfg: Config) -> Result<()> {
             .and_then(|s| s.to_str())
             .unwrap_or(&short_id)
             .to_string();
-        let handle = watcher::spawn(path.clone(), 0, event_tx.clone());
+        let handle = tail::spawn(path.clone(), 0, event_tx.clone());
         let stats = SessionStats::new(cfg.context_window_override);
         let entry = SessionEntry {
             path,
@@ -168,7 +168,7 @@ async fn run_inner(terminal: &mut DefaultTerminal, cfg: Config) -> Result<()> {
     };
 
     let mut selected: usize = 0;
-    let mut event_buf: Vec<(usize, Event)> = Vec::with_capacity(EVENT_DRAIN_BATCH);
+    let mut event_buf: Vec<(usize, SessionLine)> = Vec::with_capacity(EVENT_DRAIN_BATCH);
     let mut tick = tokio::time::interval(Duration::from_millis(cfg.refresh_ms));
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     // Auto-refresh ticker. `None` when `--watch` wasn't passed; the select!
@@ -250,17 +250,17 @@ async fn run_inner(terminal: &mut DefaultTerminal, cfg: Config) -> Result<()> {
 }
 
 /// Spawn one watcher per discovered session, returning a Vec aligned by
-/// index with the `(idx, Event)` tag emitted to the shared channel.
+/// index with the `(idx, SessionLine)` tag emitted to the shared channel.
 fn spawn_entries(
     discovered: &[DiscoveredSession],
-    tx: &mpsc::Sender<(usize, Event)>,
+    tx: &mpsc::Sender<(usize, SessionLine)>,
     ctx_override: Option<u64>,
 ) -> Vec<SessionEntry> {
     discovered
         .iter()
         .enumerate()
         .map(|(idx, d)| {
-            let handle = watcher::spawn(d.path.clone(), idx, tx.clone());
+            let handle = tail::spawn(d.path.clone(), idx, tx.clone());
             let (name, status) = match &d.agent_info {
                 Some(info) => (
                     info.name.clone(),
@@ -286,7 +286,7 @@ fn spawn_entries(
 /// spawn watchers for newly-added sessions. Preserves selection by id.
 async fn rescan(
     entries: &mut Vec<SessionEntry>,
-    tx: &mpsc::Sender<(usize, Event)>,
+    tx: &mpsc::Sender<(usize, SessionLine)>,
     cfg: &Config,
     selected: &mut usize,
 ) -> Result<()> {
@@ -320,10 +320,10 @@ async fn rescan(
             // Watcher is still running with the OLD tag (the previous index).
             // Abort it and re-spawn with the new index so dispatch stays correct.
             e.handle.abort();
-            e.handle = watcher::spawn(d.path.clone(), idx, tx.clone());
+            e.handle = tail::spawn(d.path.clone(), idx, tx.clone());
             new_entries.push(e);
         } else {
-            let handle = watcher::spawn(d.path.clone(), idx, tx.clone());
+            let handle = tail::spawn(d.path.clone(), idx, tx.clone());
             let (name, status) = match &d.agent_info {
                 Some(info) => (
                     info.name.clone(),
