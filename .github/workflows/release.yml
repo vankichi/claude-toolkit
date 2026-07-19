@@ -44,7 +44,7 @@ jobs:
           version="${GITHUB_REF_NAME#v}"
           staging="claude-toolkit-${version}-${{ matrix.target }}"
           mkdir "$staging"
-          for bin in ccwatch ccmap ccstat; do
+          for bin in ccwatch ccmap ccstat cctop; do
             cp "target/${{ matrix.target }}/release/$bin" "$staging/"
           done
           cp LICENSE "$staging/"
@@ -58,7 +58,7 @@ jobs:
           $version = "$env:GITHUB_REF_NAME".TrimStart("v")
           $staging = "claude-toolkit-$version-${{ matrix.target }}"
           New-Item -ItemType Directory -Path $staging | Out-Null
-          foreach ($bin in "ccwatch", "ccmap", "ccstat") {
+          foreach ($bin in "ccwatch", "ccmap", "ccstat", "cctop") {
             Copy-Item "target/${{ matrix.target }}/release/$bin.exe" $staging
           }
           Copy-Item "LICENSE" $staging

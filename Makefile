@@ -39,6 +39,7 @@ install: release ## release build → $(PREFIX) にコピー (default: ~/.local/
 	@mkdir -p "$(PREFIX)"
 	@for crate in crates/*/; do \
 		name=$$(basename $$crate); \
+		if [ ! -f target/release/$$name ]; then continue; fi; \
 		cp target/release/$$name "$(PREFIX)/$$name"; \
 		if [ "$$(uname)" = "Darwin" ]; then \
 			codesign --force --sign - "$(PREFIX)/$$name" >/dev/null 2>&1; \
@@ -49,6 +50,7 @@ install: release ## release build → $(PREFIX) にコピー (default: ~/.local/
 uninstall: ## $(PREFIX) から各 crate のバイナリを削除
 	@for crate in crates/*/; do \
 		name=$$(basename $$crate); \
+		if [ ! -f "$(PREFIX)/$$name" ]; then continue; fi; \
 		rm -f "$(PREFIX)/$$name"; \
 		echo "removed "$(PREFIX)/$$name""; \
 	done

@@ -1,0 +1,36 @@
+[package]
+name = "cctop"
+version = "0.1.1"
+description = "Unified bottom-style TUI dashboard for Claude Code (live usage, stats, and config map)"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "cctop"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+ccmap = { path = "../ccmap", version = "0.1.1" }
+ccstat = { path = "../ccstat", version = "0.1.1" }
+cctk = { path = "../cctk", version = "0.1.1", features = ["tail"] }
+chrono.workspace = true
+clap.workspace = true
+crossterm.workspace = true
+futures.workspace = true
+ratatui.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+tempfile.workspace = true
+
+[lints]
+workspace = true
