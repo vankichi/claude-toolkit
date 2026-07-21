@@ -84,7 +84,7 @@ fn draw_now(f: &mut Frame<'_>, area: Rect, dash: &Dashboard, app: &App) {
     let pct = now.context_pct() * 100.0;
     let head = Line::from(vec![
         Span::styled(
-            now.model_label().to_string(),
+            now.model_label(),
             Style::default()
                 .fg(Color::Magenta)
                 .add_modifier(Modifier::BOLD),
@@ -265,12 +265,13 @@ pub fn draw_now_detail(f: &mut Frame<'_>, now: &crate::now::NowStats) {
         Line::from(vec![
             Span::raw("model    "),
             Span::styled(
-                now.model_label().to_string(),
+                now.model_label(),
                 Style::default()
                     .fg(Color::Magenta)
                     .add_modifier(Modifier::BOLD),
             ),
         ]),
+        Line::from(format!("sessions {}", now.session_count())),
         Line::from(format!("tokens   {}", fmt_tokens(now.total_tokens()))),
         Line::from(format!("cost     {}", fmt_cost(now.cost_usd()))),
         Line::from(format!("messages {}", now.assistant_messages())),
