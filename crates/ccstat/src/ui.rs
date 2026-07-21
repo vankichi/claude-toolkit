@@ -664,6 +664,36 @@ pub fn draw(f: &mut Frame<'_>, state: &AppState) {
     }
 }
 
+/// The top-N colored trend series for the current tab/window/sort/filter and
+/// selected metric. Public so a host (e.g. `cctop`'s overview) can render the
+/// same graph. Model rows are colored by family; other tabs cycle a palette.
+#[must_use]
+pub fn trends_series(state: &AppState) -> Vec<cctk::chart::LineSeries> {
+    state
+        .rows()
+        .iter()
+        .take(TRENDS_TOP_N)
+        .enumerate()
+        .map(|(i, r)| {
+            let color = match state.tab {
+                Category::Model => ModelInfo::parse(&r.name).color(),
+                _ => TRENDS_PALETTE[i % TRENDS_PALETTE.len()],
+            };
+            let points: Vec<(f64, f64)> = r
+                .trend_series(state.graph_metric)
+                .into_iter()
+                .enumerate()
+                .map(|(x, y)| (x as f64, y))
+                .collect();
+            cctk::chart::LineSeries {
+                points,
+                label: r.name.clone(),
+                color,
+            }
+        })
+        .collect()
+}
+
 /// Always-on top band: an overlaid braille line chart of the top series'
 /// daily trend for the current metric, with a colored legend and a date
 /// x-axis. Model rows are colored by family; other tabs cycle a palette.
@@ -681,8 +711,8 @@ fn draw_trends(f: &mut Frame<'_>, area: Rect, state: &AppState) {
     let inner = block.inner(area);
     f.render_widget(block, area);
 
-    let rows = state.rows();
-    if rows.is_empty() || inner.height < 2 {
+    let series = trends_series(state);
+    if series.is_empty() || inner.height < 2 {
         f.render_widget(
             Paragraph::new(Span::styled(
                 "no data in the selected window",
@@ -692,29 +722,6 @@ fn draw_trends(f: &mut Frame<'_>, area: Rect, state: &AppState) {
         );
         return;
     }
-
-    let series: Vec<cctk::chart::LineSeries> = rows
-        .iter()
-        .take(TRENDS_TOP_N)
-        .enumerate()
-        .map(|(i, r)| {
-            let color = match state.tab {
-                Category::Model => ModelInfo::parse(&r.name).color(),
-                _ => TRENDS_PALETTE[i % TRENDS_PALETTE.len()],
-            };
-            let points: Vec<(f64, f64)> = r
-                .trend_series(metric)
-                .into_iter()
-                .enumerate()
-                .map(|(x, y)| (x as f64, y))
-                .collect();
-            cctk::chart::LineSeries {
-                points,
-                label: r.name.clone(),
-                color,
-            }
-        })
-        .collect();
 
     // Manual colored legend (ratatui's auto-legend hides at this size) + chart.
     let parts = Layout::default()

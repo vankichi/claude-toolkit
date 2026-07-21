@@ -13,11 +13,8 @@ use ratatui::{
     layout::{Constraint, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph},
+    widgets::{Axis, Block, Borders, Paragraph},
 };
-
-/// How many usage rows the compact Top-usage panel shows.
-const TOP_USAGE_ROWS: usize = 8;
 
 /// Human-readable token count: `1.2M`, `900k`, or the bare number.
 #[must_use]
@@ -139,43 +136,64 @@ fn draw_rate_chart(f: &mut Frame<'_>, area: Rect, series: &[f64]) {
 }
 
 fn draw_usage(f: &mut Frame<'_>, area: Rect, dash: &Dashboard, app: &App) {
-    let block = panel_block("Top usage  [2]", Panel::Stats, app);
+    let metric = dash.stats.graph_metric;
+    let title = format!("Top usage  [2] · {} (m)", metric.label());
+    let block = panel_block(&title, Panel::Stats, app);
     let inner = block.inner(area);
     f.render_widget(block, area);
 
-    let rows = dash.stats.rows();
-    let max_cost = rows
-        .iter()
-        .map(|r| r.cost_usd)
-        .fold(0.0_f64, f64::max)
-        .max(f64::EPSILON);
-    let name_w = 16usize;
-    let bar_w = usize::from(inner.width)
-        .saturating_sub(name_w + 10)
-        .clamp(4, 24);
+    // Overlaid per-series trend graph (shared with ccstat), colored by family.
+    let series = ccstat::ui::trends_series(&dash.stats);
+    if series.is_empty() || inner.height < 2 {
+        f.render_widget(
+            Paragraph::new(Span::styled(
+                "no usage recorded",
+                Style::default().fg(Color::DarkGray),
+            )),
+            inner,
+        );
+        return;
+    }
 
-    let lines: Vec<Line> = rows
+    let parts = Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).split(inner);
+    let legend: Vec<Span> = series
         .iter()
-        .take(TOP_USAGE_ROWS)
-        .map(|r| {
-            let bar = cctk::viz::dot_bar(r.cost_usd / max_cost, bar_w);
-            let name: String = r.name.chars().take(name_w).collect();
-            Line::from(format!(
-                "{name:<name_w$} {cost:>7} {bar}",
-                cost = fmt_cost(r.cost_usd),
-            ))
+        .map(|s| {
+            let name: String = s.label.chars().take(12).collect();
+            Span::styled(format!("▉{name} "), Style::default().fg(s.color))
         })
         .collect();
+    f.render_widget(Paragraph::new(Line::from(legend)), parts[0]);
 
-    let body = if lines.is_empty() {
-        vec![Line::from(Span::styled(
-            "no usage recorded",
-            Style::default().fg(Color::DarkGray),
-        ))]
+    let y_max = series
+        .iter()
+        .flat_map(|s| s.points.iter().map(|&(_, y)| y))
+        .fold(0.0_f64, f64::max)
+        .max(1.0);
+    let y_label = if metric == ccstat::usage::GraphMetric::Cost {
+        fmt_cost(y_max)
     } else {
-        lines
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let v = y_max.round() as u64;
+        fmt_tokens(v)
     };
-    f.render_widget(Paragraph::new(body), inner);
+
+    let today = dash.stats.today_for_rescan();
+    #[allow(clippy::cast_possible_wrap)] // TREND_DAYS is a small constant
+    let offset = ccstat::usage::TREND_DAYS as i64 - 1;
+    let oldest = (today - chrono::Duration::days(offset))
+        .format("%m/%d")
+        .to_string();
+    let newest = today.format("%m/%d").to_string();
+    let last_x = ccstat::usage::TREND_DAYS.saturating_sub(1).max(1) as f64;
+
+    let chart = cctk::chart::braille_multi_line(&series, y_max, y_label).x_axis(
+        Axis::default()
+            .bounds([0.0, last_x])
+            .labels([Line::from(oldest), Line::from(newest)])
+            .style(Style::default().fg(Color::DarkGray)),
+    );
+    f.render_widget(chart, parts[1]);
 }
 
 fn draw_map(f: &mut Frame<'_>, area: Rect, dash: &Dashboard, app: &App) {

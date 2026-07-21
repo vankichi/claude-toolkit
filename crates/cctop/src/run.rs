@@ -157,6 +157,7 @@ fn handle_key(
         Mode::Overview => match app.on_overview_key(code) {
             Action::Quit => return Ok(true),
             Action::EnterDrill(_) => app.enter_drill(),
+            Action::CycleMetric => dash.stats.cycle_graph_metric(),
             Action::None => {}
         },
         Mode::Drill(Panel::Now) => {
