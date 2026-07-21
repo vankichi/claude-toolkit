@@ -85,8 +85,9 @@ impl Slot {
 #[derive(Debug, Default)]
 pub struct NowStats {
     sessions: BTreeMap<usize, Slot>,
-    /// `(event_time, tokens)` across all sessions, oldest first, capped.
-    events: VecDeque<(DateTime<Utc>, u64)>,
+    /// `(event_time, tokens, model)` across all sessions, oldest first, capped.
+    /// The model tag lets the rate chart break tokens/minute out per model.
+    events: VecDeque<(DateTime<Utc>, u64, String)>,
 }
 
 impl NowStats {
@@ -105,7 +106,8 @@ impl NowStats {
         if let (Some(usage), Some(at)) = (line.usage, line.timestamp_utc()) {
             let tokens =
                 usage.input_tokens + usage.output_tokens + usage.cache_creation_input_tokens;
-            self.events.push_back((at, tokens));
+            let model = line.model.clone().unwrap_or_else(|| "?".to_string());
+            self.events.push_back((at, tokens, model));
             if self.events.len() > EVENTS_CAP {
                 let drop = self.events.len() - EVENTS_CAP;
                 self.events.drain(0..drop);
@@ -215,13 +217,10 @@ impl NowStats {
         let per_minute = 60.0 / bucket_secs;
 
         let mut buckets = vec![0u64; bins];
-        for &(ts, tokens) in &self.events {
-            if ts < start || ts > now {
+        for (ts, tokens, _model) in &self.events {
+            let Some(idx) = bucket_index(*ts, start, now, bucket_secs, bins) else {
                 continue;
-            }
-            let secs = (ts - start).num_seconds() as f64;
-            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-            let idx = ((secs / bucket_secs) as usize).min(bins - 1);
+            };
             buckets[idx] += tokens;
         }
         buckets
@@ -230,6 +229,69 @@ impl NowStats {
             .map(|(i, &t)| (i as f64, t as f64 * per_minute))
             .collect()
     }
+
+    /// Per-model real-time tokens/minute over the last `window` seconds, as
+    /// `(model, points)` pairs sorted by windowed total descending. `points`
+    /// are `(bin_index, tokens_per_minute)` spanning `[now - window, now]`.
+    #[must_use]
+    pub fn rate_points_by_model(
+        &self,
+        now: DateTime<Utc>,
+        window: i64,
+        bins: usize,
+    ) -> Vec<(String, Vec<(f64, f64)>)> {
+        if bins == 0 || window <= 0 {
+            return Vec::new();
+        }
+        let start = now - Duration::seconds(window);
+        let bucket_secs = window as f64 / bins as f64;
+        let per_minute = 60.0 / bucket_secs;
+
+        // model -> (per-bin tokens, windowed total)
+        let mut by_model: HashMap<&str, (Vec<u64>, u64)> = HashMap::new();
+        for (ts, tokens, model) in &self.events {
+            let Some(idx) = bucket_index(*ts, start, now, bucket_secs, bins) else {
+                continue;
+            };
+            let entry = by_model
+                .entry(model.as_str())
+                .or_insert_with(|| (vec![0u64; bins], 0));
+            entry.0[idx] += tokens;
+            entry.1 += tokens;
+        }
+
+        let mut models: Vec<(&str, (Vec<u64>, u64))> = by_model.into_iter().collect();
+        models.sort_by(|a, b| b.1.1.cmp(&a.1.1).then_with(|| a.0.cmp(b.0)));
+        models
+            .into_iter()
+            .map(|(model, (buckets, _))| {
+                let pts = buckets
+                    .iter()
+                    .enumerate()
+                    .map(|(i, &t)| (i as f64, t as f64 * per_minute))
+                    .collect();
+                (model.to_string(), pts)
+            })
+            .collect()
+    }
+}
+
+/// The bucket index for `ts` within `[start, now]` split into `bins`, or `None`
+/// if `ts` is outside the window.
+fn bucket_index(
+    ts: DateTime<Utc>,
+    start: DateTime<Utc>,
+    now: DateTime<Utc>,
+    bucket_secs: f64,
+    bins: usize,
+) -> Option<usize> {
+    if ts < start || ts > now {
+        return None;
+    }
+    let secs = (ts - start).num_seconds() as f64;
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let idx = ((secs / bucket_secs) as usize).min(bins - 1);
+    Some(idx)
 }
 
 #[cfg(test)]
@@ -394,6 +456,43 @@ mod tests {
         assert_eq!(pts.len(), 2);
         // Both land in bucket 1 (last 60s): 1200 tokens over 60s = 1200 tok/min.
         assert!((pts[1].1 - 1200.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn rate_points_by_model_groups_and_sorts_by_total() {
+        use chrono::TimeZone;
+        let mut n = NowStats::new();
+        let now = Utc.with_ymd_and_hms(2026, 7, 20, 12, 0, 0).unwrap();
+        n.ingest(
+            0,
+            &assistant_at(
+                "claude-opus-4-8",
+                5000,
+                &(now - Duration::seconds(30)).to_rfc3339(),
+            ),
+        );
+        n.ingest(
+            1,
+            &assistant_at(
+                "claude-sonnet-5",
+                1000,
+                &(now - Duration::seconds(40)).to_rfc3339(),
+            ),
+        );
+        // A second opus session in another slot merges into the "opus" line.
+        n.ingest(
+            2,
+            &assistant_at(
+                "claude-opus-4-8",
+                3000,
+                &(now - Duration::seconds(50)).to_rfc3339(),
+            ),
+        );
+        let series = n.rate_points_by_model(now, 120, 2);
+        assert_eq!(series.len(), 2);
+        // opus (5000 + 3000) sorts before sonnet (1000).
+        assert_eq!(series[0].0, "claude-opus-4-8");
+        assert_eq!(series[1].0, "claude-sonnet-5");
     }
 
     #[test]

@@ -45,8 +45,6 @@ pub enum Action {
     None,
     Quit,
     EnterDrill(Panel),
-    /// Cycle the Top-usage trends graph metric (tokens → cost → messages).
-    CycleMetric,
 }
 
 /// Overview navigation + filter state.
@@ -120,7 +118,6 @@ impl App {
                 self.filtering = true;
                 Action::None
             }
-            KeyCode::Char('m') => Action::CycleMetric,
             KeyCode::Enter | KeyCode::Char('e') => Action::EnterDrill(self.selected),
             _ => Action::None,
         }
@@ -186,12 +183,6 @@ mod tests {
     fn q_quits() {
         let mut app = App::new();
         assert_eq!(app.on_overview_key(KeyCode::Char('q')), Action::Quit);
-    }
-
-    #[test]
-    fn m_cycles_metric() {
-        let mut app = App::new();
-        assert_eq!(app.on_overview_key(KeyCode::Char('m')), Action::CycleMetric);
     }
 
     #[test]
