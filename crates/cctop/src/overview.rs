@@ -223,9 +223,9 @@ fn draw_map(f: &mut Frame<'_>, area: Rect, dash: &Dashboard, app: &App) {
 
 fn draw_recent(f: &mut Frame<'_>, area: Rect, dash: &Dashboard, app: &App) {
     let title = if app.filtering || !app.filter.is_empty() {
-        format!("Recent tools   /{}", app.filter)
+        format!("Tool usage   /{}", app.filter)
     } else {
-        "Recent tools   ( / filter · 1/2/3 select · Enter drill · q quit )".to_string()
+        "Tool usage   ( / filter · 1/2/3 select · Enter drill · q quit )".to_string()
     };
     let block = Block::default()
         .borders(Borders::ALL)
@@ -234,11 +234,15 @@ fn draw_recent(f: &mut Frame<'_>, area: Rect, dash: &Dashboard, app: &App) {
     let inner = block.inner(area);
     f.render_widget(block, area);
 
-    let tools: Vec<String> = dash.now.recent_tools().map(str::to_string).collect();
+    let tools = dash.now.tools_by_count();
     let text = if tools.is_empty() {
         "—".to_string()
     } else {
-        tools.join("  ")
+        tools
+            .iter()
+            .map(|(name, count)| format!("{name} {count}"))
+            .collect::<Vec<_>>()
+            .join("   ")
     };
     f.render_widget(Paragraph::new(Line::from(text)), inner);
 }
@@ -288,8 +292,12 @@ pub fn draw_now_detail(f: &mut Frame<'_>, now: &crate::now::NowStats) {
         )),
         Line::from(Span::styled(
             format!(
-                "recent tools: {}",
-                now.recent_tools().collect::<Vec<_>>().join("  ")
+                "tool usage: {}",
+                now.tools_by_count()
+                    .iter()
+                    .map(|(name, count)| format!("{name} {count}"))
+                    .collect::<Vec<_>>()
+                    .join("   ")
             ),
             Style::default().fg(Color::DarkGray),
         )),
