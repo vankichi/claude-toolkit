@@ -7,7 +7,8 @@
 //! the real-time tokens/minute rate chart aggregate every session at once.
 //! Pure and terminal-free, so it is fully unit-tested by feeding parsed lines.
 
-use cctk::jsonl::{Kind, Line, Usage};
+use ccstat::model::Category;
+use cctk::jsonl::{Extracted, Kind, Line, Usage};
 use cctk::pricing::{ModelInfo, Pricing};
 use chrono::{DateTime, Duration, Utc};
 use std::collections::{BTreeMap, HashMap, VecDeque};
@@ -85,9 +86,11 @@ impl Slot {
 #[derive(Debug, Default)]
 pub struct NowStats {
     sessions: BTreeMap<usize, Slot>,
-    /// `(event_time, tokens, model)` across all sessions, oldest first, capped.
-    /// The model tag lets the rate chart break tokens/minute out per model.
-    events: VecDeque<(DateTime<Utc>, u64, String)>,
+    /// Timestamped usage events across all sessions, oldest first, capped:
+    /// `(time, category, name, weight)`. Weight is tokens for `Model` and 1
+    /// (one invocation) for agents/skills/commands/MCP, so the Top-usage chart
+    /// can plot a real-time rate for any category.
+    events: VecDeque<(DateTime<Utc>, Category, String, u64)>,
 }
 
 impl NowStats {
@@ -99,22 +102,34 @@ impl NowStats {
     /// Fold one parsed line from session `tag` into the rollup. Non-assistant
     /// lines are ignored.
     pub fn ingest(&mut self, tag: usize, line: &Line) {
-        if line.kind != Kind::Assistant {
-            return;
-        }
-
-        if let (Some(usage), Some(at)) = (line.usage, line.timestamp_utc()) {
-            let tokens =
-                usage.input_tokens + usage.output_tokens + usage.cache_creation_input_tokens;
-            let model = line.model.clone().unwrap_or_else(|| "?".to_string());
-            self.events.push_back((at, tokens, model));
+        // Timestamped usage events for every category (assistant lines yield a
+        // model + any skill/agent/mcp invocations; user lines yield commands).
+        if let Some(at) = line.timestamp_utc() {
+            for ex in line.extracted() {
+                let (category, name, weight) = match ex {
+                    Extracted::Model { name, usage } => {
+                        let tokens = usage.input_tokens
+                            + usage.output_tokens
+                            + usage.cache_creation_input_tokens;
+                        (Category::Model, name, tokens)
+                    }
+                    Extracted::Agent { name } => (Category::Agent, name, 1),
+                    Extracted::Skill { name } => (Category::Skill, name, 1),
+                    Extracted::Command { name } => (Category::Command, name, 1),
+                    Extracted::Mcp { server } => (Category::Mcp, server, 1),
+                };
+                self.events.push_back((at, category, name, weight));
+            }
             if self.events.len() > EVENTS_CAP {
                 let drop = self.events.len() - EVENTS_CAP;
                 self.events.drain(0..drop);
             }
         }
 
-        self.sessions.entry(tag).or_default().ingest(line);
+        // Per-session token/cost/context/tool aggregation is assistant-only.
+        if line.kind == Kind::Assistant {
+            self.sessions.entry(tag).or_default().ingest(line);
+        }
     }
 
     /// Forget a session that is no longer active (its totals leave the rollup;
@@ -204,11 +219,18 @@ impl NowStats {
         out
     }
 
-    /// Real-time tokens/minute (summed across sessions) over the last `window`
-    /// seconds, as `bins` `(bin_index, tokens_per_minute)` points spanning
-    /// `[now - window, now]`. Empty bins read as zero.
+    /// Real-time usage/minute for `category` (summed across sessions) over the
+    /// last `window` seconds, as `bins` `(bin_index, per_minute)` points
+    /// spanning `[now - window, now]`. Units are tokens for `Model`, otherwise
+    /// invocations. Empty bins read as zero.
     #[must_use]
-    pub fn rate_points(&self, now: DateTime<Utc>, window: i64, bins: usize) -> Vec<(f64, f64)> {
+    pub fn rate_points_total(
+        &self,
+        category: Category,
+        now: DateTime<Utc>,
+        window: i64,
+        bins: usize,
+    ) -> Vec<(f64, f64)> {
         if bins == 0 || window <= 0 {
             return Vec::new();
         }
@@ -217,11 +239,13 @@ impl NowStats {
         let per_minute = 60.0 / bucket_secs;
 
         let mut buckets = vec![0u64; bins];
-        for (ts, tokens, _model) in &self.events {
-            let Some(idx) = bucket_index(*ts, start, now, bucket_secs, bins) else {
+        for (ts, cat, _name, weight) in &self.events {
+            if *cat != category {
                 continue;
-            };
-            buckets[idx] += tokens;
+            }
+            if let Some(idx) = bucket_index(*ts, start, now, bucket_secs, bins) {
+                buckets[idx] += weight;
+            }
         }
         buckets
             .iter()
@@ -230,12 +254,12 @@ impl NowStats {
             .collect()
     }
 
-    /// Per-model real-time tokens/minute over the last `window` seconds, as
-    /// `(model, points)` pairs sorted by windowed total descending. `points`
-    /// are `(bin_index, tokens_per_minute)` spanning `[now - window, now]`.
+    /// Per-name real-time usage/minute within `category` over the last `window`
+    /// seconds, as `(name, points)` sorted by windowed total descending.
     #[must_use]
-    pub fn rate_points_by_model(
+    pub fn rate_points_by_name(
         &self,
+        category: Category,
         now: DateTime<Utc>,
         window: i64,
         bins: usize,
@@ -247,30 +271,33 @@ impl NowStats {
         let bucket_secs = window as f64 / bins as f64;
         let per_minute = 60.0 / bucket_secs;
 
-        // model -> (per-bin tokens, windowed total)
-        let mut by_model: HashMap<&str, (Vec<u64>, u64)> = HashMap::new();
-        for (ts, tokens, model) in &self.events {
+        // name -> (per-bin weight, windowed total)
+        let mut by_name: HashMap<&str, (Vec<u64>, u64)> = HashMap::new();
+        for (ts, cat, name, weight) in &self.events {
+            if *cat != category {
+                continue;
+            }
             let Some(idx) = bucket_index(*ts, start, now, bucket_secs, bins) else {
                 continue;
             };
-            let entry = by_model
-                .entry(model.as_str())
+            let entry = by_name
+                .entry(name.as_str())
                 .or_insert_with(|| (vec![0u64; bins], 0));
-            entry.0[idx] += tokens;
-            entry.1 += tokens;
+            entry.0[idx] += weight;
+            entry.1 += weight;
         }
 
-        let mut models: Vec<(&str, (Vec<u64>, u64))> = by_model.into_iter().collect();
-        models.sort_by(|a, b| b.1.1.cmp(&a.1.1).then_with(|| a.0.cmp(b.0)));
-        models
+        let mut names: Vec<(&str, (Vec<u64>, u64))> = by_name.into_iter().collect();
+        names.sort_by(|a, b| b.1.1.cmp(&a.1.1).then_with(|| a.0.cmp(b.0)));
+        names
             .into_iter()
-            .map(|(model, (buckets, _))| {
+            .map(|(name, (buckets, _))| {
                 let pts = buckets
                     .iter()
                     .enumerate()
                     .map(|(i, &t)| (i as f64, t as f64 * per_minute))
                     .collect();
-                (model.to_string(), pts)
+                (name.to_string(), pts)
             })
             .collect()
     }
@@ -452,14 +479,14 @@ mod tests {
             1,
             &assistant_at("sonnet", 600, &(now - Duration::seconds(20)).to_rfc3339()),
         );
-        let pts = n.rate_points(now, 120, 2);
+        let pts = n.rate_points_total(Category::Model, now, 120, 2);
         assert_eq!(pts.len(), 2);
         // Both land in bucket 1 (last 60s): 1200 tokens over 60s = 1200 tok/min.
         assert!((pts[1].1 - 1200.0).abs() < 1e-6);
     }
 
     #[test]
-    fn rate_points_by_model_groups_and_sorts_by_total() {
+    fn rate_points_by_name_groups_and_sorts_by_total() {
         use chrono::TimeZone;
         let mut n = NowStats::new();
         let now = Utc.with_ymd_and_hms(2026, 7, 20, 12, 0, 0).unwrap();
@@ -488,11 +515,44 @@ mod tests {
                 &(now - Duration::seconds(50)).to_rfc3339(),
             ),
         );
-        let series = n.rate_points_by_model(now, 120, 2);
+        let series = n.rate_points_by_name(Category::Model, now, 120, 2);
         assert_eq!(series.len(), 2);
         // opus (5000 + 3000) sorts before sonnet (1000).
         assert_eq!(series[0].0, "claude-opus-4-8");
         assert_eq!(series[1].0, "claude-sonnet-5");
+    }
+
+    #[test]
+    fn rate_points_track_agent_and_command_invocations() {
+        use chrono::TimeZone;
+        use serde_json::json;
+        let now = Utc.with_ymd_and_hms(2026, 7, 20, 12, 0, 0).unwrap();
+        let ts = (now - Duration::seconds(30)).to_rfc3339();
+        let mut n = NowStats::new();
+        // An assistant line invoking an Agent, and a user line with a command.
+        let agent_line = json!({
+            "type": "assistant",
+            "timestamp": ts,
+            "message": {"model": "opus", "content": [
+                {"type": "tool_use", "name": "Agent", "input": {"subagent_type": "code-reviewer"}}
+            ], "usage": {"input_tokens": 10, "output_tokens": 5}},
+        });
+        let cmd_line = json!({
+            "type": "user",
+            "timestamp": ts,
+            "message": {"content": "<command-name>/review</command-name>"},
+        });
+        n.ingest(0, &Line::parse(&agent_line.to_string()).unwrap());
+        n.ingest(0, &Line::parse(&cmd_line.to_string()).unwrap());
+
+        // Agent invocation shows up under the Agent category (1 call).
+        let agents = n.rate_points_by_name(Category::Agent, now, 120, 2);
+        assert_eq!(agents.len(), 1);
+        assert_eq!(agents[0].0, "code-reviewer");
+        // Command from the user line is tracked too.
+        let cmds = n.rate_points_by_name(Category::Command, now, 120, 2);
+        assert_eq!(cmds.len(), 1);
+        assert_eq!(cmds[0].0, "/review");
     }
 
     #[test]
@@ -508,7 +568,7 @@ mod tests {
                 &(now - Duration::seconds(3600)).to_rfc3339(),
             ),
         );
-        let pts = n.rate_points(now, 900, 15);
+        let pts = n.rate_points_total(Category::Model, now, 900, 15);
         assert!(pts.iter().all(|&(_, y)| y.abs() < f64::EPSILON));
     }
 }

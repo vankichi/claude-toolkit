@@ -5,6 +5,7 @@
 //! maps a keypress to an [`Action`] the run loop executes (the live store and
 //! terminal live in the run loop, not here), so all of this is unit-testable.
 
+use ccstat::model::Category;
 use crossterm::event::KeyCode;
 
 /// The three overview panels.
@@ -54,6 +55,8 @@ pub struct App {
     pub selected: Panel,
     pub filter: String,
     pub filtering: bool,
+    /// Which category the Top-usage chart breaks down (cycled with `c`).
+    pub usage_category: Category,
 }
 
 impl Default for App {
@@ -63,6 +66,7 @@ impl Default for App {
             selected: Panel::Now,
             filter: String::new(),
             filtering: false,
+            usage_category: Category::Model,
         }
     }
 }
@@ -116,6 +120,10 @@ impl App {
             }
             KeyCode::Char('/') => {
                 self.filtering = true;
+                Action::None
+            }
+            KeyCode::Char('c') => {
+                self.usage_category = self.usage_category.next_tab();
                 Action::None
             }
             KeyCode::Enter | KeyCode::Char('e') => Action::EnterDrill(self.selected),
@@ -183,6 +191,14 @@ mod tests {
     fn q_quits() {
         let mut app = App::new();
         assert_eq!(app.on_overview_key(KeyCode::Char('q')), Action::Quit);
+    }
+
+    #[test]
+    fn c_cycles_usage_category() {
+        let mut app = App::new();
+        assert_eq!(app.usage_category, Category::Model);
+        app.on_overview_key(KeyCode::Char('c'));
+        assert_eq!(app.usage_category, Category::Agent);
     }
 
     #[test]
