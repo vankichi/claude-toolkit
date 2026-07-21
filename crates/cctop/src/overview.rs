@@ -98,19 +98,24 @@ fn draw_now(f: &mut Frame<'_>, area: Rect, dash: &Dashboard, app: &App) {
     let ctx_line = Line::from(format!("ctx {ctx_bar} {pct:.0}%"));
     f.render_widget(Paragraph::new(vec![head, ctx_line]), header);
 
-    let points = now.rate_points(chrono::Utc::now(), RATE_WINDOW_SECS, RATE_BINS);
+    let points = now.rate_points_total(
+        ccstat::model::Category::Model,
+        chrono::Utc::now(),
+        RATE_WINDOW_SECS,
+        RATE_BINS,
+    );
     draw_rate_chart(f, chart_area, &points);
 }
 
 /// Wall-clock window (seconds) shared by the Now rate chart and the Top-usage
-/// per-model chart, so their timelines line up.
+/// per-category chart, so their timelines line up.
 const RATE_WINDOW_SECS: i64 = 1800;
 /// Time buckets across the rate window (finer = smoother line).
 const RATE_BINS: usize = 30;
 /// Left x-axis label for the rate window.
 const RATE_LEFT_LABEL: &str = "-30m";
-/// How many model lines the Top-usage chart overlays.
-const TOP_USAGE_MODELS: usize = 5;
+/// How many series the Top-usage chart overlays.
+const TOP_USAGE_SERIES: usize = 5;
 
 /// A bottom-style braille line chart of the real-time tokens/minute rate.
 /// `points` are `(bin, tokens_per_minute)` spanning `[now - window, now]`.
@@ -147,19 +152,23 @@ fn draw_rate_chart(f: &mut Frame<'_>, area: Rect, points: &[(f64, f64)]) {
 }
 
 fn draw_usage(f: &mut Frame<'_>, area: Rect, dash: &Dashboard, app: &App) {
-    let block = panel_block("Top usage  [2] · tok/min", Panel::Stats, app);
+    let category = app.usage_category;
+    let is_model = category == ccstat::model::Category::Model;
+    let unit = if is_model { "tok/min" } else { "calls/min" };
+    let title = format!("Top usage  [2] · {} · {unit} (c)", category.title());
+    let block = panel_block(&title, Panel::Stats, app);
     let inner = block.inner(area);
     f.render_widget(block, area);
 
-    // Per-model tokens/minute over the SAME real-time window as the Now chart,
-    // so the two timelines line up. Colored to match ccstat's model coloring.
-    let by_model = dash
-        .now
-        .rate_points_by_model(chrono::Utc::now(), RATE_WINDOW_SECS, RATE_BINS);
-    if by_model.is_empty() || inner.height < 2 {
+    // Per-name usage/minute for the selected category over the SAME real-time
+    // window as the Now chart, so the two timelines line up.
+    let by_name =
+        dash.now
+            .rate_points_by_name(category, chrono::Utc::now(), RATE_WINDOW_SECS, RATE_BINS);
+    if by_name.is_empty() || inner.height < 2 {
         f.render_widget(
             Paragraph::new(Span::styled(
-                "no active token usage",
+                format!("no active {} usage", category.title().to_lowercase()),
                 Style::default().fg(Color::DarkGray),
             )),
             inner,
@@ -167,14 +176,14 @@ fn draw_usage(f: &mut Frame<'_>, area: Rect, dash: &Dashboard, app: &App) {
         return;
     }
 
-    let names: Vec<&str> = by_model.iter().map(|(m, _)| m.as_str()).collect();
-    let series: Vec<cctk::chart::LineSeries> = by_model
+    let names: Vec<&str> = by_name.iter().map(|(n, _)| n.as_str()).collect();
+    let series: Vec<cctk::chart::LineSeries> = by_name
         .iter()
-        .take(TOP_USAGE_MODELS)
-        .map(|(model, points)| cctk::chart::LineSeries {
+        .take(TOP_USAGE_SERIES)
+        .map(|(name, points)| cctk::chart::LineSeries {
             points: points.clone(),
-            label: model.clone(),
-            color: ccstat::ui::color_for_name(&names, model),
+            label: name.clone(),
+            color: ccstat::ui::color_for_name(&names, name),
         })
         .collect();
 
@@ -194,7 +203,11 @@ fn draw_usage(f: &mut Frame<'_>, area: Rect, dash: &Dashboard, app: &App) {
         .fold(0.0_f64, f64::max)
         .max(1.0);
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    let y_label = format!("{}/m", fmt_tokens(y_max.round() as u64));
+    let y_label = if is_model {
+        format!("{}/m", fmt_tokens(y_max.round() as u64))
+    } else {
+        format!("{y_max:.0}/m")
+    };
     let last_x = (RATE_BINS.saturating_sub(1)).max(1) as f64;
 
     let chart = cctk::chart::braille_multi_line(&series, y_max, y_label).x_axis(
@@ -279,7 +292,7 @@ fn draw_recent(f: &mut Frame<'_>, area: Rect, dash: &Dashboard, app: &App) {
     let title = if app.filtering || !app.filter.is_empty() {
         format!("Tool usage   /{}", app.filter)
     } else {
-        "Tool usage   ( / filter · 1/2/3 select · Enter drill · q quit )".to_string()
+        "Tool usage   ( 1/2/3 select · Enter drill · c usage-cat · / filter · q quit )".to_string()
     };
     let block = Block::default()
         .borders(Borders::ALL)
@@ -357,7 +370,12 @@ pub fn draw_now_detail(f: &mut Frame<'_>, now: &crate::now::NowStats) {
         )),
     ];
     f.render_widget(Paragraph::new(lines), text_area);
-    let points = now.rate_points(chrono::Utc::now(), RATE_WINDOW_SECS, RATE_BINS);
+    let points = now.rate_points_total(
+        ccstat::model::Category::Model,
+        chrono::Utc::now(),
+        RATE_WINDOW_SECS,
+        RATE_BINS,
+    );
     draw_rate_chart(f, chart_area, &points);
 }
 
