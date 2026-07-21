@@ -98,17 +98,26 @@ fn draw_now(f: &mut Frame<'_>, area: Rect, dash: &Dashboard, app: &App) {
     let ctx_line = Line::from(format!("ctx {ctx_bar} {pct:.0}%"));
     f.render_widget(Paragraph::new(vec![head, ctx_line]), header);
 
-    draw_rate_chart(f, chart_area, now.rate_series());
+    let points = now.rate_points(chrono::Utc::now(), RATE_WINDOW_SECS, RATE_BINS);
+    draw_rate_chart(f, chart_area, &points);
 }
 
-/// A bottom-style braille line chart of the token-rate series into `area`.
-/// Falls back to a hint until at least two samples exist (a line needs two
-/// points).
-fn draw_rate_chart(f: &mut Frame<'_>, area: Rect, series: &[f64]) {
+/// Wall-clock window (seconds) the Now rate chart covers.
+const RATE_WINDOW_SECS: i64 = 900;
+/// Time buckets across the rate window (finer = smoother line).
+const RATE_BINS: usize = 30;
+/// Left x-axis label for the rate window.
+const RATE_LEFT_LABEL: &str = "-15m";
+
+/// A bottom-style braille line chart of the real-time tokens/minute rate.
+/// `points` are `(bin, tokens_per_minute)` spanning `[now - window, now]`.
+/// Falls back to a hint while the window holds no activity.
+fn draw_rate_chart(f: &mut Frame<'_>, area: Rect, points: &[(f64, f64)]) {
     if area.height == 0 || area.width == 0 {
         return;
     }
-    if series.len() < 2 {
+    let peak = points.iter().map(|&(_, y)| y).fold(0.0_f64, f64::max);
+    if points.len() < 2 || peak <= 0.0 {
         f.render_widget(
             Paragraph::new(Line::from(Span::styled(
                 "token rate — waiting for activity…",
@@ -119,19 +128,18 @@ fn draw_rate_chart(f: &mut Frame<'_>, area: Rect, series: &[f64]) {
         return;
     }
 
-    let points: Vec<(f64, f64)> = series
-        .iter()
-        .enumerate()
-        .map(|(i, &v)| (i as f64, v))
-        .collect();
-    let peak = series.iter().copied().fold(0.0_f64, f64::max).max(1.0);
-
-    // `peak` is derived from u64 token counts (non-negative, small), so the
+    // `peak` is tokens/minute (from non-negative token counts), so the
     // round-trip cast for the axis label cannot truncate or lose a sign.
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    let peak_label = fmt_tokens(peak.round() as u64);
+    let peak_label = format!("{}/m", fmt_tokens(peak.round() as u64));
+    let last_x = points.last().map_or(1.0, |&(x, _)| x).max(1.0);
 
-    let chart = cctk::chart::braille_line(&points, peak, peak_label, Color::Cyan);
+    let chart = cctk::chart::braille_line(points, peak, peak_label, Color::Cyan).x_axis(
+        Axis::default()
+            .bounds([0.0, last_x])
+            .labels([Line::from(RATE_LEFT_LABEL), Line::from("now")])
+            .style(Style::default().fg(Color::DarkGray)),
+    );
     f.render_widget(chart, area);
 }
 
@@ -286,7 +294,8 @@ pub fn draw_now_detail(f: &mut Frame<'_>, now: &crate::now::NowStats) {
         )),
     ];
     f.render_widget(Paragraph::new(lines), text_area);
-    draw_rate_chart(f, chart_area, now.rate_series());
+    let points = now.rate_points(chrono::Utc::now(), RATE_WINDOW_SECS, RATE_BINS);
+    draw_rate_chart(f, chart_area, &points);
 }
 
 #[cfg(test)]
@@ -295,10 +304,10 @@ mod tests {
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
 
-    fn render_to_string(w: u16, h: u16, series: &[f64]) -> String {
+    fn render_to_string(w: u16, h: u16, points: &[(f64, f64)]) -> String {
         let mut terminal = Terminal::new(TestBackend::new(w, h)).unwrap();
         terminal
-            .draw(|f| draw_rate_chart(f, f.area(), series))
+            .draw(|f| draw_rate_chart(f, f.area(), points))
             .unwrap();
         let buf = terminal.backend().buffer().clone();
         let mut out = String::new();
@@ -313,10 +322,10 @@ mod tests {
 
     #[test]
     fn rate_chart_renders_braille_line() {
-        let series: Vec<f64> = (0..24)
-            .map(|i| ((f64::from(i) * 0.5).sin() + 1.0) * 1000.0)
+        let points: Vec<(f64, f64)> = (0..24)
+            .map(|i| (f64::from(i), ((f64::from(i) * 0.5).sin() + 1.0) * 1000.0))
             .collect();
-        let out = render_to_string(48, 6, &series);
+        let out = render_to_string(48, 6, &points);
         assert!(
             out.chars()
                 .any(|ch| ('\u{2800}'..='\u{28FF}').contains(&ch)),
@@ -325,8 +334,10 @@ mod tests {
     }
 
     #[test]
-    fn rate_chart_hint_when_too_few_samples() {
-        let out = render_to_string(48, 4, &[5.0]);
+    fn rate_chart_hint_when_idle() {
+        // All-zero rate (no activity) shows the waiting hint.
+        let points = [(0.0, 0.0), (1.0, 0.0), (2.0, 0.0)];
+        let out = render_to_string(48, 4, &points);
         assert!(out.contains("waiting"));
     }
 

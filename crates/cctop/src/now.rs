@@ -1,18 +1,20 @@
 //! Live aggregation for the "Now" panel — the active session's running totals.
 //!
 //! Self-contained (does not re-enter ccwatch): folds `cctk::jsonl::Line`s into
-//! token totals, cost, context fill, a recent-tool ring, and a token-rate
-//! series for the sparkline. Pure and terminal-free, so it is fully unit-
-//! tested by feeding it parsed lines.
+//! token totals, cost, context fill, a recent-tool ring, and a timestamped
+//! event log used to derive a real-time tokens/minute rate chart. Pure and
+//! terminal-free, so it is fully unit-tested by feeding it parsed lines.
 
 use cctk::jsonl::{Kind, Line, Usage};
 use cctk::pricing::{ModelInfo, Pricing};
+use chrono::{DateTime, Duration, Utc};
 use std::collections::VecDeque;
 
 /// How many recent tool names the bottom band keeps (newest first).
 const RECENT_TOOLS_CAP: usize = 32;
-/// How many per-message token samples the rate sparkline keeps.
-const RATE_SERIES_CAP: usize = 120;
+/// Upper bound on retained timestamped events (memory guard; older ones fall
+/// outside every rate window anyway).
+const EVENTS_CAP: usize = 4096;
 
 /// Running aggregate for the active session.
 #[derive(Debug)]
@@ -26,8 +28,9 @@ pub struct NowStats {
     assistant_messages: u64,
     /// Newest tool name at the front.
     recent_tools: VecDeque<String>,
-    /// Per-assistant-message total tokens, oldest first, capped.
-    rate_series: Vec<f64>,
+    /// `(event_time, tokens)` per assistant message that carried a timestamp,
+    /// oldest first, capped. Feeds the real-time rate chart.
+    events: VecDeque<(DateTime<Utc>, u64)>,
 }
 
 impl Default for NowStats {
@@ -42,7 +45,7 @@ impl Default for NowStats {
             last_context_size: 0,
             assistant_messages: 0,
             recent_tools: VecDeque::new(),
-            rate_series: Vec::new(),
+            events: VecDeque::new(),
         }
     }
 }
@@ -81,11 +84,15 @@ impl NowStats {
         self.cost_usd += self.pricing.cost_usd(&usage);
         self.assistant_messages += 1;
 
-        let tokens = usage.input_tokens + usage.output_tokens + usage.cache_creation_input_tokens;
-        self.rate_series.push(tokens as f64);
-        if self.rate_series.len() > RATE_SERIES_CAP {
-            let drop = self.rate_series.len() - RATE_SERIES_CAP;
-            self.rate_series.drain(0..drop);
+        // Only timestamped messages contribute to the wall-clock rate chart.
+        if let Some(at) = line.timestamp_utc() {
+            let tokens =
+                usage.input_tokens + usage.output_tokens + usage.cache_creation_input_tokens;
+            self.events.push_back((at, tokens));
+            if self.events.len() > EVENTS_CAP {
+                let drop = self.events.len() - EVENTS_CAP;
+                self.events.drain(0..drop);
+            }
         }
     }
 
@@ -134,9 +141,33 @@ impl NowStats {
         self.recent_tools.iter().map(String::as_str)
     }
 
+    /// Real-time tokens/minute over the last `window` seconds, as `bins`
+    /// `(bin_index, tokens_per_minute)` points spanning `[now - window, now]`.
+    /// Empty bins read as zero so the line covers the whole time axis.
     #[must_use]
-    pub fn rate_series(&self) -> &[f64] {
-        &self.rate_series
+    pub fn rate_points(&self, now: DateTime<Utc>, window: i64, bins: usize) -> Vec<(f64, f64)> {
+        if bins == 0 || window <= 0 {
+            return Vec::new();
+        }
+        let start = now - Duration::seconds(window);
+        let bucket_secs = window as f64 / bins as f64;
+        let per_minute = 60.0 / bucket_secs;
+
+        let mut buckets = vec![0u64; bins];
+        for &(ts, tokens) in &self.events {
+            if ts < start || ts > now {
+                continue;
+            }
+            let secs = (ts - start).num_seconds() as f64;
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            let idx = ((secs / bucket_secs) as usize).min(bins - 1);
+            buckets[idx] += tokens;
+        }
+        buckets
+            .iter()
+            .enumerate()
+            .map(|(i, &t)| (i as f64, t as f64 * per_minute))
+            .collect()
     }
 }
 
@@ -161,6 +192,24 @@ mod tests {
                     "output_tokens": o,
                     "cache_creation_input_tokens": cw,
                     "cache_read_input_tokens": cr,
+                },
+            },
+        });
+        Line::parse(&obj.to_string()).unwrap()
+    }
+
+    fn assistant_at(model: &str, tokens: u64, ts: &str) -> Line {
+        let obj = json!({
+            "type": "assistant",
+            "timestamp": ts,
+            "message": {
+                "model": model,
+                "content": [],
+                "usage": {
+                    "input_tokens": tokens,
+                    "output_tokens": 0,
+                    "cache_creation_input_tokens": 0,
+                    "cache_read_input_tokens": 0,
                 },
             },
         });
@@ -216,12 +265,41 @@ mod tests {
     }
 
     #[test]
-    fn rate_series_grows_per_message() {
+    fn rate_points_bin_tokens_per_minute_over_window() {
+        use chrono::TimeZone;
         let mut n = NowStats::new();
-        n.ingest(&assistant("sonnet", &[], (10, 20, 0, 0)));
-        n.ingest(&assistant("sonnet", &[], (5, 5, 0, 0)));
-        assert_eq!(n.rate_series().len(), 2);
-        assert!((n.rate_series()[0] - 30.0).abs() < f64::EPSILON);
+        let now = Utc.with_ymd_and_hms(2026, 7, 20, 12, 0, 0).unwrap();
+        // Two 600-token messages, one in each 60s bucket of a 120s window.
+        n.ingest(&assistant_at(
+            "sonnet",
+            600,
+            &(now - Duration::seconds(90)).to_rfc3339(),
+        ));
+        n.ingest(&assistant_at(
+            "sonnet",
+            600,
+            &(now - Duration::seconds(30)).to_rfc3339(),
+        ));
+        let pts = n.rate_points(now, 120, 2);
+        assert_eq!(pts.len(), 2);
+        // 60s buckets → per-minute factor 1.0 → 600 tok/min in each.
+        assert!((pts[0].1 - 600.0).abs() < 1e-6);
+        assert!((pts[1].1 - 600.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn rate_points_excludes_events_outside_window() {
+        use chrono::TimeZone;
+        let mut n = NowStats::new();
+        let now = Utc.with_ymd_and_hms(2026, 7, 20, 12, 0, 0).unwrap();
+        // An event an hour ago is outside a 15-minute window.
+        n.ingest(&assistant_at(
+            "sonnet",
+            1000,
+            &(now - Duration::seconds(3600)).to_rfc3339(),
+        ));
+        let pts = n.rate_points(now, 900, 15);
+        assert!(pts.iter().all(|&(_, y)| y.abs() < f64::EPSILON));
     }
 
     #[test]
