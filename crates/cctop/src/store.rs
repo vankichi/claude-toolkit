@@ -9,9 +9,27 @@
 use crate::now::NowStats;
 use ccmap::discover::{self, Context};
 use ccmap::model::{Item, Kind};
+use ccstat::live::ActiveSet;
 use ccstat::provenance::ProvenanceMap;
 use ccstat::scan::{self, ScanConfig};
-use chrono::NaiveDate;
+use chrono::{Duration, NaiveDate, Utc};
+
+/// How recently a skill/agent must have run to count as "running now" in the
+/// config map.
+const ACTIVE_WINDOW_SECS: i64 = 120;
+/// Tail size read per active session when detecting running items.
+const ACTIVE_TAIL_BYTES: u64 = 16 * 1024;
+
+/// The set of `(category, name)` pairs running now, from the active session
+/// tails.
+fn running_now(scan_cfg: &ScanConfig) -> ActiveSet {
+    scan::compute_active(
+        scan_cfg,
+        Utc::now(),
+        Duration::seconds(ACTIVE_WINDOW_SECS),
+        ACTIVE_TAIL_BYTES,
+    )
+}
 
 /// Per-kind counts for the Config-map panel.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -46,6 +64,8 @@ pub struct Dashboard {
     pub stats: ccstat::ui::AppState,
     pub map: ccmap::ui::AppState,
     pub map_counts: MapCounts,
+    /// Skills/agents/etc. running right now (config-map live highlight).
+    pub active: ActiveSet,
 }
 
 impl Dashboard {
@@ -66,6 +86,7 @@ impl Dashboard {
             stats,
             map,
             map_counts,
+            active: running_now(scan_cfg),
         }
     }
 
@@ -79,6 +100,8 @@ impl Dashboard {
         let items = discover::discover_all(ctx).items;
         self.map_counts = MapCounts::from_items(&items);
         self.map.reload(items);
+
+        self.active = running_now(scan_cfg);
     }
 }
 
