@@ -207,20 +207,72 @@ fn draw_usage(f: &mut Frame<'_>, area: Rect, dash: &Dashboard, app: &App) {
 }
 
 fn draw_map(f: &mut Frame<'_>, area: Rect, dash: &Dashboard, app: &App) {
+    use ccstat::model::Category;
+
     let block = panel_block("Config map  [3]", Panel::Map, app);
     let inner = block.inner(area);
     f.render_widget(block, area);
 
     let c = &dash.map_counts;
     let row = |label: &str, n: usize| Line::from(format!("{label:<10} {n:>4}"));
-    let lines = vec![
+    let mut lines = vec![
         row("agents", c.agents),
         row("skills", c.skills),
         row("commands", c.commands),
         row("plugins", c.plugins),
         row("mcp", c.mcp),
+        Line::from(""),
     ];
+
+    // Skills/agents/commands/MCP running right now (Model excluded — not a
+    // config-map kind). Green, one per line, capped to what fits.
+    let running: Vec<(&str, &str)> = dash
+        .active
+        .iter()
+        .filter(|(cat, _)| *cat != Category::Model)
+        .map(|(cat, name)| (kind_tag(*cat), name.as_str()))
+        .collect();
+
+    if running.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "running now: idle",
+            Style::default().fg(Color::DarkGray),
+        )));
+    } else {
+        lines.push(Line::from(Span::styled(
+            format!("running now ({})", running.len()),
+            Style::default()
+                .fg(Color::Green)
+                .add_modifier(Modifier::BOLD),
+        )));
+        let cap = usize::from(inner.height).saturating_sub(lines.len()).max(1);
+        for (tag, name) in running.iter().take(cap) {
+            lines.push(Line::from(Span::styled(
+                format!("● {name} {tag}"),
+                Style::default().fg(Color::Green),
+            )));
+        }
+        if running.len() > cap {
+            lines.push(Line::from(Span::styled(
+                format!("  +{} more", running.len() - cap),
+                Style::default().fg(Color::DarkGray),
+            )));
+        }
+    }
+
     f.render_widget(Paragraph::new(lines), inner);
+}
+
+/// Short category tag shown beside a running item.
+fn kind_tag(cat: ccstat::model::Category) -> &'static str {
+    use ccstat::model::Category;
+    match cat {
+        Category::Model => "model",
+        Category::Agent => "agent",
+        Category::Skill => "skill",
+        Category::Command => "cmd",
+        Category::Mcp => "mcp",
+    }
 }
 
 fn draw_recent(f: &mut Frame<'_>, area: Rect, dash: &Dashboard, app: &App) {
