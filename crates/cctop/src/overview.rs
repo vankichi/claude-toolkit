@@ -1,7 +1,7 @@
 //! Overview rendering: top "Now" band, a Top-usage / Config-map two-column
-//! middle, and a Recent-tools bottom band. Magnitudes and the token-rate trend
-//! render as braille dots via `cctk::viz`. The selected panel gets a
-//! highlighted border.
+//! middle, and a Recent-tools bottom band. Usage magnitudes render as braille
+//! dot bars (`cctk::viz`); the token-rate trend is a bottom-style braille line
+//! chart (ratatui `Chart`). The selected panel gets a highlighted border.
 //!
 //! The `draw*` functions are ratatui glue (not unit-tested); the numeric
 //! formatting helpers are pure and covered by tests.
@@ -13,11 +13,8 @@ use ratatui::{
     layout::{Constraint, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph},
+    widgets::{Axis, Block, Borders, Paragraph},
 };
-
-/// How many usage rows the compact Top-usage panel shows.
-const TOP_USAGE_ROWS: usize = 8;
 
 /// Human-readable token count: `1.2M`, `900k`, or the bare number.
 #[must_use]
@@ -56,7 +53,7 @@ fn panel_block(title: &str, panel: Panel, app: &App) -> Block<'static> {
 pub fn draw(f: &mut Frame<'_>, dash: &Dashboard, app: &App) {
     let area = f.area();
     let rows = Layout::vertical([
-        Constraint::Length(5),
+        Constraint::Length(8),
         Constraint::Min(3),
         Constraint::Length(3),
     ])
@@ -77,11 +74,13 @@ fn draw_now(f: &mut Frame<'_>, area: Rect, dash: &Dashboard, app: &App) {
     let inner = block.inner(area);
     f.render_widget(block, area);
 
-    let ctx_w = usize::from(inner.width.saturating_sub(28)).clamp(6, 40);
-    let ctx_bar = cctk::viz::dot_bar(now.context_pct(), ctx_w);
-    let rate_w = usize::from(inner.width.saturating_sub(8)).clamp(6, 60);
-    let rate = cctk::viz::sparkline(now.rate_series(), rate_w);
+    // Two header rows (model/tokens/cost + context gauge) then the rate chart.
+    let parts = Layout::vertical([Constraint::Length(2), Constraint::Min(0)]).split(inner);
+    let header = parts[0];
+    let chart_area = parts[1];
 
+    let ctx_w = usize::from(header.width.saturating_sub(28)).clamp(6, 40);
+    let ctx_bar = cctk::viz::dot_bar(now.context_pct(), ctx_w);
     let pct = now.context_pct() * 100.0;
     let head = Line::from(vec![
         Span::styled(
@@ -97,49 +96,112 @@ fn draw_now(f: &mut Frame<'_>, area: Rect, dash: &Dashboard, app: &App) {
         )),
     ]);
     let ctx_line = Line::from(format!("ctx {ctx_bar} {pct:.0}%"));
-    let rate_line = Line::from(format!("rate {rate}"));
+    f.render_widget(Paragraph::new(vec![head, ctx_line]), header);
 
-    f.render_widget(Paragraph::new(vec![head, ctx_line, rate_line]), inner);
+    let points = now.rate_points(chrono::Utc::now(), RATE_WINDOW_SECS, RATE_BINS);
+    draw_rate_chart(f, chart_area, &points);
+}
+
+/// Wall-clock window (seconds) the Now rate chart covers.
+const RATE_WINDOW_SECS: i64 = 900;
+/// Time buckets across the rate window (finer = smoother line).
+const RATE_BINS: usize = 30;
+/// Left x-axis label for the rate window.
+const RATE_LEFT_LABEL: &str = "-15m";
+
+/// A bottom-style braille line chart of the real-time tokens/minute rate.
+/// `points` are `(bin, tokens_per_minute)` spanning `[now - window, now]`.
+/// Falls back to a hint while the window holds no activity.
+fn draw_rate_chart(f: &mut Frame<'_>, area: Rect, points: &[(f64, f64)]) {
+    if area.height == 0 || area.width == 0 {
+        return;
+    }
+    let peak = points.iter().map(|&(_, y)| y).fold(0.0_f64, f64::max);
+    if points.len() < 2 || peak <= 0.0 {
+        f.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                "token rate — waiting for activity…",
+                Style::default().fg(Color::DarkGray),
+            ))),
+            area,
+        );
+        return;
+    }
+
+    // `peak` is tokens/minute (from non-negative token counts), so the
+    // round-trip cast for the axis label cannot truncate or lose a sign.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let peak_label = format!("{}/m", fmt_tokens(peak.round() as u64));
+    let last_x = points.last().map_or(1.0, |&(x, _)| x).max(1.0);
+
+    let chart = cctk::chart::braille_line(points, peak, peak_label, Color::Cyan).x_axis(
+        Axis::default()
+            .bounds([0.0, last_x])
+            .labels([Line::from(RATE_LEFT_LABEL), Line::from("now")])
+            .style(Style::default().fg(Color::DarkGray)),
+    );
+    f.render_widget(chart, area);
 }
 
 fn draw_usage(f: &mut Frame<'_>, area: Rect, dash: &Dashboard, app: &App) {
-    let block = panel_block("Top usage  [2]", Panel::Stats, app);
+    let metric = dash.stats.graph_metric;
+    let title = format!("Top usage  [2] · {} (m)", metric.label());
+    let block = panel_block(&title, Panel::Stats, app);
     let inner = block.inner(area);
     f.render_widget(block, area);
 
-    let rows = dash.stats.rows();
-    let max_cost = rows
-        .iter()
-        .map(|r| r.cost_usd)
-        .fold(0.0_f64, f64::max)
-        .max(f64::EPSILON);
-    let name_w = 16usize;
-    let bar_w = usize::from(inner.width)
-        .saturating_sub(name_w + 10)
-        .clamp(4, 24);
+    // Overlaid per-series trend graph (shared with ccstat), colored by family.
+    let series = ccstat::ui::trends_series(&dash.stats);
+    if series.is_empty() || inner.height < 2 {
+        f.render_widget(
+            Paragraph::new(Span::styled(
+                "no usage recorded",
+                Style::default().fg(Color::DarkGray),
+            )),
+            inner,
+        );
+        return;
+    }
 
-    let lines: Vec<Line> = rows
+    let parts = Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).split(inner);
+    let legend: Vec<Span> = series
         .iter()
-        .take(TOP_USAGE_ROWS)
-        .map(|r| {
-            let bar = cctk::viz::dot_bar(r.cost_usd / max_cost, bar_w);
-            let name: String = r.name.chars().take(name_w).collect();
-            Line::from(format!(
-                "{name:<name_w$} {cost:>7} {bar}",
-                cost = fmt_cost(r.cost_usd),
-            ))
+        .map(|s| {
+            let name: String = s.label.chars().take(12).collect();
+            Span::styled(format!("▉{name} "), Style::default().fg(s.color))
         })
         .collect();
+    f.render_widget(Paragraph::new(Line::from(legend)), parts[0]);
 
-    let body = if lines.is_empty() {
-        vec![Line::from(Span::styled(
-            "no usage recorded",
-            Style::default().fg(Color::DarkGray),
-        ))]
+    let y_max = series
+        .iter()
+        .flat_map(|s| s.points.iter().map(|&(_, y)| y))
+        .fold(0.0_f64, f64::max)
+        .max(1.0);
+    let y_label = if metric == ccstat::usage::GraphMetric::Cost {
+        fmt_cost(y_max)
     } else {
-        lines
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let v = y_max.round() as u64;
+        fmt_tokens(v)
     };
-    f.render_widget(Paragraph::new(body), inner);
+
+    let today = dash.stats.today_for_rescan();
+    #[allow(clippy::cast_possible_wrap)] // TREND_DAYS is a small constant
+    let offset = ccstat::usage::TREND_DAYS as i64 - 1;
+    let oldest = (today - chrono::Duration::days(offset))
+        .format("%m/%d")
+        .to_string();
+    let newest = today.format("%m/%d").to_string();
+    let last_x = ccstat::usage::TREND_DAYS.saturating_sub(1).max(1) as f64;
+
+    let chart = cctk::chart::braille_multi_line(&series, y_max, y_label).x_axis(
+        Axis::default()
+            .bounds([0.0, last_x])
+            .labels([Line::from(oldest), Line::from(newest)])
+            .style(Style::default().fg(Color::DarkGray)),
+    );
+    f.render_widget(chart, parts[1]);
 }
 
 fn draw_map(f: &mut Frame<'_>, area: Rect, dash: &Dashboard, app: &App) {
@@ -191,10 +253,13 @@ pub fn draw_now_detail(f: &mut Frame<'_>, now: &crate::now::NowStats) {
     let inner = block.inner(area);
     f.render_widget(block, area);
 
-    let ctx_w = usize::from(inner.width.saturating_sub(28)).clamp(6, 60);
+    // Text summary on top, then a large token-rate line chart filling the rest.
+    let parts = Layout::vertical([Constraint::Length(8), Constraint::Min(0)]).split(inner);
+    let text_area = parts[0];
+    let chart_area = parts[1];
+
+    let ctx_w = usize::from(text_area.width.saturating_sub(28)).clamp(6, 60);
     let ctx_bar = cctk::viz::dot_bar(now.context_pct(), ctx_w);
-    let rate_w = usize::from(inner.width.saturating_sub(8)).clamp(6, 80);
-    let rate = cctk::viz::sparkline(now.rate_series(), rate_w);
 
     let lines = vec![
         Line::from(vec![
@@ -215,25 +280,66 @@ pub fn draw_now_detail(f: &mut Frame<'_>, now: &crate::now::NowStats) {
             fmt_tokens(now.last_context_size()),
             fmt_tokens(now.context_window()),
         )),
-        Line::from(format!("rate     {rate}")),
         Line::from(""),
         Line::from(Span::styled(
-            "recent tools:",
+            "token rate (tok/msg):",
             Style::default().add_modifier(Modifier::BOLD),
         )),
-        Line::from(
-            now.recent_tools()
-                .map(str::to_string)
-                .collect::<Vec<_>>()
-                .join("  "),
-        ),
+        Line::from(Span::styled(
+            format!(
+                "recent tools: {}",
+                now.recent_tools().collect::<Vec<_>>().join("  ")
+            ),
+            Style::default().fg(Color::DarkGray),
+        )),
     ];
-    f.render_widget(Paragraph::new(lines), inner);
+    f.render_widget(Paragraph::new(lines), text_area);
+    let points = now.rate_points(chrono::Utc::now(), RATE_WINDOW_SECS, RATE_BINS);
+    draw_rate_chart(f, chart_area, &points);
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
+    fn render_to_string(w: u16, h: u16, points: &[(f64, f64)]) -> String {
+        let mut terminal = Terminal::new(TestBackend::new(w, h)).unwrap();
+        terminal
+            .draw(|f| draw_rate_chart(f, f.area(), points))
+            .unwrap();
+        let buf = terminal.backend().buffer().clone();
+        let mut out = String::new();
+        for y in 0..h {
+            for x in 0..w {
+                out.push_str(buf[(x, y)].symbol());
+            }
+            out.push('\n');
+        }
+        out
+    }
+
+    #[test]
+    fn rate_chart_renders_braille_line() {
+        let points: Vec<(f64, f64)> = (0..24)
+            .map(|i| (f64::from(i), ((f64::from(i) * 0.5).sin() + 1.0) * 1000.0))
+            .collect();
+        let out = render_to_string(48, 6, &points);
+        assert!(
+            out.chars()
+                .any(|ch| ('\u{2800}'..='\u{28FF}').contains(&ch)),
+            "expected braille glyphs in the rate chart"
+        );
+    }
+
+    #[test]
+    fn rate_chart_hint_when_idle() {
+        // All-zero rate (no activity) shows the waiting hint.
+        let points = [(0.0, 0.0), (1.0, 0.0), (2.0, 0.0)];
+        let out = render_to_string(48, 4, &points);
+        assert!(out.contains("waiting"));
+    }
 
     #[test]
     fn fmt_tokens_scales() {
