@@ -223,6 +223,28 @@ impl AppState {
         self.graph_metric = self.graph_metric.next();
     }
 
+    /// Daily-bucket span the trends/graph views cover for the current window
+    /// (7 / 30, or all-time capped).
+    #[must_use]
+    pub fn graph_span(&self) -> usize {
+        self.db
+            .span_days(self.tab, &self.project, self.window, self.today)
+    }
+
+    /// Per-day series for `name` under the current tab/project/metric over
+    /// `span` days ending today, oldest→newest.
+    #[must_use]
+    pub fn graph_series(&self, name: &str, span: usize) -> Vec<f64> {
+        self.db.daily_series(
+            self.tab,
+            name,
+            &self.project,
+            self.graph_metric,
+            span,
+            self.today,
+        )
+    }
+
     /// `today` used for slicing; exposed for rescans and the detail pane.
     #[must_use]
     pub fn today_for_rescan(&self) -> NaiveDate {
@@ -694,6 +716,7 @@ pub fn draw(f: &mut Frame<'_>, state: &AppState) {
 #[must_use]
 pub fn trends_series(state: &AppState) -> Vec<cctk::chart::LineSeries> {
     let rows = state.rows();
+    let span = state.graph_span();
     rows.iter()
         .take(TRENDS_TOP_N)
         .enumerate()
@@ -702,8 +725,8 @@ pub fn trends_series(state: &AppState) -> Vec<cctk::chart::LineSeries> {
                 Category::Model => model_color(&rows, &r.name),
                 _ => PALETTE[i % PALETTE.len()],
             };
-            let points: Vec<(f64, f64)> = r
-                .trend_series(state.graph_metric)
+            let points: Vec<(f64, f64)> = state
+                .graph_series(&r.name, span)
                 .into_iter()
                 .enumerate()
                 .map(|(x, y)| (x as f64, y))
@@ -768,12 +791,13 @@ fn draw_trends(f: &mut Frame<'_>, area: Rect, state: &AppState) {
         .max(1.0);
 
     let today = state.today_for_rescan();
-    #[allow(clippy::cast_possible_wrap)] // TREND_DAYS is a small constant
-    let oldest = (today - Duration::days(TREND_DAYS as i64 - 1))
+    let span = state.graph_span();
+    #[allow(clippy::cast_possible_wrap)] // span is a small day count
+    let oldest = (today - Duration::days(span as i64 - 1))
         .format("%m/%d")
         .to_string();
     let newest = today.format("%m/%d").to_string();
-    let last_x = (TREND_DAYS.saturating_sub(1)).max(1) as f64;
+    let last_x = (span.saturating_sub(1)).max(1) as f64;
 
     let chart = cctk::chart::braille_multi_line(&series, y_max, metric_top_label(metric, y_max))
         .x_axis(
@@ -861,48 +885,53 @@ fn draw_body(f: &mut Frame<'_>, area: Rect, state: &AppState) {
     draw_detail(f, chunks[1], state);
 }
 
-/// Full-screen bottom-style braille line chart of the selected row's
-/// `TREND_DAYS`-day trend.
+/// Full-screen bottom-style braille line chart of the selected row's trend
+/// over the current window (7d / 30d / all-time) for the selected metric.
 fn draw_graph(f: &mut Frame<'_>, area: Rect, state: &AppState) {
     let Some(row) = state.selected_row() else {
         return;
     };
     let today = state.today_for_rescan();
+    let span = state.graph_span();
 
-    #[allow(clippy::cast_possible_wrap)] // TREND_DAYS is a small constant
-    let oldest_offset = (TREND_DAYS - 1) as i64;
-    let oldest = (today - Duration::days(oldest_offset))
+    #[allow(clippy::cast_possible_wrap)] // span is a small day count
+    let oldest = (today - Duration::days(span as i64 - 1))
         .format("%m/%d")
         .to_string();
     let newest = today.format("%m/%d").to_string();
 
-    let points: Vec<(f64, f64)> = row
-        .trend
+    let values = state.graph_series(&row.name, span);
+    let points: Vec<(f64, f64)> = values
         .iter()
         .enumerate()
-        .map(|(i, &v)| (i as f64, v as f64))
+        .map(|(i, &v)| (i as f64, v))
         .collect();
-    let peak = row.trend.iter().copied().max().unwrap_or(0).max(1);
-    let last_x = (TREND_DAYS.saturating_sub(1)).max(1) as f64;
+    let peak = values.iter().copied().fold(0.0_f64, f64::max).max(1.0);
+    let last_x = (span.saturating_sub(1)).max(1) as f64;
 
     let title = format!(
-        " {}: {} · {} in {} · {}-day trend · last {} (g/Esc close) ",
+        " {}: {} · {} in {} · {} trend · last {} (g/Esc close) ",
         state.tab.title(),
         row.name,
         row.count,
         state.window.label(),
-        TREND_DAYS,
+        state.graph_metric.label(),
         format_recency(row.last_used, today),
     );
 
-    let chart = cctk::chart::braille_line(&points, peak as f64, peak.to_string(), Color::Green)
-        .block(Block::default().borders(Borders::ALL).title(title))
-        .x_axis(
-            Axis::default()
-                .bounds([0.0, last_x])
-                .labels([Line::from(oldest), Line::from(newest)])
-                .style(Style::default().fg(Color::DarkGray)),
-        );
+    let chart = cctk::chart::braille_line(
+        &points,
+        peak,
+        metric_top_label(state.graph_metric, peak),
+        Color::Green,
+    )
+    .block(Block::default().borders(Borders::ALL).title(title))
+    .x_axis(
+        Axis::default()
+            .bounds([0.0, last_x])
+            .labels([Line::from(oldest), Line::from(newest)])
+            .style(Style::default().fg(Color::DarkGray)),
+    );
     f.render_widget(chart, area);
 }
 

@@ -8,8 +8,10 @@ use cctk::pricing::ModelInfo;
 use chrono::{DateTime, Duration, NaiveDate, Utc};
 use std::collections::HashMap;
 
-/// Number of trailing days shown in the trend sparkline.
+/// Number of trailing days shown in the inline detail trend sparkline.
 pub const TREND_DAYS: usize = 30;
+/// Upper bound on the all-time graph span (keeps `all` bounded).
+pub const MAX_SPAN_DAYS: usize = 120;
 
 /// One session-log line's contribution to the store: its timestamp (for day
 /// bucketing) and the usage records it carries. Built from a parsed
@@ -258,10 +260,98 @@ impl UsageDb {
         rows
     }
 
+    /// Number of daily buckets a windowed graph spans: the window's day count
+    /// (7 / 30), or for all-time the days from the earliest recorded day of
+    /// `category` through `today`, capped at [`MAX_SPAN_DAYS`].
+    #[must_use]
+    pub fn span_days(
+        &self,
+        category: Category,
+        project: &ProjectFilter,
+        window: Window,
+        today: NaiveDate,
+    ) -> usize {
+        if let Some(d) = window.days() {
+            #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+            return (d as usize).max(1);
+        }
+        let earliest = self
+            .entries
+            .iter()
+            .filter(|(k, _)| k.category == category && project_matches(project, &k.project))
+            .flat_map(|(_, days)| days.keys())
+            .min()
+            .copied();
+        match earliest {
+            Some(e) => {
+                #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+                let span = ((today - e).num_days().max(0) as usize) + 1;
+                span.clamp(1, MAX_SPAN_DAYS)
+            }
+            None => TREND_DAYS,
+        }
+    }
+
+    /// Per-day `metric` series for `(category, name)` over the last `span` days
+    /// ending `today`, oldest→newest. Empty days read as zero.
+    #[must_use]
+    pub fn daily_series(
+        &self,
+        category: Category,
+        name: &str,
+        project: &ProjectFilter,
+        metric: GraphMetric,
+        span: usize,
+        today: NaiveDate,
+    ) -> Vec<f64> {
+        let span = span.max(1);
+        #[allow(clippy::cast_possible_wrap)]
+        let start = today - Duration::days(span as i64 - 1);
+        let mut series = vec![0.0_f64; span];
+        for (key, days) in &self.entries {
+            if key.category != category || key.name != name {
+                continue;
+            }
+            if !project_matches(project, &key.project) {
+                continue;
+            }
+            for (day, stat) in days {
+                if *day < start || *day > today {
+                    continue;
+                }
+                #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+                let idx = (*day - start).num_days() as usize;
+                if idx < span {
+                    series[idx] += metric_value(stat, metric);
+                }
+            }
+        }
+        series
+    }
+
     #[cfg(test)]
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
+    }
+}
+
+/// Whether `project` filter admits the project label `p`.
+fn project_matches(project: &ProjectFilter, p: &str) -> bool {
+    match project {
+        ProjectFilter::All => true,
+        ProjectFilter::Only(only) => only == p,
+    }
+}
+
+/// One day's value for the selected graph metric.
+fn metric_value(stat: &DayStat, metric: GraphMetric) -> f64 {
+    match metric {
+        GraphMetric::Tokens => {
+            (stat.input + stat.output + stat.cache_creation + stat.cache_read) as f64
+        }
+        GraphMetric::Cost => stat.cost_usd,
+        GraphMetric::Messages => stat.count as f64,
     }
 }
 
@@ -702,5 +792,70 @@ mod tests {
         assert_eq!(GraphMetric::Tokens.next(), GraphMetric::Cost);
         assert_eq!(GraphMetric::Cost.next(), GraphMetric::Messages);
         assert_eq!(GraphMetric::Messages.next(), GraphMetric::Tokens);
+    }
+
+    #[test]
+    fn span_days_follows_window() {
+        let mut db = UsageDb::default();
+        let today = day(2026, 7, 20);
+        let unit = |name: &str| Extracted::Model {
+            name: name.into(),
+            usage: Usage {
+                input_tokens: 1,
+                ..Default::default()
+            },
+        };
+        db.absorb(&line_at(2026, 6, 1, vec![unit("opus")]), "p", today);
+        db.absorb(&line_at(2026, 7, 20, vec![unit("opus")]), "p", today);
+
+        assert_eq!(
+            db.span_days(Category::Model, &ProjectFilter::All, Window::Days7, today),
+            7
+        );
+        assert_eq!(
+            db.span_days(Category::Model, &ProjectFilter::All, Window::Days30, today),
+            30
+        );
+        // 2026-06-01 .. 2026-07-20 inclusive = 50 days.
+        assert_eq!(
+            db.span_days(Category::Model, &ProjectFilter::All, Window::All, today),
+            50
+        );
+    }
+
+    #[test]
+    fn daily_series_places_metric_in_the_right_bucket() {
+        let mut db = UsageDb::default();
+        let today = day(2026, 7, 20);
+        let usage = Usage {
+            input_tokens: 100,
+            output_tokens: 50,
+            ..Default::default()
+        };
+        db.absorb(
+            &line_at(
+                2026,
+                7,
+                20,
+                vec![Extracted::Model {
+                    name: "opus".into(),
+                    usage,
+                }],
+            ),
+            "p",
+            today,
+        );
+        let s = db.daily_series(
+            Category::Model,
+            "opus",
+            &ProjectFilter::All,
+            GraphMetric::Tokens,
+            7,
+            today,
+        );
+        assert_eq!(s.len(), 7);
+        // Today's event lands in the last (newest) bucket.
+        assert!((s[6] - 150.0).abs() < f64::EPSILON);
+        assert!(s[..6].iter().all(|&v| v.abs() < f64::EPSILON));
     }
 }
