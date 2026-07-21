@@ -36,17 +36,20 @@ pub fn fmt_cost(cost: f64) -> String {
 
 fn panel_block(title: &str, panel: Panel, app: &App) -> Block<'static> {
     let selected = app.mode == Mode::Overview && app.selected == panel;
-    let border = if selected {
-        Style::default()
+    if selected {
+        let accent = Style::default()
             .fg(Color::Yellow)
-            .add_modifier(Modifier::BOLD)
+            .add_modifier(Modifier::BOLD);
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(accent)
+            .title(Line::from(Span::styled(format!(" ▸ {title} "), accent)))
     } else {
-        Style::default().fg(Color::DarkGray)
-    };
-    Block::default()
-        .borders(Borders::ALL)
-        .border_style(border)
-        .title(format!(" {title} "))
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::DarkGray))
+            .title(format!("   {title} "))
+    }
 }
 
 /// Render the whole overview into `f`.
