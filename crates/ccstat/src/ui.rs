@@ -9,7 +9,6 @@ use crate::provenance::ProvenanceMap;
 use crate::scan::{self, ScanConfig};
 use crate::usage::{GraphMetric, Row, TREND_DAYS, UsageDb};
 use ccmap::model::Provenance;
-use cctk::pricing::ModelInfo;
 use chrono::{Duration, NaiveDate};
 use crossterm::event::{Event as CtEvent, KeyCode, KeyEventKind};
 use ratatui::{
@@ -447,15 +446,39 @@ const DETAIL_PCT: u16 = 55;
 const TRENDS_H: u16 = 9;
 /// How many series the trends graph overlays.
 const TRENDS_TOP_N: usize = 5;
-/// Distinct line colors for non-Model tabs (Model tabs use family colors).
-const TRENDS_PALETTE: [Color; 6] = [
-    Color::Cyan,
-    Color::Yellow,
-    Color::Green,
+/// Distinct, readable line/label colors. Assigned per series (or per model, by
+/// a stable name ordering) so overlaid lines and rows stay visually separable.
+const PALETTE: [Color; 8] = [
     Color::Magenta,
-    Color::Blue,
+    Color::Cyan,
+    Color::Green,
+    Color::Yellow,
     Color::Red,
+    Color::Blue,
+    Color::LightGreen,
+    Color::LightMagenta,
 ];
+
+/// Stable distinct color for a model `name`: its slot in the alphabetically
+/// ordered set of the current model names, mapped onto [`PALETTE`]. Stable
+/// across refreshes (independent of usage rank) so a model keeps its color, and
+/// distinct up to the palette size — unlike family colors, this separates
+/// variants (opus-4-8 vs opus-4-7) and unknown families (fable) too.
+fn model_color(rows: &[Row], name: &str) -> Color {
+    let names: Vec<&str> = rows.iter().map(|r| r.name.as_str()).collect();
+    color_for_name(&names, name)
+}
+
+/// The palette color for `name` by its slot in the alphabetically sorted,
+/// de-duplicated `names`. Distinct up to the palette size, stable for a fixed
+/// name set.
+fn color_for_name(names: &[&str], name: &str) -> Color {
+    let mut sorted: Vec<&str> = names.to_vec();
+    sorted.sort_unstable();
+    sorted.dedup();
+    let idx = sorted.iter().position(|&n| n == name).unwrap_or(0);
+    PALETTE[idx % PALETTE.len()]
+}
 
 /// Spinner animation frame interval (and the max time an idle watch loop
 /// blocks on input before redrawing).
@@ -669,15 +692,14 @@ pub fn draw(f: &mut Frame<'_>, state: &AppState) {
 /// same graph. Model rows are colored by family; other tabs cycle a palette.
 #[must_use]
 pub fn trends_series(state: &AppState) -> Vec<cctk::chart::LineSeries> {
-    state
-        .rows()
-        .iter()
+    let rows = state.rows();
+    rows.iter()
         .take(TRENDS_TOP_N)
         .enumerate()
         .map(|(i, r)| {
             let color = match state.tab {
-                Category::Model => ModelInfo::parse(&r.name).color(),
-                _ => TRENDS_PALETTE[i % TRENDS_PALETTE.len()],
+                Category::Model => model_color(&rows, &r.name),
+                _ => PALETTE[i % PALETTE.len()],
             };
             let points: Vec<(f64, f64)> = r
                 .trend_series(state.graph_metric)
@@ -891,7 +913,9 @@ fn draw_list(f: &mut Frame<'_>, area: Rect, state: &AppState) {
         .map(|r| {
             let bar = count_bar(r.count, max_count);
             let color = match state.tab {
-                Category::Model => ModelInfo::parse(&r.name).color(),
+                // Match the trends graph: a stable distinct color per model
+                // (separates variants and unknown families, unlike family hues).
+                Category::Model => model_color(&rows, &r.name),
                 Category::Agent | Category::Skill | Category::Command => {
                     provenance_color(state.provenance_of(state.tab, &r.name))
                 }
@@ -1513,6 +1537,42 @@ mod tests {
     #[test]
     fn count_bar_zero_max_is_blank() {
         assert_eq!(super::count_bar(5, 0), "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀");
+    }
+
+    #[test]
+    fn model_colors_are_distinct_per_variant_and_family() {
+        // The exact models the family-color scheme collided on: opus variants
+        // and fable-vs-sonnet. All must get distinct colors.
+        let names = [
+            "claude-opus-4-8",
+            "claude-opus-4-7",
+            "claude-sonnet-5",
+            "claude-fable-5",
+            "claude-haiku-4-5",
+        ];
+        let colors: Vec<Color> = names
+            .iter()
+            .map(|n| super::color_for_name(&names, n))
+            .collect();
+        for i in 0..colors.len() {
+            for j in (i + 1)..colors.len() {
+                assert_ne!(
+                    colors[i], colors[j],
+                    "{} and {} share a color",
+                    names[i], names[j]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn model_color_is_stable_regardless_of_input_order() {
+        let a = ["claude-opus-4-8", "claude-sonnet-5", "claude-fable-5"];
+        let b = ["claude-fable-5", "claude-opus-4-8", "claude-sonnet-5"];
+        assert_eq!(
+            super::color_for_name(&a, "claude-opus-4-8"),
+            super::color_for_name(&b, "claude-opus-4-8"),
+        );
     }
 
     #[test]
