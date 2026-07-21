@@ -10,10 +10,8 @@
 use cctk::jsonl::{Kind, Line, Usage};
 use cctk::pricing::{ModelInfo, Pricing};
 use chrono::{DateTime, Duration, Utc};
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 
-/// How many recent tool names the bottom band keeps (newest first).
-const RECENT_TOOLS_CAP: usize = 32;
 /// Upper bound on retained timestamped events (memory guard; older ones fall
 /// outside every rate window anyway).
 const EVENTS_CAP: usize = 4096;
@@ -28,6 +26,9 @@ struct Slot {
     cost_usd: f64,
     messages: u64,
     last_context_size: u64,
+    /// Tool-use counts for this session (per-slot so a re-tailed session that
+    /// replays from byte 0 rebuilds its counts instead of double-counting).
+    tool_counts: HashMap<String, u64>,
 }
 
 impl Default for Slot {
@@ -41,6 +42,7 @@ impl Default for Slot {
             cost_usd: 0.0,
             messages: 0,
             last_context_size: 0,
+            tool_counts: HashMap::new(),
         }
     }
 }
@@ -53,6 +55,11 @@ impl Slot {
             self.model = Some(model.clone());
             self.model_info = ModelInfo::parse(model);
             self.pricing = self.model_info.pricing();
+        }
+        for name in line.tool_use_names() {
+            if !name.is_empty() {
+                *self.tool_counts.entry(name.to_string()).or_insert(0) += 1;
+            }
         }
         let Some(usage) = line.usage else { return };
         self.total += usage;
@@ -78,8 +85,6 @@ impl Slot {
 #[derive(Debug, Default)]
 pub struct NowStats {
     sessions: BTreeMap<usize, Slot>,
-    /// Newest tool name at the front, merged across sessions.
-    recent_tools: VecDeque<String>,
     /// `(event_time, tokens)` across all sessions, oldest first, capped.
     events: VecDeque<(DateTime<Utc>, u64)>,
 }
@@ -95,13 +100,6 @@ impl NowStats {
     pub fn ingest(&mut self, tag: usize, line: &Line) {
         if line.kind != Kind::Assistant {
             return;
-        }
-
-        for name in line.tool_use_names() {
-            if !name.is_empty() {
-                self.recent_tools.push_front(name.to_string());
-                self.recent_tools.truncate(RECENT_TOOLS_CAP);
-            }
         }
 
         if let (Some(usage), Some(at)) = (line.usage, line.timestamp_utc()) {
@@ -189,9 +187,19 @@ impl NowStats {
             .map_or(1_000_000, |s| s.model_info.context_window())
     }
 
-    /// Recent tool names, newest first, across all sessions.
-    pub fn recent_tools(&self) -> impl Iterator<Item = &str> {
-        self.recent_tools.iter().map(String::as_str)
+    /// Tool-use counts aggregated across all active sessions, most-used first
+    /// (ties broken alphabetically).
+    #[must_use]
+    pub fn tools_by_count(&self) -> Vec<(&str, u64)> {
+        let mut agg: HashMap<&str, u64> = HashMap::new();
+        for slot in self.sessions.values() {
+            for (name, &c) in &slot.tool_counts {
+                *agg.entry(name.as_str()).or_insert(0) += c;
+            }
+        }
+        let mut out: Vec<(&str, u64)> = agg.into_iter().collect();
+        out.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(b.0)));
+        out
     }
 
     /// Real-time tokens/minute (summed across sessions) over the last `window`
@@ -343,12 +351,29 @@ mod tests {
     }
 
     #[test]
-    fn recent_tools_merge_newest_first() {
+    fn tools_by_count_aggregates_across_sessions_desc() {
         let mut n = NowStats::new();
-        n.ingest(0, &assistant("sonnet", &["Read"], (1, 1, 0, 0)));
-        n.ingest(1, &assistant("opus", &["Edit"], (1, 1, 0, 0)));
-        let tools: Vec<&str> = n.recent_tools().collect();
-        assert_eq!(tools, vec!["Edit", "Read"]);
+        n.ingest(
+            0,
+            &assistant("sonnet", &["Read", "Bash", "Bash"], (1, 1, 0, 0)),
+        );
+        n.ingest(1, &assistant("opus", &["Bash", "Edit"], (1, 1, 0, 0)));
+        let tools = n.tools_by_count();
+        // Bash: 2 + 1 = 3 (most-used, first); Edit/Read tie at 1, alpha order.
+        assert_eq!(tools[0], ("Bash", 3));
+        assert_eq!(tools[1], ("Edit", 1));
+        assert_eq!(tools[2], ("Read", 1));
+    }
+
+    #[test]
+    fn tool_counts_do_not_double_count_on_reingest_into_fresh_slot() {
+        // A dropped + re-tailed session gets a fresh tag/slot, so replaying its
+        // lines rebuilds counts instead of doubling them.
+        let mut n = NowStats::new();
+        n.ingest(0, &assistant("opus", &["Bash", "Bash"], (1, 1, 0, 0)));
+        n.drop_session(0);
+        n.ingest(1, &assistant("opus", &["Bash", "Bash"], (1, 1, 0, 0)));
+        assert_eq!(n.tools_by_count(), vec![("Bash", 2)]);
     }
 
     #[test]
