@@ -471,8 +471,9 @@ fn model_color(rows: &[Row], name: &str) -> Color {
 
 /// The palette color for `name` by its slot in the alphabetically sorted,
 /// de-duplicated `names`. Distinct up to the palette size, stable for a fixed
-/// name set.
-fn color_for_name(names: &[&str], name: &str) -> Color {
+/// name set. Public so `cctop` colors its per-model lines the same way.
+#[must_use]
+pub fn color_for_name(names: &[&str], name: &str) -> Color {
     let mut sorted: Vec<&str> = names.to_vec();
     sorted.sort_unstable();
     sorted.dedup();

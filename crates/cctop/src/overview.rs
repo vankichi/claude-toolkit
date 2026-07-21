@@ -102,12 +102,15 @@ fn draw_now(f: &mut Frame<'_>, area: Rect, dash: &Dashboard, app: &App) {
     draw_rate_chart(f, chart_area, &points);
 }
 
-/// Wall-clock window (seconds) the Now rate chart covers.
-const RATE_WINDOW_SECS: i64 = 900;
+/// Wall-clock window (seconds) shared by the Now rate chart and the Top-usage
+/// per-model chart, so their timelines line up.
+const RATE_WINDOW_SECS: i64 = 1800;
 /// Time buckets across the rate window (finer = smoother line).
 const RATE_BINS: usize = 30;
 /// Left x-axis label for the rate window.
-const RATE_LEFT_LABEL: &str = "-15m";
+const RATE_LEFT_LABEL: &str = "-30m";
+/// How many model lines the Top-usage chart overlays.
+const TOP_USAGE_MODELS: usize = 5;
 
 /// A bottom-style braille line chart of the real-time tokens/minute rate.
 /// `points` are `(bin, tokens_per_minute)` spanning `[now - window, now]`.
@@ -144,24 +147,36 @@ fn draw_rate_chart(f: &mut Frame<'_>, area: Rect, points: &[(f64, f64)]) {
 }
 
 fn draw_usage(f: &mut Frame<'_>, area: Rect, dash: &Dashboard, app: &App) {
-    let metric = dash.stats.graph_metric;
-    let title = format!("Top usage  [2] · {} (m)", metric.label());
-    let block = panel_block(&title, Panel::Stats, app);
+    let block = panel_block("Top usage  [2] · tok/min", Panel::Stats, app);
     let inner = block.inner(area);
     f.render_widget(block, area);
 
-    // Overlaid per-series trend graph (shared with ccstat), colored by family.
-    let series = ccstat::ui::trends_series(&dash.stats);
-    if series.is_empty() || inner.height < 2 {
+    // Per-model tokens/minute over the SAME real-time window as the Now chart,
+    // so the two timelines line up. Colored to match ccstat's model coloring.
+    let by_model = dash
+        .now
+        .rate_points_by_model(chrono::Utc::now(), RATE_WINDOW_SECS, RATE_BINS);
+    if by_model.is_empty() || inner.height < 2 {
         f.render_widget(
             Paragraph::new(Span::styled(
-                "no usage recorded",
+                "no active token usage",
                 Style::default().fg(Color::DarkGray),
             )),
             inner,
         );
         return;
     }
+
+    let names: Vec<&str> = by_model.iter().map(|(m, _)| m.as_str()).collect();
+    let series: Vec<cctk::chart::LineSeries> = by_model
+        .iter()
+        .take(TOP_USAGE_MODELS)
+        .map(|(model, points)| cctk::chart::LineSeries {
+            points: points.clone(),
+            label: model.clone(),
+            color: ccstat::ui::color_for_name(&names, model),
+        })
+        .collect();
 
     let parts = Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).split(inner);
     let legend: Vec<Span> = series
@@ -178,27 +193,14 @@ fn draw_usage(f: &mut Frame<'_>, area: Rect, dash: &Dashboard, app: &App) {
         .flat_map(|s| s.points.iter().map(|&(_, y)| y))
         .fold(0.0_f64, f64::max)
         .max(1.0);
-    let y_label = if metric == ccstat::usage::GraphMetric::Cost {
-        fmt_cost(y_max)
-    } else {
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        let v = y_max.round() as u64;
-        fmt_tokens(v)
-    };
-
-    let today = dash.stats.today_for_rescan();
-    #[allow(clippy::cast_possible_wrap)] // TREND_DAYS is a small constant
-    let offset = ccstat::usage::TREND_DAYS as i64 - 1;
-    let oldest = (today - chrono::Duration::days(offset))
-        .format("%m/%d")
-        .to_string();
-    let newest = today.format("%m/%d").to_string();
-    let last_x = ccstat::usage::TREND_DAYS.saturating_sub(1).max(1) as f64;
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let y_label = format!("{}/m", fmt_tokens(y_max.round() as u64));
+    let last_x = (RATE_BINS.saturating_sub(1)).max(1) as f64;
 
     let chart = cctk::chart::braille_multi_line(&series, y_max, y_label).x_axis(
         Axis::default()
             .bounds([0.0, last_x])
-            .labels([Line::from(oldest), Line::from(newest)])
+            .labels([Line::from(RATE_LEFT_LABEL), Line::from("now")])
             .style(Style::default().fg(Color::DarkGray)),
     );
     f.render_widget(chart, parts[1]);
