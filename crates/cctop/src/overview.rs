@@ -71,9 +71,20 @@ pub fn draw(f: &mut Frame<'_>, dash: &Dashboard, app: &App) {
     draw_recent(f, rows[2], dash, app);
 }
 
+/// Short project summary for the Now header: the project, up to two joined,
+/// or a count. Falls back to "active session" before any cwd is seen.
+fn project_label(projects: &[String]) -> String {
+    match projects.len() {
+        0 => "active session".to_string(),
+        1 | 2 => projects.join(", "),
+        n => format!("{n} projects"),
+    }
+}
+
 fn draw_now(f: &mut Frame<'_>, area: Rect, dash: &Dashboard, app: &App) {
     let now = &dash.now;
-    let block = panel_block("Now: active session  [1]", Panel::Now, app);
+    let title = format!("Now · {}  [1]", project_label(&now.projects()));
+    let block = panel_block(&title, Panel::Now, app);
     let inner = block.inner(area);
     f.render_widget(block, area);
 
@@ -323,12 +334,15 @@ pub fn draw_now_detail(f: &mut Frame<'_>, now: &crate::now::NowStats) {
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Yellow))
-        .title(" Now — active session   (Esc/q to return) ");
+        .title(format!(
+            " Now · {}   (Esc/q to return) ",
+            project_label(&now.projects())
+        ));
     let inner = block.inner(area);
     f.render_widget(block, area);
 
     // Text summary on top, then a large token-rate line chart filling the rest.
-    let parts = Layout::vertical([Constraint::Length(8), Constraint::Min(0)]).split(inner);
+    let parts = Layout::vertical([Constraint::Length(9), Constraint::Min(0)]).split(inner);
     let text_area = parts[0];
     let chart_area = parts[1];
 
@@ -345,6 +359,7 @@ pub fn draw_now_detail(f: &mut Frame<'_>, now: &crate::now::NowStats) {
                     .add_modifier(Modifier::BOLD),
             ),
         ]),
+        Line::from(format!("project  {}", project_label(&now.projects()))),
         Line::from(format!("sessions {}", now.session_count())),
         Line::from(format!("tokens   {}", fmt_tokens(now.total_tokens()))),
         Line::from(format!("cost     {}", fmt_cost(now.cost_usd()))),
