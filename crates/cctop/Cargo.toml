@@ -1,6 +1,6 @@
 [package]
 name = "cctop"
-version = "0.1.1"
+version = "0.2.0"
 description = "Unified bottom-style TUI dashboard for Claude Code (live usage, stats, and config map)"
 edition.workspace = true
 rust-version.workspace = true
@@ -18,9 +18,9 @@ path = "src/main.rs"
 
 [dependencies]
 anyhow.workspace = true
-ccmap = { path = "../ccmap", version = "0.1.1" }
-ccstat = { path = "../ccstat", version = "0.1.1" }
-cctk = { path = "../cctk", version = "0.1.1", features = ["tail"] }
+ccmap = { path = "../ccmap", version = "0.2.0" }
+ccstat = { path = "../ccstat", version = "0.2.0" }
+cctk = { path = "../cctk", version = "0.2.0", features = ["tail"] }
 chrono.workspace = true
 clap.workspace = true
 crossterm.workspace = true

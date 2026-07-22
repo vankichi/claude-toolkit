@@ -1,6 +1,6 @@
 [package]
 name = "ccwatch"
-version = "0.1.1"
+version = "0.2.0"
 description = "Real-time terminal monitor for Claude Code session usage"
 edition.workspace = true
 rust-version.workspace = true
@@ -22,7 +22,7 @@ path = "src/main.rs"
 
 [dependencies]
 anyhow.workspace = true
-cctk = { path = "../cctk", version = "0.1.1", features = ["tail"] }
+cctk = { path = "../cctk", version = "0.2.0", features = ["tail"] }
 chrono.workspace = true
 clap.workspace = true
 crossterm.workspace = true
