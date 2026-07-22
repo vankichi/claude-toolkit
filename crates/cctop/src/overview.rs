@@ -90,7 +90,7 @@ fn session_line(s: &crate::now::SessionView) -> Line<'static> {
         Span::raw(" · "),
         Span::styled(name, Style::default().add_modifier(Modifier::BOLD)),
         Span::raw(format!(
-            "   {}   {} tok   {}   {:.0}%",
+            "   {}   {} tok   {}   ctx {:.0}%",
             s.model,
             fmt_tokens(s.tokens),
             fmt_cost(s.cost_usd),
@@ -105,29 +105,41 @@ fn draw_now(f: &mut Frame<'_>, area: Rect, dash: &Dashboard, app: &App) {
     let inner = block.inner(area);
     f.render_widget(block, area);
 
-    // A per-session list on top, then the total token-rate chart. Reserve at
-    // least 3 rows for the chart; cap the list to what's left.
-    let sessions = now.sessions();
-    let max_lines = usize::from(inner.height).saturating_sub(3).clamp(1, 4);
+    // A stable summary on top (identifies sessions by project without the
+    // per-row churn of a live-sorted list), then the total token-rate chart.
+    // The full per-session breakdown lives in the drill-down (Enter).
     let mut lines: Vec<Line> = Vec::new();
-    if sessions.is_empty() {
+    let n = now.session_count();
+    if n == 0 {
         lines.push(Line::from(Span::styled(
             "waiting for an active session…",
             Style::default().fg(Color::DarkGray),
         )));
-    } else if sessions.len() > max_lines {
-        for s in sessions.iter().take(max_lines - 1) {
-            lines.push(session_line(s));
-        }
+    } else {
+        let projects = now.projects();
+        let head = if n == 1 {
+            format!("{} · {}", project_label(&projects), now.model_label())
+        } else {
+            format!("{n} sessions · {}", project_label(&projects))
+        };
         lines.push(Line::from(Span::styled(
-            format!("+{} more sessions", sessions.len() - (max_lines - 1)),
+            head,
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        )));
+        lines.push(Line::from(Span::styled(
+            format!(
+                "{} tok   {}   ctx≤{:.0}%   (Enter for per-session)",
+                fmt_tokens(now.total_tokens()),
+                fmt_cost(now.cost_usd()),
+                now.context_pct() * 100.0,
+            ),
             Style::default().fg(Color::DarkGray),
         )));
-    } else {
-        lines.extend(sessions.iter().map(session_line));
     }
 
-    #[allow(clippy::cast_possible_truncation)] // lines.len() is bounded by max_lines
+    #[allow(clippy::cast_possible_truncation)] // lines.len() is 1 or 2
     let list_h = (lines.len() as u16).max(1);
     let parts = Layout::vertical([Constraint::Length(list_h), Constraint::Min(0)]).split(inner);
     f.render_widget(Paragraph::new(lines), parts[0]);
@@ -361,53 +373,55 @@ pub fn draw_now_detail(f: &mut Frame<'_>, now: &crate::now::NowStats) {
     let inner = block.inner(area);
     f.render_widget(block, area);
 
-    // Text summary on top, then a large token-rate line chart filling the rest.
-    let parts = Layout::vertical([Constraint::Length(9), Constraint::Min(0)]).split(inner);
-    let text_area = parts[0];
-    let chart_area = parts[1];
+    // Totals header, one row per active session (each showing its OWN context
+    // %, so the number matches the session it sits on), then a large
+    // token-rate chart. Ordered by project+name so rows don't reshuffle as
+    // usage streams in.
+    let mut sessions = now.sessions();
+    sessions.sort_by(|a, b| a.project.cmp(&b.project).then_with(|| a.name.cmp(&b.name)));
 
-    let ctx_w = usize::from(text_area.width.saturating_sub(28)).clamp(6, 60);
-    let ctx_bar = cctk::viz::dot_bar(now.context_pct(), ctx_w);
-
-    let lines = vec![
+    let mut lines: Vec<Line> = vec![
         Line::from(vec![
-            Span::raw("model    "),
             Span::styled(
-                now.model_label(),
-                Style::default()
-                    .fg(Color::Magenta)
-                    .add_modifier(Modifier::BOLD),
+                format!("{} session(s)", now.session_count()),
+                Style::default().add_modifier(Modifier::BOLD),
             ),
+            Span::raw(format!(
+                "   {} tok   {}   {} msgs",
+                fmt_tokens(now.total_tokens()),
+                fmt_cost(now.cost_usd()),
+                now.assistant_messages(),
+            )),
         ]),
-        Line::from(format!("project  {}", project_label(&now.projects()))),
-        Line::from(format!("sessions {}", now.session_count())),
-        Line::from(format!("tokens   {}", fmt_tokens(now.total_tokens()))),
-        Line::from(format!("cost     {}", fmt_cost(now.cost_usd()))),
-        Line::from(format!("messages {}", now.assistant_messages())),
-        Line::from(format!(
-            "context  {ctx_bar} {:.0}%  ({} / {})",
-            now.context_pct() * 100.0,
-            fmt_tokens(now.last_context_size()),
-            fmt_tokens(now.context_window()),
-        )),
         Line::from(""),
-        Line::from(Span::styled(
-            "token rate (tok/msg):",
-            Style::default().add_modifier(Modifier::BOLD),
-        )),
-        Line::from(Span::styled(
-            format!(
-                "tool usage: {}",
-                now.tools_by_count()
-                    .iter()
-                    .map(|(name, count)| format!("{name} {count}"))
-                    .collect::<Vec<_>>()
-                    .join("   ")
-            ),
-            Style::default().fg(Color::DarkGray),
-        )),
     ];
-    f.render_widget(Paragraph::new(lines), text_area);
+    if sessions.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "waiting for an active session…",
+            Style::default().fg(Color::DarkGray),
+        )));
+    } else {
+        lines.extend(sessions.iter().map(session_line));
+    }
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        format!(
+            "tools: {}",
+            now.tools_by_count()
+                .iter()
+                .map(|(name, count)| format!("{name} {count}"))
+                .collect::<Vec<_>>()
+                .join("   ")
+        ),
+        Style::default().fg(Color::DarkGray),
+    )));
+
+    let text_h = u16::try_from(lines.len())
+        .unwrap_or(u16::MAX)
+        .min(inner.height);
+    let parts = Layout::vertical([Constraint::Length(text_h), Constraint::Min(0)]).split(inner);
+    f.render_widget(Paragraph::new(lines), parts[0]);
+    let chart_area = parts[1];
     let points = now.rate_points_total(
         ccstat::model::Category::Model,
         chrono::Utc::now(),

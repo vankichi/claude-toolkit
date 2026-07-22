@@ -278,24 +278,6 @@ impl NowStats {
             .fold(0.0_f64, f64::max)
     }
 
-    /// Largest last-seen context size across active sessions.
-    #[must_use]
-    pub fn last_context_size(&self) -> u64 {
-        self.sessions
-            .values()
-            .map(|s| s.last_context_size)
-            .max()
-            .unwrap_or(0)
-    }
-
-    #[must_use]
-    pub fn context_window(&self) -> u64 {
-        self.sessions
-            .values()
-            .next()
-            .map_or(1_000_000, |s| s.model_info.context_window())
-    }
-
     /// Tool-use counts aggregated across all active sessions, most-used first
     /// (ties broken alphabetically).
     #[must_use]
@@ -485,7 +467,8 @@ mod tests {
         assert_eq!(n.model_label(), "claude-opus-4-8");
         assert_eq!(n.total_tokens(), 10 + 100 + 50 + 1000);
         assert!(n.cost_usd() > 0.0);
-        assert_eq!(n.last_context_size(), 1060);
+        // context is tracked per-session (1060 tokens against opus's window).
+        assert!(n.sessions()[0].context_pct > 0.0);
         assert_eq!(n.session_count(), 1);
     }
 
