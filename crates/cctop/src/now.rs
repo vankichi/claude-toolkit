@@ -27,6 +27,9 @@ struct Slot {
     cost_usd: f64,
     messages: u64,
     last_context_size: u64,
+    /// Working directory captured from the first line that carries one; its
+    /// basename is the session's project name.
+    cwd: Option<String>,
     /// Tool-use counts for this session (per-slot so a re-tailed session that
     /// replays from byte 0 rebuilds its counts instead of double-counting).
     tool_counts: HashMap<String, u64>,
@@ -43,6 +46,7 @@ impl Default for Slot {
             cost_usd: 0.0,
             messages: 0,
             last_context_size: 0,
+            cwd: None,
             tool_counts: HashMap::new(),
         }
     }
@@ -50,6 +54,11 @@ impl Default for Slot {
 
 impl Slot {
     fn ingest(&mut self, line: &Line) {
+        if self.cwd.is_none()
+            && let Some(cwd) = &line.cwd
+        {
+            self.cwd = Some(cwd.clone());
+        }
         if let Some(model) = &line.model
             && self.model.as_deref() != Some(model.as_str())
         {
@@ -79,6 +88,13 @@ impl Slot {
     fn context_pct(&self) -> f64 {
         let window = self.model_info.context_window().max(1);
         (self.last_context_size as f64 / window as f64).min(1.0)
+    }
+
+    /// Project name = last path component of the captured cwd.
+    fn project(&self) -> Option<&str> {
+        self.cwd
+            .as_deref()
+            .and_then(|c| c.rsplit(['/', '\\']).find(|s| !s.is_empty()))
     }
 }
 
@@ -141,6 +157,19 @@ impl NowStats {
     #[must_use]
     pub fn session_count(&self) -> usize {
         self.sessions.len()
+    }
+
+    /// Distinct project names across active sessions (sorted).
+    #[must_use]
+    pub fn projects(&self) -> Vec<String> {
+        let mut v: Vec<String> = self
+            .sessions
+            .values()
+            .filter_map(|s| s.project().map(str::to_string))
+            .collect();
+        v.sort_unstable();
+        v.dedup();
+        v
     }
 
     /// Header label: the model for a single session, or `N sessions · models…`.
@@ -390,6 +419,26 @@ mod tests {
         assert!(n.cost_usd() > 0.0);
         assert_eq!(n.last_context_size(), 1060);
         assert_eq!(n.session_count(), 1);
+    }
+
+    #[test]
+    fn projects_lists_distinct_basenames() {
+        use serde_json::json;
+        let mut n = NowStats::new();
+        let line = |cwd: &str| {
+            json!({"type":"assistant","timestamp":"2026-07-22T12:00:00Z","cwd":cwd,
+                "message":{"model":"opus","content":[],"usage":{"input_tokens":1,"output_tokens":1}}}).to_string()
+        };
+        n.ingest(
+            0,
+            &Line::parse(&line("/Users/me/go/src/github.com/vankichi/claude-toolkit")).unwrap(),
+        );
+        n.ingest(1, &Line::parse(&line("/Users/me/dotfiles/")).unwrap());
+        n.ingest(2, &Line::parse(&line("/Users/me/dotfiles")).unwrap());
+        assert_eq!(
+            n.projects(),
+            vec!["claude-toolkit".to_string(), "dotfiles".to_string()]
+        );
     }
 
     #[test]
