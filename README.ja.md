@@ -22,7 +22,7 @@ Claude Code を扱うための小さなターミナルツール群を集めた C
 ### ビルド済みバイナリ (推奨)
 
 macOS / Linux はコマンド 1 発で、最新 release のダウンロード → SHA-256 checksum
-検証 → 3 ツールを `~/.local/bin` へ配置 (既存の古いバイナリは置換) まで実行:
+検証 → 4 ツールを `~/.local/bin` へ配置 (既存の古いバイナリは置換) まで実行:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/vankichi/claude-toolkit/main/install.sh | sh
@@ -69,11 +69,65 @@ make uninstall           # 各 binary を $(PREFIX) から削除
 `~/.local/bin` が PATH に通っていれば `make install` 後すぐ叩ける。通っていなければ
 上記 export を `~/.zshrc` 等に追加。
 
+## 使い方
+
+どのツールも `~/.claude/` 配下の Claude Code ログを自動で読むので、引数なしで
+起動するだけ。いずれも全画面 TUI で、`q` で終了。
+
+### `cctop` — 全部入りダッシュボード
+
+まずはこれ。1 画面に 3 パネルを live 表示:
+
+```sh
+cctop
+```
+
+| パネル | 表示内容 |
+|---|---|
+| **Now** `[1]` | active な全セッションを合算 — 合計 token / cost / context % + tokens/分のリアルタイムチャート。`Enter` でセッション別に分解。 |
+| **Top usage** `[2]` | 直近 30 分の横断ランキング (model / agent / skill / command / MCP 別)。 |
+| **Config map** `[3]` | agent / skill / command / plugin / MCP の数と、今まさに動いているもの。 |
+
+キー操作:
+
+| キー | 動作 |
+|---|---|
+| `1` `2` `3` | パネル選択 (`j` / `k` / `Tab` でも移動) |
+| `Enter` | 選択中パネルのフルビューへ drill-down |
+| `c` | **Top usage** でカテゴリ切替: model → agent → skill → command → MCP |
+| `/` | fuzzy filter (入力で絞り込み、`Enter` で確定、`Esc` でクリア) |
+| `Esc` | drill-down から戻る |
+| `q` | 終了 |
+
+調整 (全 flag は `cctop --help`):
+
+```sh
+cctop --refresh-ms 500     # 再描画を 0.25s default → 0.5s ごとに
+cctop --rescan-secs 10     # ログ / config の再スキャンを 10s ごとに (Now は常時 live)
+```
+
+### 個別ツール
+
+1 つのビューに集中したいとき用に、各パネルは単体ツールとしても使える:
+
+```sh
+ccwatch          # active セッションの live モニタ
+ccwatch --watch  # セッション一覧を自動更新し続ける
+
+ccstat           # 横断使用状況ランキング (スナップショット)
+ccstat --watch   # live モード: 自動更新 + 実行中アイテムに spinner
+
+ccmap            # agent / skill / command / plugin / MCP server を一覧
+```
+
+どのツールも `--help` (全 flag) と `--version` に対応。ログ / config の場所は
+`--projects-dir` / `--claude-dir` / `--project-dir` で上書き可 (該当ツールのみ)。
+
 ## Releasing
 
 `v*` tag を push すると [`.github/workflows/release.yml`](.github/workflows/release.yml)
 が発火し、各バイナリをそれぞれの native runner (macOS / Linux / Windows) で
-ビルド → target ごとに 3 ツールを bundle 化 → `SHA256SUMS` を生成し、
+ビルド → target ごとに 4 ツールを bundle 化 → `SHA256SUMS` を生成し、
 archive を添付した GitHub Release を作成する。
 
 ```sh

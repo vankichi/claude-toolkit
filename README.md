@@ -22,7 +22,7 @@ A Cargo workspace of small terminal tools for working with Claude Code.
 ### Prebuilt binaries (recommended)
 
 macOS / Linux — one command downloads the latest release, verifies its SHA-256
-checksum, and installs all three tools into `~/.local/bin`, replacing any older
+checksum, and installs all four tools into `~/.local/bin`, replacing any older
 copies:
 
 ```sh
@@ -70,11 +70,67 @@ make uninstall           # remove each binary from $(PREFIX)
 If `~/.local/bin` is on your `PATH`, the tools are runnable right after
 `make install`. Otherwise add it (see the export above).
 
+## Usage
+
+Every tool reads your Claude Code logs under `~/.claude/` automatically — just
+run it, no setup or arguments needed. Each is a full-screen TUI; press `q` to
+quit.
+
+### `cctop` — the all-in-one dashboard
+
+Start here. One screen, three live panels:
+
+```sh
+cctop
+```
+
+| Panel | What it shows |
+|---|---|
+| **Now** `[1]` | Live rollup of every active session — total tokens, cost, context %, and a real-time tokens/min chart. `Enter` breaks it down per session. |
+| **Top usage** `[2]` | Cross-session ranking over the last 30 min, per model / agent / skill / command / MCP. |
+| **Config map** `[3]` | How many agents / skills / commands / plugins / MCP you have, and which are running right now. |
+
+Keys:
+
+| Key | Action |
+|---|---|
+| `1` `2` `3` | Focus a panel (or `j` / `k` / `Tab` to cycle) |
+| `Enter` | Drill into the focused panel's full view |
+| `c` | On **Top usage**, cycle the category: model → agent → skill → command → MCP |
+| `/` | Fuzzy-filter (type to narrow, `Enter` to apply, `Esc` to clear) |
+| `Esc` | Back out of a drill-down |
+| `q` | Quit |
+
+Tuning (run `cctop --help` for every flag):
+
+```sh
+cctop --refresh-ms 500     # redraw every 0.5s instead of the 0.25s default
+cctop --rescan-secs 10     # re-scan logs / config every 10s (Now stays live)
+```
+
+### The focused tools
+
+Prefer one view at a time? Each panel also ships as its own tool:
+
+```sh
+ccwatch          # live monitor of your active session(s)
+ccwatch --watch  # keep the session list auto-refreshing
+
+ccstat           # cross-session usage ranking (one-shot snapshot)
+ccstat --watch   # live mode: auto-refresh + a spinner on what's running now
+
+ccmap            # browse every agent / skill / command / plugin / MCP server
+```
+
+Every tool accepts `--help` (full flag list) and `--version`. Log and config
+locations can be overridden with `--projects-dir` / `--claude-dir` /
+`--project-dir` where they apply.
+
 ## Releasing
 
 Pushing a `v*` tag triggers [`.github/workflows/release.yml`](.github/workflows/release.yml),
 which builds every binary on its native runner (macOS / Linux / Windows),
-bundles the three tools per target, generates `SHA256SUMS`, and publishes a
+bundles the four tools per target, generates `SHA256SUMS`, and publishes a
 GitHub Release with the archives attached.
 
 ```sh
