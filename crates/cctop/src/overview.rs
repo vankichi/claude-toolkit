@@ -99,6 +99,41 @@ fn session_line(s: &crate::now::SessionView) -> Line<'static> {
     ])
 }
 
+/// Legend label: drop the shared `claude-` prefix (so model variants like
+/// `opus-4-8` vs `opus-4-7` stay distinguishable) and cap the length.
+fn legend_label(raw: &str) -> String {
+    raw.strip_prefix("claude-")
+        .unwrap_or(raw)
+        .chars()
+        .take(14)
+        .collect()
+}
+
+/// Pack `(label, color)` swatches into as many rows as needed to fit `width`,
+/// so every series shows (a single-line legend clips once names overflow).
+/// Bounded by `max_rows` as a safety net; each entry is `▉label `.
+fn pack_legend(entries: &[(String, Color)], width: usize, max_rows: usize) -> Vec<Line<'static>> {
+    let mut rows: Vec<Vec<Span<'static>>> = vec![Vec::new()];
+    let mut cur = 0usize;
+    for (label, color) in entries {
+        let text = format!("▉{label} ");
+        let w = text.chars().count();
+        let row = rows.last_mut().expect("at least one row");
+        if !row.is_empty() && cur + w > width {
+            if rows.len() >= max_rows {
+                break;
+            }
+            rows.push(Vec::new());
+            cur = 0;
+        }
+        rows.last_mut()
+            .expect("at least one row")
+            .push(Span::styled(text, Style::default().fg(*color)));
+        cur += w;
+    }
+    rows.into_iter().map(Line::from).collect()
+}
+
 fn draw_now(f: &mut Frame<'_>, area: Rect, dash: &Dashboard, app: &App) {
     let now = &dash.now;
     let block = panel_block("Now  [1]", Panel::Now, app);
@@ -223,9 +258,16 @@ fn draw_usage(f: &mut Frame<'_>, area: Rect, dash: &Dashboard, app: &App) {
     }
 
     let names: Vec<&str> = by_name.iter().map(|(n, _)| n.as_str()).collect();
+    // Models are a small fixed set, so plot and label every one; other
+    // categories (tools/skills/…) can have many names, so keep the top few.
+    let max_series = if is_model {
+        names.len()
+    } else {
+        TOP_USAGE_SERIES
+    };
     let series: Vec<cctk::chart::LineSeries> = by_name
         .iter()
-        .take(TOP_USAGE_SERIES)
+        .take(max_series)
         .map(|(name, points)| cctk::chart::LineSeries {
             points: points.clone(),
             label: name.clone(),
@@ -233,15 +275,17 @@ fn draw_usage(f: &mut Frame<'_>, area: Rect, dash: &Dashboard, app: &App) {
         })
         .collect();
 
-    let parts = Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).split(inner);
-    let legend: Vec<Span> = series
+    // Wrap the legend across as many rows as needed so no series is hidden.
+    let legend_entries: Vec<(String, Color)> = series
         .iter()
-        .map(|s| {
-            let name: String = s.label.chars().take(12).collect();
-            Span::styled(format!("▉{name} "), Style::default().fg(s.color))
-        })
+        .map(|s| (legend_label(&s.label), s.color))
         .collect();
-    f.render_widget(Paragraph::new(Line::from(legend)), parts[0]);
+    let max_rows = usize::from(inner.height).saturating_sub(2).max(1);
+    let legend = pack_legend(&legend_entries, usize::from(inner.width), max_rows);
+    #[allow(clippy::cast_possible_truncation)] // rows bounded by max_rows (<= height)
+    let legend_h = (legend.len() as u16).max(1);
+    let parts = Layout::vertical([Constraint::Length(legend_h), Constraint::Min(0)]).split(inner);
+    f.render_widget(Paragraph::new(legend), parts[0]);
 
     let y_max = series
         .iter()
