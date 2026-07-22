@@ -110,6 +110,22 @@ pub fn active_items_in_tail(
     out
 }
 
+/// True if `tail` holds at least one parseable line whose timestamp is within
+/// `window` of `now` — i.e. the session emitted a line recently, regardless of
+/// whether that line carries an extractable category. Used to mark a live
+/// subagent transcript as "running" even when its recent lines are tool
+/// results or plain turns.
+#[must_use]
+pub fn tail_has_recent_line(tail: &[u8], now: DateTime<Utc>, window: Duration) -> bool {
+    let cutoff = now - window;
+    let content = String::from_utf8_lossy(tail);
+    content.lines().any(|raw| {
+        Line::parse(raw)
+            .and_then(|l| l.timestamp_utc())
+            .is_some_and(|ts| ts >= cutoff)
+    })
+}
+
 /// Map an extracted usage record to its `(category, name)` key.
 fn item_key(item: &Extracted) -> (Category, String) {
     match item {
@@ -200,6 +216,21 @@ mod tests {
             items.iter().filter(|(c, _)| *c == Category::Model).count(),
             1
         );
+    }
+
+    #[test]
+    fn tail_has_recent_line_tracks_any_recent_timestamp() {
+        // A tool-result user line carries no extractable category, but its
+        // recency still marks the (subagent) session as live.
+        let recent =
+            r#"{"type":"user","timestamp":"2026-07-17T11:59:40Z","message":{"content":"ok"}}"#;
+        assert!(tail_has_recent_line(recent.as_bytes(), now(), window()));
+        let old =
+            r#"{"type":"user","timestamp":"2026-07-17T11:00:00Z","message":{"content":"ok"}}"#;
+        assert!(!tail_has_recent_line(old.as_bytes(), now(), window()));
+        // No timestamp -> cannot be judged recent.
+        let no_ts = r#"{"type":"user","message":{"content":"ok"}}"#;
+        assert!(!tail_has_recent_line(no_ts.as_bytes(), now(), window()));
     }
 
     #[test]

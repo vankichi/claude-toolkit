@@ -7,9 +7,10 @@
 //! directory name. Path/tail primitives live in [`cctk::paths`].
 
 use crate::live::{self, ActiveSet};
+use crate::model::Category;
 use crate::usage::{LineData, UsageDb};
 use cctk::jsonl::Line;
-use cctk::paths::{project_label, read_tail, session_files};
+use cctk::paths::{is_subagent_file, project_label, read_tail, session_files, subagent_short_id};
 use chrono::{DateTime, Duration, NaiveDate, Utc};
 use std::path::{Path, PathBuf};
 
@@ -126,6 +127,12 @@ pub fn compute_active(
         set.record_session();
         let tail = read_tail(&file, tail_bytes);
         set.absorb(live::active_items_in_tail(&tail, now, window));
+        // A live subagent transcript is itself the signal that an Agent is
+        // running: its own lines carry the subagent's model/skills/tools but
+        // never an `Agent` tool_use for itself, so surface it by its short id.
+        if is_subagent_file(&file) && live::tail_has_recent_line(&tail, now, window) {
+            set.absorb(std::iter::once((Category::Agent, subagent_short_id(&file))));
+        }
     }
     set
 }
@@ -238,5 +245,37 @@ mod tests {
         assert_eq!(set.session_count(), 1);
         assert!(set.is_active(Category::Model, "opus"));
         assert!(set.is_active(Category::Skill, "brainstorm"));
+    }
+
+    #[test]
+    fn compute_active_surfaces_a_running_subagent_as_an_agent() {
+        let tmp = tempfile::tempdir().unwrap();
+        let now = Utc::now();
+        let line = format!(
+            r#"{{"type":"assistant","timestamp":"{}","isSidechain":true,"message":{{"model":"opus","content":[{{"type":"tool_use","name":"Bash","input":{{"command":"ls"}}}}],"usage":{{"input_tokens":1,"output_tokens":1}}}}}}"#,
+            now.to_rfc3339()
+        );
+        // A live subagent transcript nested under <session>/subagents/.
+        let sub = tmp.path().join("p").join("sess").join("subagents");
+        std::fs::create_dir_all(&sub).unwrap();
+        std::fs::write(
+            sub.join("agent-aed9405e1964a27e1.jsonl"),
+            format!("{line}\n"),
+        )
+        .unwrap();
+
+        let set = compute_active(
+            &ScanConfig {
+                projects_dir: tmp.path().to_path_buf(),
+            },
+            now,
+            Duration::days(1),
+            16 * 1024,
+        );
+        // The subagent surfaces as a running Agent by its short id; its Bash
+        // tool_use is not a config-map category and is not listed.
+        assert!(set.is_active(Category::Agent, "aed9405e"));
+        assert!(set.is_active(Category::Model, "opus"));
+        assert_eq!(set.session_count(), 1);
     }
 }
