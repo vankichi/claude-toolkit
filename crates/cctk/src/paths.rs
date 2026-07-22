@@ -8,11 +8,14 @@ use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
-/// All `*.jsonl` files exactly one directory below `projects_dir`
-/// (`projects_dir/<encoded-project>/<session>.jsonl`). Only real files are
-/// returned — symlinks and non-`.jsonl` entries are skipped so the read-only
-/// contract can't be tricked into following a link outside the tree. Returns
-/// an empty Vec when `projects_dir` is missing or unreadable.
+/// All session-transcript `*.jsonl` files under `projects_dir`: the per-session
+/// files one level down (`projects_dir/<encoded-project>/<session>.jsonl`) plus
+/// subagent transcripts nested deeper (`…/<session>/subagents/agent-<id>.jsonl`,
+/// written while a Task/Agent subagent runs). Recurses into real subdirectories
+/// only — symlinked files and directories are never collected or followed, so
+/// the read-only contract can't be tricked into leaving the tree — and is
+/// bounded to [`MAX_SESSION_DEPTH`] as a loop guard. Returns an empty Vec when
+/// `projects_dir` is missing or unreadable.
 #[must_use]
 pub fn session_files(projects_dir: &Path) -> Vec<PathBuf> {
     let mut out = Vec::new();
@@ -20,22 +23,61 @@ pub fn session_files(projects_dir: &Path) -> Vec<PathBuf> {
         return out;
     };
     for pd in project_dirs.flatten() {
-        if !pd.file_type().is_ok_and(|t| t.is_dir()) {
-            continue;
-        }
-        let Ok(sessions) = std::fs::read_dir(pd.path()) else {
-            continue;
-        };
-        for se in sessions.flatten() {
-            let path = se.path();
-            let is_jsonl = path.extension().and_then(|e| e.to_str()) == Some("jsonl");
-            let is_file = se.file_type().is_ok_and(|t| t.is_file());
-            if is_jsonl && is_file {
-                out.push(path);
-            }
+        // Descend only into real project directories — never a `*.jsonl` sitting
+        // directly in `projects_dir`, nor a symlink — preserving the original
+        // "ignore top-level files, don't follow links" contract.
+        if pd.file_type().is_ok_and(|t| t.is_dir()) {
+            collect_jsonl(&pd.path(), 1, &mut out);
         }
     }
     out
+}
+
+/// Depth limit for [`session_files`]' descent below `projects_dir`. Subagent
+/// transcripts sit two levels below a project dir (`<session>/subagents/…`); the
+/// headroom tolerates future nesting while capping pathologically deep trees.
+const MAX_SESSION_DEPTH: usize = 8;
+
+/// Collect real `*.jsonl` files in `dir`, recursing into real subdirectories up
+/// to [`MAX_SESSION_DEPTH`]. `depth` is `dir`'s level below `projects_dir`
+/// (1 = a project dir). Symlinks are neither collected nor followed.
+fn collect_jsonl(dir: &Path, depth: usize, out: &mut Vec<PathBuf>) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for e in entries.flatten() {
+        let Ok(ft) = e.file_type() else { continue };
+        let path = e.path();
+        if ft.is_file() {
+            if path.extension().and_then(|x| x.to_str()) == Some("jsonl") {
+                out.push(path);
+            }
+        } else if ft.is_dir() && depth < MAX_SESSION_DEPTH {
+            collect_jsonl(&path, depth + 1, out);
+        }
+        // Symlinks (ft.is_symlink()): neither collected nor followed.
+    }
+}
+
+/// True when `file` is a subagent transcript — it lives under a `subagents/`
+/// directory (`…/<session>/subagents/agent-<id>.jsonl`) rather than being a
+/// top-level per-session transcript.
+#[must_use]
+pub fn is_subagent_file(file: &Path) -> bool {
+    file.components().any(|c| c.as_os_str() == "subagents")
+}
+
+/// Short display id for a subagent transcript: its file stem with any leading
+/// `agent-` dropped and truncated, e.g. `agent-aed9405e1964a27e1` -> `aed9405e`.
+/// Falls back to `agent` when the stem is unreadable.
+#[must_use]
+pub fn subagent_short_id(file: &Path) -> String {
+    let stem = file.file_stem().and_then(|s| s.to_str()).unwrap_or("agent");
+    stem.strip_prefix("agent-")
+        .unwrap_or(stem)
+        .chars()
+        .take(8)
+        .collect()
 }
 
 /// Basename of `cwd` if present, else the file's parent directory name.
@@ -121,6 +163,47 @@ mod tests {
         files.sort();
         assert_eq!(files.len(), 3);
         assert!(files.iter().all(|p| p.extension().unwrap() == "jsonl"));
+    }
+
+    #[test]
+    fn session_files_includes_subagent_transcripts() {
+        let tmp = tempfile::tempdir().unwrap();
+        // A normal per-session transcript...
+        write_session(tmp.path(), "proj-a", "sess.jsonl", &["{}"]);
+        // ...plus a subagent transcript nested under <session>/subagents/.
+        let sub = tmp.path().join("proj-a").join("sess").join("subagents");
+        std::fs::create_dir_all(&sub).unwrap();
+        let agent = sub.join("agent-aed9405e1964a27e1.jsonl");
+        std::fs::write(&agent, "{}\n").unwrap();
+
+        let files = session_files(tmp.path());
+        assert!(
+            files.contains(&agent),
+            "subagent transcript must be discovered"
+        );
+        assert!(files.iter().any(|p| p.file_name().unwrap() == "sess.jsonl"));
+        assert_eq!(files.len(), 2);
+    }
+
+    #[test]
+    fn is_subagent_file_detects_subagents_dir() {
+        assert!(is_subagent_file(Path::new(
+            "/x/-proj/sess/subagents/agent-abc123.jsonl"
+        )));
+        assert!(!is_subagent_file(Path::new("/x/-proj/sess.jsonl")));
+    }
+
+    #[test]
+    fn subagent_short_id_strips_prefix_and_truncates() {
+        assert_eq!(
+            subagent_short_id(Path::new("/x/subagents/agent-aed9405e1964a27e1.jsonl")),
+            "aed9405e"
+        );
+        // Without the agent- prefix, the stem is truncated as-is.
+        assert_eq!(
+            subagent_short_id(Path::new("/x/subagents/weirdname.jsonl")),
+            "weirdnam"
+        );
     }
 
     #[cfg(unix)]
