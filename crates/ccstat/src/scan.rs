@@ -10,7 +10,7 @@ use crate::live::{self, ActiveSet};
 use crate::model::Category;
 use crate::usage::{LineData, UsageDb};
 use cctk::jsonl::Line;
-use cctk::paths::{is_subagent_file, project_label, read_tail, session_files, subagent_short_id};
+use cctk::paths::{is_subagent_file, project_label, read_tail, session_files, subagent_label};
 use chrono::{DateTime, Duration, NaiveDate, Utc};
 use std::path::{Path, PathBuf};
 
@@ -131,7 +131,7 @@ pub fn compute_active(
         // running: its own lines carry the subagent's model/skills/tools but
         // never an `Agent` tool_use for itself, so surface it by its short id.
         if is_subagent_file(&file) && live::tail_has_recent_line(&tail, now, window) {
-            set.absorb(std::iter::once((Category::Agent, subagent_short_id(&file))));
+            set.absorb(std::iter::once((Category::Agent, subagent_label(&file))));
         }
     }
     set
@@ -272,9 +272,10 @@ mod tests {
             Duration::days(1),
             16 * 1024,
         );
-        // The subagent surfaces as a running Agent by its short id; its Bash
-        // tool_use is not a config-map category and is not listed.
-        assert!(set.is_active(Category::Agent, "aed9405e"));
+        // The subagent surfaces as a running Agent by its short handle (the id
+        // with its `agent-a` prefix dropped); its Bash tool_use is not a
+        // config-map category and is not listed.
+        assert!(set.is_active(Category::Agent, "ed9405e1"));
         assert!(set.is_active(Category::Model, "opus"));
         assert_eq!(set.session_count(), 1);
     }

@@ -379,11 +379,10 @@ impl NowStats {
 
 /// Short session id: the first dash-segment of the file-stem uuid.
 fn short_id(id: &str) -> String {
-    // A subagent transcript stem is `agent-<hash>`; splitting on '-' would
-    // collapse every subagent to "agent", so mark it as a child with its hash.
-    if let Some(hash) = id.strip_prefix("agent-") {
-        let short: String = hash.chars().take(8).collect();
-        return format!("⤷ {short}");
+    // A subagent transcript stem is `agent-<id>`; label it by the agent name
+    // (or short handle) so it reads as a specific child, not a bare "agent".
+    if id.starts_with("agent-") {
+        return format!("⤷ {}", cctk::paths::subagent_label_from_stem(id));
     }
     id.split('-').next().unwrap_or(id).to_string()
 }
@@ -505,8 +504,12 @@ mod tests {
 
     #[test]
     fn short_id_marks_subagent_transcripts() {
-        // A subagent stem reads as a child agent, not "agent".
-        assert_eq!(short_id("agent-aed9405e1964a27e1"), "⤷ aed9405e");
+        // A named subagent shows its name; an anonymous one, its short handle.
+        assert_eq!(
+            short_id("agent-adev-cycle-run-86696ab82aa59095"),
+            "⤷ dev-cycle-run"
+        );
+        assert_eq!(short_id("agent-aeeea4a16feb464cc"), "⤷ eeea4a16");
         // A normal session uuid keeps its first segment.
         assert_eq!(short_id("83d82d45-9ad1-421e-b175"), "83d82d45");
     }

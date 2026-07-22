@@ -67,17 +67,48 @@ pub fn is_subagent_file(file: &Path) -> bool {
     file.components().any(|c| c.as_os_str() == "subagents")
 }
 
-/// Short display id for a subagent transcript: its file stem with any leading
-/// `agent-` dropped and truncated, e.g. `agent-aed9405e1964a27e1` -> `aed9405e`.
-/// Falls back to `agent` when the stem is unreadable.
+/// Display label for a subagent transcript, telling *which* agent is running.
+///
+/// The runtime ids a subagent `a[<name>-]<16-hex>` and stores its transcript as
+/// `agent-<id>.jsonl`. A *named* agent keeps its name in the id
+/// (`agent-adev-cycle-run-86696ab82aa59095` → `dev-cycle-run`); an anonymous one
+/// is just `agent-a<16-hex>`, for which we fall back to the short handle
+/// (`agent-aeeea4a16feb464cc` → `eeea4a16`). The agent *type* (general-purpose,
+/// …) is not recorded in the transcript while it runs, so anonymous agents can
+/// only be shown by handle. Falls back to `agent` when the stem is unreadable.
 #[must_use]
-pub fn subagent_short_id(file: &Path) -> String {
+pub fn subagent_label(file: &Path) -> String {
     let stem = file.file_stem().and_then(|s| s.to_str()).unwrap_or("agent");
-    stem.strip_prefix("agent-")
-        .unwrap_or(stem)
-        .chars()
-        .take(8)
-        .collect()
+    subagent_label_from_stem(stem)
+}
+
+/// [`subagent_label`] from a file *stem* (`agent-<id>`), for callers that hold
+/// the stem string rather than a path.
+#[must_use]
+pub fn subagent_label_from_stem(stem: &str) -> String {
+    let id = stem.strip_prefix("agent-").unwrap_or(stem);
+    // Drop the single leading 'a' the runtime prefixes onto every agent id.
+    let body = id.strip_prefix('a').unwrap_or(id);
+    // A named agent is `<name>-<16-hex>`; the tail is the handle. If there is a
+    // name before it, that name is the most useful label.
+    if let Some((name, handle)) = body.rsplit_once('-')
+        && is_hex16(handle)
+        && !name.is_empty()
+    {
+        return name.to_string();
+    }
+    // Anonymous / unrecognised: the short handle.
+    let handle = body.rsplit('-').next().unwrap_or(body);
+    if handle.is_empty() {
+        "agent".to_string()
+    } else {
+        handle.chars().take(8).collect()
+    }
+}
+
+/// True for a 16-char lowercase-hex agent handle.
+fn is_hex16(s: &str) -> bool {
+    s.len() == 16 && s.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
 /// Basename of `cwd` if present, else the file's parent directory name.
@@ -194,15 +225,23 @@ mod tests {
     }
 
     #[test]
-    fn subagent_short_id_strips_prefix_and_truncates() {
+    fn subagent_label_extracts_name_or_short_handle() {
+        // Anonymous agent (`a<16-hex>`) -> short handle.
         assert_eq!(
-            subagent_short_id(Path::new("/x/subagents/agent-aed9405e1964a27e1.jsonl")),
-            "aed9405e"
+            subagent_label(Path::new("/x/subagents/agent-aeeea4a16feb464cc.jsonl")),
+            "eeea4a16"
         );
-        // Without the agent- prefix, the stem is truncated as-is.
+        // Named agent (`a<name>-<16-hex>`) -> the name.
         assert_eq!(
-            subagent_short_id(Path::new("/x/subagents/weirdname.jsonl")),
-            "weirdnam"
+            subagent_label(Path::new(
+                "/x/subagents/agent-adev-cycle-run-86696ab82aa59095.jsonl"
+            )),
+            "dev-cycle-run"
+        );
+        // A multi-segment name is kept whole.
+        assert_eq!(
+            subagent_label_from_stem("agent-adev-cycle-wkb113-5bced311577d9e38"),
+            "dev-cycle-wkb113"
         );
     }
 
