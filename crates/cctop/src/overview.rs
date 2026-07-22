@@ -71,8 +71,8 @@ pub fn draw(f: &mut Frame<'_>, dash: &Dashboard, app: &App) {
     draw_recent(f, rows[2], dash, app);
 }
 
-/// Short project summary for the Now header: the project, up to two joined,
-/// or a count. Falls back to "active session" before any cwd is seen.
+/// Short project summary for the Now drill-down: the project, up to two
+/// joined, or a count. Falls back to "active session" before any cwd is seen.
 fn project_label(projects: &[String]) -> String {
     match projects.len() {
         0 => "active session".to_string(),
@@ -81,36 +81,56 @@ fn project_label(projects: &[String]) -> String {
     }
 }
 
+/// One `project · name   model   tokens   cost   ctx%` line for a session.
+fn session_line(s: &crate::now::SessionView) -> Line<'static> {
+    let project: String = s.project.chars().take(16).collect();
+    let name: String = s.name.chars().take(18).collect();
+    Line::from(vec![
+        Span::styled(project, Style::default().fg(Color::Cyan)),
+        Span::raw(" · "),
+        Span::styled(name, Style::default().add_modifier(Modifier::BOLD)),
+        Span::raw(format!(
+            "   {}   {} tok   {}   {:.0}%",
+            s.model,
+            fmt_tokens(s.tokens),
+            fmt_cost(s.cost_usd),
+            s.context_pct * 100.0,
+        )),
+    ])
+}
+
 fn draw_now(f: &mut Frame<'_>, area: Rect, dash: &Dashboard, app: &App) {
     let now = &dash.now;
-    let title = format!("Now · {}  [1]", project_label(&now.projects()));
-    let block = panel_block(&title, Panel::Now, app);
+    let block = panel_block("Now  [1]", Panel::Now, app);
     let inner = block.inner(area);
     f.render_widget(block, area);
 
-    // Two header rows (model/tokens/cost + context gauge) then the rate chart.
-    let parts = Layout::vertical([Constraint::Length(2), Constraint::Min(0)]).split(inner);
-    let header = parts[0];
-    let chart_area = parts[1];
+    // A per-session list on top, then the total token-rate chart. Reserve at
+    // least 3 rows for the chart; cap the list to what's left.
+    let sessions = now.sessions();
+    let max_lines = usize::from(inner.height).saturating_sub(3).clamp(1, 4);
+    let mut lines: Vec<Line> = Vec::new();
+    if sessions.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "waiting for an active session…",
+            Style::default().fg(Color::DarkGray),
+        )));
+    } else if sessions.len() > max_lines {
+        for s in sessions.iter().take(max_lines - 1) {
+            lines.push(session_line(s));
+        }
+        lines.push(Line::from(Span::styled(
+            format!("+{} more sessions", sessions.len() - (max_lines - 1)),
+            Style::default().fg(Color::DarkGray),
+        )));
+    } else {
+        lines.extend(sessions.iter().map(session_line));
+    }
 
-    let ctx_w = usize::from(header.width.saturating_sub(28)).clamp(6, 40);
-    let ctx_bar = cctk::viz::dot_bar(now.context_pct(), ctx_w);
-    let pct = now.context_pct() * 100.0;
-    let head = Line::from(vec![
-        Span::styled(
-            now.model_label(),
-            Style::default()
-                .fg(Color::Magenta)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::raw(format!(
-            "   {} tok   {}",
-            fmt_tokens(now.total_tokens()),
-            fmt_cost(now.cost_usd())
-        )),
-    ]);
-    let ctx_line = Line::from(format!("ctx {ctx_bar} {pct:.0}%"));
-    f.render_widget(Paragraph::new(vec![head, ctx_line]), header);
+    #[allow(clippy::cast_possible_truncation)] // lines.len() is bounded by max_lines
+    let list_h = (lines.len() as u16).max(1);
+    let parts = Layout::vertical([Constraint::Length(list_h), Constraint::Min(0)]).split(inner);
+    f.render_widget(Paragraph::new(lines), parts[0]);
 
     let points = now.rate_points_total(
         ccstat::model::Category::Model,
@@ -118,7 +138,7 @@ fn draw_now(f: &mut Frame<'_>, area: Rect, dash: &Dashboard, app: &App) {
         RATE_WINDOW_SECS,
         RATE_BINS,
     );
-    draw_rate_chart(f, chart_area, &points);
+    draw_rate_chart(f, parts[1], &points);
 }
 
 /// Wall-clock window (seconds) shared by the Now rate chart and the Top-usage
