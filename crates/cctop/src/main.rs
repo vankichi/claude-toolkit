@@ -5,6 +5,7 @@
 //! skills / commands / plugins / MCP). Select a panel with 1/2/3 (or j/k) and
 //! press Enter to drill into its full view; `/` fuzzy-filters; `q` quits.
 
+mod agents;
 mod app;
 mod now;
 mod overview;

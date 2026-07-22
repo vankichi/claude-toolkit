@@ -60,6 +60,7 @@ pub async fn run(cfg: RunConfig) -> Result<()> {
     let mut tails: HashMap<PathBuf, Tail> = HashMap::new();
     let mut next_tag: usize = 0;
     reconcile_tails(&cfg.projects_dir, &mut dash, &tx, &mut tails, &mut next_tag);
+    dash.now.apply_names(&crate::agents::names().await);
 
     let mut terminal = ratatui::try_init().inspect_err(|_| ratatui::restore())?;
     let result = run_loop(
@@ -116,6 +117,7 @@ async fn run_loop(
                 let today = Utc::now().date_naive();
                 dash.rescan(scan_cfg, ctx, today);
                 reconcile_tails(&cfg.projects_dir, dash, tx, tails, next_tag);
+                dash.now.apply_names(&crate::agents::names().await);
             }
             maybe_ev = events.next() => {
                 let Some(Ok(ev)) = maybe_ev else { continue };
@@ -234,6 +236,12 @@ fn reconcile_tails(
         }
         let tag = *next_tag;
         *next_tag += 1;
+        let id = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or_default()
+            .to_string();
+        dash.now.register_session(tag, id);
         let handle = cctk::tail::spawn(path.clone(), tag, tx.clone());
         tails.insert(path, (tag, handle));
     }

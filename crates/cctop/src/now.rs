@@ -98,10 +98,30 @@ impl Slot {
     }
 }
 
+/// Identity of a tailed session: its file-stem id and (once known) the human
+/// name from `claude agents --json`.
+#[derive(Debug, Default)]
+struct SessionMeta {
+    id: String,
+    name: Option<String>,
+}
+
+/// One active session's line for the Now panel.
+pub struct SessionView {
+    pub project: String,
+    pub name: String,
+    pub model: String,
+    pub tokens: u64,
+    pub cost_usd: f64,
+    pub context_pct: f64,
+}
+
 /// Rollup across all active sessions.
 #[derive(Debug, Default)]
 pub struct NowStats {
     sessions: BTreeMap<usize, Slot>,
+    /// Per-tag session identity (file-stem id + resolved name).
+    meta: HashMap<usize, SessionMeta>,
     /// Timestamped usage events across all sessions, oldest first, capped:
     /// `(time, category, name, weight)`. Weight is tokens for `Model` and 1
     /// (one invocation) for agents/skills/commands/MCP, so the Top-usage chart
@@ -148,15 +168,58 @@ impl NowStats {
         }
     }
 
+    /// Register a tailed session's file-stem id (called when a tail spawns).
+    pub fn register_session(&mut self, tag: usize, id: String) {
+        self.meta
+            .entry(tag)
+            .or_insert(SessionMeta { id, name: None });
+    }
+
+    /// Apply resolved session names (id → name from `claude agents --json`).
+    pub fn apply_names(&mut self, names: &HashMap<String, String>) {
+        for m in self.meta.values_mut() {
+            m.name = names.get(&m.id).cloned();
+        }
+    }
+
     /// Forget a session that is no longer active (its totals leave the rollup;
     /// its already-logged events age out of the rate window on their own).
     pub fn drop_session(&mut self, tag: usize) {
         self.sessions.remove(&tag);
+        self.meta.remove(&tag);
     }
 
     #[must_use]
     pub fn session_count(&self) -> usize {
         self.sessions.len()
+    }
+
+    /// One line per active session (project · name · model · tokens · cost ·
+    /// context), sorted by tokens descending. Name is the resolved agent name,
+    /// else the short session id.
+    #[must_use]
+    pub fn sessions(&self) -> Vec<SessionView> {
+        let mut views: Vec<SessionView> = self
+            .sessions
+            .iter()
+            .map(|(tag, slot)| {
+                let meta = self.meta.get(tag);
+                let name = meta
+                    .and_then(|m| m.name.clone())
+                    .or_else(|| meta.map(|m| short_id(&m.id)))
+                    .unwrap_or_else(|| "?".to_string());
+                SessionView {
+                    project: slot.project().unwrap_or("?").to_string(),
+                    name,
+                    model: slot.model.clone().unwrap_or_else(|| "—".to_string()),
+                    tokens: slot.tokens(),
+                    cost_usd: slot.cost_usd,
+                    context_pct: slot.context_pct(),
+                }
+            })
+            .collect();
+        views.sort_by(|a, b| b.tokens.cmp(&a.tokens).then_with(|| a.name.cmp(&b.name)));
+        views
     }
 
     /// Distinct project names across active sessions (sorted).
@@ -332,6 +395,11 @@ impl NowStats {
     }
 }
 
+/// Short session id: the first dash-segment of the file-stem uuid.
+fn short_id(id: &str) -> String {
+    id.split('-').next().unwrap_or(id).to_string()
+}
+
 /// The bucket index for `ts` within `[start, now]` split into `bins`, or `None`
 /// if `ts` is outside the window.
 fn bucket_index(
@@ -419,6 +487,31 @@ mod tests {
         assert!(n.cost_usd() > 0.0);
         assert_eq!(n.last_context_size(), 1060);
         assert_eq!(n.session_count(), 1);
+    }
+
+    #[test]
+    fn sessions_view_uses_name_then_short_id_and_sorts_by_tokens() {
+        use serde_json::json;
+        use std::collections::HashMap;
+        let mut n = NowStats::new();
+        let line = |cwd: &str, tok: u64| {
+            json!({"type":"assistant","timestamp":"2026-07-22T12:00:00Z","cwd":cwd,
+                "message":{"model":"opus","content":[],"usage":{"input_tokens":tok,"output_tokens":0}}}).to_string()
+        };
+        n.register_session(0, "aaaa1111-x-y-z".into());
+        n.register_session(1, "bbbb2222-x-y-z".into());
+        n.ingest(0, &Line::parse(&line("/w/claude-toolkit", 100)).unwrap());
+        n.ingest(1, &Line::parse(&line("/w/dotfiles", 500)).unwrap());
+        let mut names = HashMap::new();
+        names.insert("aaaa1111-x-y-z".to_string(), "cctop-dev".to_string());
+        n.apply_names(&names);
+        let v = n.sessions();
+        assert_eq!(v.len(), 2);
+        // sorted by tokens desc -> dotfiles (500) first
+        assert_eq!(v[0].project, "dotfiles");
+        assert_eq!(v[0].name, "bbbb2222"); // no name -> short id
+        assert_eq!(v[1].project, "claude-toolkit");
+        assert_eq!(v[1].name, "cctop-dev"); // resolved name
     }
 
     #[test]
