@@ -4,7 +4,7 @@ members = ["crates/*"]
 
 [workspace.package]
 edition = "2024"
-rust-version = "1.90"
+rust-version = "1.99"
 license = "MIT"
 authors = ["vankichi"]
 repository = "https://github.com/vankichi/claude-toolkit"
@@ -37,6 +37,8 @@ missing_panics_doc = "allow"
 cast_precision_loss = "allow"
 # Field names like `*_per_mtok` and `*_tokens` are domain-meaningful suffixes.
 struct_field_names = "allow"
+# Tests assert emptiness directly; the typed-empty-array form clippy suggests hurts readability.
+assert_is_empty = "allow"
 
 # Distribution-grade release profile: smallest, fastest binaries.
 [profile.release]

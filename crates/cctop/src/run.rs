@@ -37,7 +37,7 @@ const TAIL_CHANNEL_CAPACITY: usize = 1024;
 /// A session whose log was modified within this window counts as "active" and
 /// is tailed into the Now rollup. Matches the rate chart's 15-minute window so
 /// tailed sessions always have data to plot.
-const ACTIVE_WINDOW: Duration = Duration::from_secs(900);
+const ACTIVE_WINDOW: Duration = Duration::from_mins(15);
 
 /// A live tail: its channel tag and the abortable task handle.
 type Tail = (usize, JoinHandle<Result<()>>);
