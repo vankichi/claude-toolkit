@@ -93,6 +93,9 @@ struct HookInput {
     /// `SessionStart` only: startup / resume / clear / compact / fork.
     #[serde(default)]
     source: Option<String>,
+    /// Set when the hook fires inside a subagent (same `session_id`).
+    #[serde(default)]
+    agent_id: Option<String>,
 }
 
 /// What [`handle`] did.
@@ -141,6 +144,8 @@ pub fn handle(
             }
             Status::Waiting
         }
+        // A subagent's batch says nothing about a wait on the main thread.
+        Event::PostToolBatch if input.agent_id.is_some() => return Ok(Outcome::Ignored),
         Event::PostToolBatch => return resume_after_wait(state_dir, &path, now),
         Event::Stop => Status::Done,
         Event::StopFailure => Status::Failed,
@@ -215,7 +220,7 @@ pub fn handle(
 }
 
 /// `PostToolBatch` fires after every batch of tool calls, so it stays cheap: no
-/// probes, no directories created, and nothing written unless a waiting
+/// probes, and nothing written (nor any directory created) unless a waiting
 /// session has had its prompt answered (the approved tools just ran).
 fn resume_after_wait(state_dir: &Path, path: &Path, now: DateTime<FixedOffset>) -> Result<Outcome> {
     if !(fsx::is_real_dir(state_dir)? && fsx::is_real_dir(&focus::sessions_dir(state_dir))?) {
@@ -244,15 +249,11 @@ fn persist(
     event: Event,
     now: DateTime<FixedOffset>,
 ) -> Result<()> {
-    let sessions = focus::sessions_dir(state_dir);
-    if !newer_on_disk(
-        &sessions.join(focus::session_file_name(&state.session_id)),
-        now,
-    ) {
+    if !newer_on_disk(&focus::session_path(state_dir, &state.session_id), now) {
         let mut json = serde_json::to_vec_pretty(state).context("serialize state")?;
         json.push(b'\n');
         fsx::write_atomic(
-            &sessions,
+            &focus::sessions_dir(state_dir),
             &focus::session_file_name(&state.session_id),
             &json,
         )?;
@@ -325,12 +326,18 @@ where
     t.to_rfc3339_opts(SecondsFormat::Millis, false)
 }
 
+/// How far ahead of `now` a stored `updated_at` may be and still count as an
+/// overlapping hook that started later. Overlaps last at most the probe
+/// budget; anything further ahead is a wall clock that stepped backwards, and
+/// must not freeze updates until the clock catches up.
+const OVERLAP_WINDOW: chrono::TimeDelta = chrono::TimeDelta::seconds(10);
+
 /// True when the session file on disk was written by a hook that started
-/// after `now`.
+/// after `now` (within [`OVERLAP_WINDOW`]).
 fn newer_on_disk(path: &Path, now: DateTime<FixedOffset>) -> bool {
     focus::read_session(path)
         .and_then(|s| DateTime::parse_from_rfc3339(&s.updated_at).ok())
-        .is_some_and(|t| t > now)
+        .is_some_and(|t| t > now && t - now <= OVERLAP_WINDOW)
 }
 
 /// How much of the transcript head to scan for its first `timestamp`.
@@ -371,19 +378,25 @@ fn clean_project(raw: &str) -> Option<String> {
     (!trimmed.is_empty()).then(|| trimmed.to_string())
 }
 
-/// Unicode format characters (category Cf) that change how surrounding text
-/// is shown: soft hyphen, Arabic letter mark, zero-width and directional
-/// marks, bidi embeddings/overrides/isolates, invisible operators, BOM.
+/// Invisible Unicode format characters (category Cf) that change or hide how
+/// surrounding text is shown: soft hyphen, Arabic letter mark, Mongolian vowel
+/// separator, zero-width and directional marks, bidi embeddings / overrides /
+/// isolates, invisible operators, BOM, interlinear annotation marks, and tag
+/// characters (which can smuggle hidden ASCII).
 fn is_invisible_format(c: char) -> bool {
     matches!(
         c,
         '\u{00AD}'
             | '\u{061C}'
+            | '\u{180E}'
             | '\u{200B}'..='\u{200F}'
             | '\u{202A}'..='\u{202E}'
             | '\u{2060}'..='\u{2064}'
-            | '\u{2066}'..='\u{2069}'
+            | '\u{2066}'..='\u{206F}'
             | '\u{FEFF}'
+            | '\u{FFF9}'..='\u{FFFB}'
+            | '\u{E0001}'
+            | '\u{E0020}'..='\u{E007F}'
     )
 }
 

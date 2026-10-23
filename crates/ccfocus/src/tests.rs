@@ -194,6 +194,35 @@ fn post_tool_batch_ends_a_wait_only() {
 }
 
 #[test]
+fn a_subagent_batch_does_not_end_the_main_wait() {
+    let tmp = tempfile::tempdir().unwrap();
+    let d = tmp.path();
+    run("SessionStart", START, d, T1).unwrap();
+    run("Notification", PERMISSION, d, T1).unwrap();
+    let from_subagent = BATCH.replace(
+        "\"hook_event_name\"",
+        "\"agent_id\":\"a0000000000000001\",\"hook_event_name\"",
+    );
+    assert_eq!(
+        run("PostToolBatch", &from_subagent, d, T2).unwrap(),
+        Outcome::Ignored
+    );
+    assert_eq!(state(d).status, Status::Waiting);
+}
+
+#[test]
+fn a_clock_stepped_back_does_not_freeze_updates() {
+    let tmp = tempfile::tempdir().unwrap();
+    let d = tmp.path();
+    // Written while the clock was an hour ahead.
+    run("SessionStart", START, d, "2026-01-02T04:10:00.000+09:00").unwrap();
+    run("UserPromptSubmit", PROMPT, d, T2).unwrap();
+    let s = state(d);
+    assert_eq!(s.status, Status::Working);
+    assert_eq!(s.updated_at, T2);
+}
+
+#[test]
 fn post_tool_batch_without_state_creates_nothing() {
     let tmp = tempfile::tempdir().unwrap();
     let d = tmp.path().join("focus");
@@ -392,6 +421,11 @@ fn project_drops_control_characters() {
     assert_eq!(
         clean_project("a\u{202E}b\u{200B}c\u{2066}d\u{FEFF}").as_deref(),
         Some("abcd")
+    );
+    // Tag characters can smuggle hidden ASCII ("hi" here).
+    assert_eq!(
+        clean_project("demo\u{E0001}\u{E0068}\u{E0069}\u{E007F}").as_deref(),
+        Some("demo")
     );
     assert_eq!(clean_project(&"a".repeat(500)).unwrap().len(), 200);
 }

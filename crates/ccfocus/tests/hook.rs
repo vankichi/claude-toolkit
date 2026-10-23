@@ -7,6 +7,9 @@ use std::process::{Command, Output, Stdio};
 
 const START: &str = include_str!("fixtures/session_start.json");
 const END: &str = include_str!("fixtures/session_end.json");
+const PERMISSION: &str = include_str!("fixtures/notification_permission.json");
+const BATCH: &str = include_str!("fixtures/post_tool_batch.json");
+const FAILURE: &str = include_str!("fixtures/stop_failure.json");
 
 fn ccfocus(args: &[&str], stdin: &str) -> Output {
     let mut child = Command::new(env!("CARGO_BIN_EXE_ccfocus"))
@@ -61,6 +64,27 @@ fn records_and_removes_a_session() {
 
     assert_quiet_success(&hook("SessionEnd", &dir, END), false);
     assert!(!path.exists());
+}
+
+#[test]
+fn waits_end_on_a_tool_batch_and_api_errors_mark_failed() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().join("focus");
+    let status = || -> serde_json::Value {
+        let path = dir
+            .join("sessions")
+            .join("00000000-0000-4000-8000-000000000001.json");
+        serde_json::from_slice::<serde_json::Value>(&std::fs::read(path).unwrap()).unwrap()
+            ["status"]
+            .clone()
+    };
+    assert_quiet_success(&hook("SessionStart", &dir, START), false);
+    assert_quiet_success(&hook("Notification", &dir, PERMISSION), false);
+    assert_eq!(status(), "waiting");
+    assert_quiet_success(&hook("PostToolBatch", &dir, BATCH), false);
+    assert_eq!(status(), "working");
+    assert_quiet_success(&hook("StopFailure", &dir, FAILURE), false);
+    assert_eq!(status(), "failed");
 }
 
 #[test]

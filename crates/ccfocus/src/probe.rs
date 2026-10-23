@@ -244,6 +244,16 @@ mod tests {
         assert!(started.elapsed() < Duration::from_millis(100));
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn a_hung_command_is_killed_at_the_deadline() {
+        let started = Instant::now();
+        let mut cmd = Command::new("sleep");
+        cmd.arg("5");
+        assert_eq!(run(cmd, Instant::now() + Duration::from_millis(100)), None);
+        assert!(started.elapsed() < Duration::from_secs(1));
+    }
+
     #[test]
     fn pane_ids() {
         assert!(is_pane_id("%12"));
