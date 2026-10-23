@@ -178,7 +178,7 @@ dependencies = [
 
 [[package]]
 name = "ccfocus"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "cctk",
@@ -191,7 +191,7 @@ dependencies = [
 
 [[package]]
 name = "ccmap"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "cctk",
@@ -205,7 +205,7 @@ dependencies = [
 
 [[package]]
 name = "ccstat"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "ccmap",
@@ -221,7 +221,7 @@ dependencies = [
 
 [[package]]
 name = "cctk"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -235,7 +235,7 @@ dependencies = [
 
 [[package]]
 name = "cctop"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "ccmap",
@@ -253,7 +253,7 @@ dependencies = [
 
 [[package]]
 name = "ccwatch"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "cctk",
