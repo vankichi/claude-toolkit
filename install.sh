@@ -2,7 +2,8 @@
 # claude-toolkit installer.
 #
 # Downloads the latest (or a pinned) release, verifies its SHA-256 checksum,
-# and installs ccwatch / ccmap / ccstat / cctop into PREFIX, replacing older copies.
+# and installs ccwatch / ccmap / ccstat / cctop / ccfocus into PREFIX, replacing
+# older copies.
 #
 # Usage:
 #   curl -fsSL https://raw.githubusercontent.com/vankichi/claude-toolkit/main/install.sh | sh
@@ -19,6 +20,8 @@ set -eu
 
 REPO="vankichi/claude-toolkit"
 BINS="ccwatch ccmap ccstat cctop"
+# Added after v0.2.0: skipped (not an error) when installing an older release.
+OPTIONAL_BINS="ccfocus"
 PREFIX="${PREFIX:-$HOME/.local/bin}"
 VERSION="${VERSION:-latest}"
 
@@ -97,10 +100,18 @@ tar -xzf "$tmp/$bundle" -C "$tmp"
 extracted="$tmp/claude-toolkit-${ver}-${target}"
 
 mkdir -p "$PREFIX"
-for bin in $BINS; do
+for bin in $BINS $OPTIONAL_BINS; do
 	src="$extracted/$bin"
 	dst="$PREFIX/$bin"
-	[ -f "$src" ] || err "expected binary missing from archive: $bin"
+	if [ ! -f "$src" ]; then
+		case " $OPTIONAL_BINS " in
+		*" $bin "*)
+			printf 'skipped %s (not in %s)\n' "$bin" "$VERSION"
+			continue
+			;;
+		esac
+		err "expected binary missing from archive: $bin"
+	fi
 	cp "$src" "$dst"
 	chmod +x "$dst"
 	# macOS 26+ SIGKILLs Mach-O binaries copied without a fresh signature.
