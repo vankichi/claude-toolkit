@@ -28,7 +28,7 @@ const PROBE_BUDGET: Duration = Duration::from_secs(1);
 #[command(
     name = "ccfocus",
     version,
-    about = "Status board of every Claude Code session (waiting / working / done)"
+    about = "Status board of every Claude Code session (waiting / working / done / failed)"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -38,8 +38,8 @@ struct Cli {
 #[derive(Subcommand, Debug)]
 enum Command {
     /// Record a Claude Code hook event read as JSON from stdin. Register it for
-    /// `SessionStart`, `UserPromptSubmit`, `Notification`, `Stop`, and
-    /// `SessionEnd`.
+    /// `SessionStart`, `UserPromptSubmit`, `Notification`, `PostToolBatch`,
+    /// `Stop`, `StopFailure`, and `SessionEnd`.
     Hook {
         /// Hook event name, e.g. `SessionStart`
         event: String,

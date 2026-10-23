@@ -16,7 +16,7 @@ Claude Code を扱うための小さなターミナルツール群を集めた C
 | [`ccmap`](crates/ccmap) | 利用可能な agent / skill / command / plugin / MCP server を一覧する read-only TUI。 |
 | [`ccstat`](crates/ccstat) | 全セッションログを横断集計し、model / agent / skill / command / MCP の利用状況をランキング表示する read-only TUI。`--watch` で実行中インジケータ付きの live 表示。 |
 | [`cctop`](crates/cctop) | live 使用状況 (Now)・横断ランキング・config map を 1 画面に束ねる bottom 風統合ダッシュボード。braille ドットバー / fuzzy filter / 各ツールのフルビューへの drill-down を備える。 |
-| [`ccfocus`](crates/ccfocus) | Claude Code の hook (`ccfocus hook <event>`)。全 session の状態 (idle / working / waiting / done)・project 名・repo・worktree・tmux の pane を `~/.claude/focus/` に記録し、全 session を 1 か所で見られるようにする。prompt や message の本文は保存しない。 |
+| [`ccfocus`](crates/ccfocus) | Claude Code の hook (`ccfocus hook <event>`)。全 session の状態 (idle / working / waiting / done / failed)・project 名・repo・worktree・tmux の pane を `~/.claude/focus/` に記録し、全 session を 1 か所で見られるようにする。prompt や message の本文は保存しない。 |
 
 ## Install
 

@@ -14,6 +14,9 @@ const PERMISSION: &str = include_str!("../tests/fixtures/notification_permission
 const IDLE: &str = include_str!("../tests/fixtures/notification_idle.json");
 const STOP: &str = include_str!("../tests/fixtures/stop.json");
 const END: &str = include_str!("../tests/fixtures/session_end.json");
+const URL: &str = include_str!("../tests/fixtures/notification_url.json");
+const BATCH: &str = include_str!("../tests/fixtures/post_tool_batch.json");
+const FAILURE: &str = include_str!("../tests/fixtures/stop_failure.json");
 
 struct FakeProbe;
 
@@ -152,6 +155,73 @@ fn other_notification_types_are_ignored() {
 }
 
 #[test]
+fn url_elicitation_waits() {
+    let tmp = tempfile::tempdir().unwrap();
+    run("SessionStart", START, tmp.path(), T1).unwrap();
+    assert_eq!(
+        run("Notification", URL, tmp.path(), T2).unwrap(),
+        Outcome::Written(Status::Waiting)
+    );
+}
+
+#[test]
+fn post_tool_batch_ends_a_wait_only() {
+    let tmp = tempfile::tempdir().unwrap();
+    let d = tmp.path();
+    run("SessionStart", START, d, T1).unwrap();
+    run("UserPromptSubmit", PROMPT, d, T1).unwrap();
+    run("Notification", PERMISSION, d, T1).unwrap();
+
+    // The user approved; the tools ran and the batch resolved.
+    assert_eq!(
+        run("PostToolBatch", BATCH, d, T2).unwrap(),
+        Outcome::Written(Status::Working)
+    );
+    let s = state(d);
+    assert_eq!(s.status, Status::Working);
+    assert_eq!(s.updated_at, T2);
+    assert!(events(d).ends_with(&format!("{T2}\t{SID}\tPostToolBatch\n")));
+
+    // Already working: nothing is rewritten or logged.
+    let before = std::fs::read(focus::session_path(d, SID)).unwrap();
+    let log = events(d);
+    assert_eq!(
+        run("PostToolBatch", BATCH, d, "2026-01-02T03:11:00.000+09:00").unwrap(),
+        Outcome::Ignored
+    );
+    assert_eq!(std::fs::read(focus::session_path(d, SID)).unwrap(), before);
+    assert_eq!(events(d), log);
+}
+
+#[test]
+fn post_tool_batch_without_state_creates_nothing() {
+    let tmp = tempfile::tempdir().unwrap();
+    let d = tmp.path().join("focus");
+    assert_eq!(
+        run("PostToolBatch", BATCH, &d, T1).unwrap(),
+        Outcome::Ignored
+    );
+    assert!(!d.exists());
+}
+
+#[test]
+fn stop_failure_marks_the_session_failed() {
+    let tmp = tempfile::tempdir().unwrap();
+    let d = tmp.path();
+    run("SessionStart", START, d, T1).unwrap();
+    run("UserPromptSubmit", PROMPT, d, T1).unwrap();
+    assert_eq!(
+        run("StopFailure", FAILURE, d, T2).unwrap(),
+        Outcome::Written(Status::Failed)
+    );
+    assert_eq!(state(d).status, Status::Failed);
+    assert!(events(d).ends_with(&format!("{T2}\t{SID}\tStopFailure\n")));
+    // The next prompt resumes work.
+    run("UserPromptSubmit", PROMPT, d, T2).unwrap();
+    assert_eq!(state(d).status, Status::Working);
+}
+
+#[test]
 fn resume_keeps_started_at() {
     let tmp = tempfile::tempdir().unwrap();
     run("SessionStart", START, tmp.path(), T1).unwrap();
@@ -245,16 +315,25 @@ fn bodies_are_never_written() {
         ("SessionStart", START),
         ("UserPromptSubmit", PROMPT),
         ("Notification", PERMISSION),
+        // Written: the session is waiting, so the batch ends the wait.
+        ("PostToolBatch", BATCH),
+        ("Notification", URL),
         ("Notification", IDLE),
+        ("StopFailure", FAILURE),
         ("Stop", STOP),
     ] {
         run(event, input, d, T1).unwrap();
     }
     let written = String::from_utf8(all_bytes_under(d)).unwrap();
+    assert!(written.contains("\tPostToolBatch\n"));
     for body in [
         "SYNTHETIC-PROMPT-BODY",
         "SYNTHETIC-MESSAGE-BODY",
         "SYNTHETIC-ASSISTANT-BODY",
+        "SYNTHETIC-TOOL-INPUT",
+        "SYNTHETIC-TOOL-OUTPUT",
+        "SYNTHETIC-ERROR-DETAILS",
+        "rate_limit",
         "Permission needed",
     ] {
         assert!(!written.contains(body), "{body} leaked into state");

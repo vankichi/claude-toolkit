@@ -30,7 +30,12 @@ pub enum Event {
     SessionStart,
     UserPromptSubmit,
     Notification,
+    /// After a batch of tool calls resolves: ends a `waiting` state once the
+    /// user has answered the permission prompt.
+    PostToolBatch,
     Stop,
+    /// Runs instead of `Stop` when the turn ends on an API error.
+    StopFailure,
     SessionEnd,
 }
 
@@ -41,7 +46,9 @@ impl Event {
             "SessionStart" => Self::SessionStart,
             "UserPromptSubmit" => Self::UserPromptSubmit,
             "Notification" => Self::Notification,
+            "PostToolBatch" => Self::PostToolBatch,
             "Stop" => Self::Stop,
+            "StopFailure" => Self::StopFailure,
             "SessionEnd" => Self::SessionEnd,
             _ => return None,
         })
@@ -53,7 +60,9 @@ impl Event {
             Self::SessionStart => "SessionStart",
             Self::UserPromptSubmit => "UserPromptSubmit",
             Self::Notification => "Notification",
+            Self::PostToolBatch => "PostToolBatch",
             Self::Stop => "Stop",
+            Self::StopFailure => "StopFailure",
             Self::SessionEnd => "SessionEnd",
         }
     }
@@ -63,11 +72,13 @@ impl Event {
 const WAITING_NOTIFICATIONS: &[&str] = &[
     "permission_prompt",
     "elicitation_dialog",
+    "elicitation_url_dialog",
     "agent_needs_input",
 ];
 
 /// The fields ccfocus reads from the hook input. Everything else — notably
-/// `prompt`, `message`, and `last_assistant_message` — is never deserialized.
+/// `prompt`, `message`, `last_assistant_message`, `tool_calls`, and
+/// `error_details` — is never deserialized.
 #[derive(Debug, Deserialize)]
 struct HookInput {
     session_id: String,
@@ -130,16 +141,16 @@ pub fn handle(
             }
             Status::Waiting
         }
+        Event::PostToolBatch => return resume_after_wait(state_dir, &path, now),
         Event::Stop => Status::Done,
+        Event::StopFailure => Status::Failed,
     };
 
     // The root may be a directory the user pointed us at, so only the
     // subdirectories we own are tightened when found wider than 0700.
     fsx::ensure_private_dir(state_dir, fsx::Create::WithParents)?;
-    let sessions = focus::sessions_dir(state_dir);
-    let events = focus::events_dir(state_dir);
-    fsx::ensure_private_dir(&sessions, fsx::Create::Owned)?;
-    fsx::ensure_private_dir(&events, fsx::Create::Owned)?;
+    fsx::ensure_private_dir(&focus::sessions_dir(state_dir), fsx::Create::Owned)?;
+    fsx::ensure_private_dir(&focus::events_dir(state_dir), fsx::Create::Owned)?;
 
     let existing = focus::read_session(&path);
     let stamp = rfc3339(&now);
@@ -197,27 +208,65 @@ pub fn handle(
         project,
         status,
         started_at,
-        updated_at: stamp.clone(),
+        updated_at: stamp,
     };
-    let mut json = serde_json::to_vec_pretty(&state).context("serialize state")?;
-    json.push(b'\n');
-    // Hooks of one session can overlap (a slow git probe in UserPromptSubmit
-    // while a Notification lands). If a hook that started later has already
-    // written, keep its newer state instead of overwriting it.
-    if !newer_on_disk(&path, now) {
+    persist(state_dir, &state, event, now)?;
+    Ok(Outcome::Written(status))
+}
+
+/// `PostToolBatch` fires after every batch of tool calls, so it stays cheap: no
+/// probes, no directories created, and nothing written unless a waiting
+/// session has had its prompt answered (the approved tools just ran).
+fn resume_after_wait(state_dir: &Path, path: &Path, now: DateTime<FixedOffset>) -> Result<Outcome> {
+    if !(fsx::is_real_dir(state_dir)? && fsx::is_real_dir(&focus::sessions_dir(state_dir))?) {
+        return Ok(Outcome::Ignored);
+    }
+    let Some(mut state) = focus::read_session(path) else {
+        return Ok(Outcome::Ignored);
+    };
+    if state.status != Status::Waiting {
+        return Ok(Outcome::Ignored);
+    }
+    state.status = Status::Working;
+    state.updated_at = rfc3339(&now);
+    fsx::ensure_private_dir(&focus::events_dir(state_dir), fsx::Create::Owned)?;
+    persist(state_dir, &state, Event::PostToolBatch, now)?;
+    Ok(Outcome::Written(Status::Working))
+}
+
+/// Write `state` atomically and log `event`. Hooks of one session can overlap
+/// (a slow git probe in `UserPromptSubmit` while a `Notification` lands); if a
+/// hook that started after `now` has already written, its newer state is kept
+/// and only the event line is added.
+fn persist(
+    state_dir: &Path,
+    state: &SessionState,
+    event: Event,
+    now: DateTime<FixedOffset>,
+) -> Result<()> {
+    let sessions = focus::sessions_dir(state_dir);
+    if !newer_on_disk(
+        &sessions.join(focus::session_file_name(&state.session_id)),
+        now,
+    ) {
+        let mut json = serde_json::to_vec_pretty(state).context("serialize state")?;
+        json.push(b'\n');
         fsx::write_atomic(
             &sessions,
-            &focus::session_file_name(&input.session_id),
+            &focus::session_file_name(&state.session_id),
             &json,
         )?;
     }
-
-    let log = events.join(format!("{}.tsv", now.format("%Y%m%d")));
+    let log = focus::events_dir(state_dir).join(format!("{}.tsv", now.format("%Y%m%d")));
     fsx::append_line(
         &log,
-        &format!("{stamp}\t{}\t{}\n", input.session_id, event.as_str()),
-    )?;
-    Ok(Outcome::Written(status))
+        &format!(
+            "{}\t{}\t{}\n",
+            rfc3339(&now),
+            state.session_id,
+            event.as_str()
+        ),
+    )
 }
 
 /// Title precedence: the hook's `session_title`, then (only on `SessionStart`

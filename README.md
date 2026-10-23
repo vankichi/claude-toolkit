@@ -16,7 +16,7 @@ A Cargo workspace of small terminal tools for working with Claude Code.
 | [`ccmap`](crates/ccmap) | Read-only TUI to browse available agents, skills, commands, plugins, and MCP servers. |
 | [`ccstat`](crates/ccstat) | Read-only TUI ranking model/agent/skill/command/MCP usage aggregated across all session logs; `--watch` adds a live view with a running indicator. |
 | [`cctop`](crates/cctop) | Unified bottom-style dashboard combining live usage (Now), the cross-session ranking, and the config map in one screen, with braille-dot bars, fuzzy filtering, and drill-down into each tool's full view. |
-| [`ccfocus`](crates/ccfocus) | Claude Code hook (`ccfocus hook <event>`) that records every session's status (idle / working / waiting / done), project name, repo, worktree, and tmux pane under `~/.claude/focus/`, so all sessions can be watched from one place. Never stores prompt or message text. |
+| [`ccfocus`](crates/ccfocus) | Claude Code hook (`ccfocus hook <event>`) that records every session's status (idle / working / waiting / done / failed), project name, repo, worktree, and tmux pane under `~/.claude/focus/`, so all sessions can be watched from one place. Never stores prompt or message text. |
 
 ## Install
 

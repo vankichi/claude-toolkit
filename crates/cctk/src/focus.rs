@@ -28,6 +28,9 @@ pub enum Status {
     Waiting,
     /// Claude finished its turn (`Stop`).
     Done,
+    /// The turn ended on an API error (`StopFailure`: rate limit, overload,
+    /// authentication, …); Claude is stopped and needs the user to resume.
+    Failed,
 }
 
 /// Where the Claude process runs.

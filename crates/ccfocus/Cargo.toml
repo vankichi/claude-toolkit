@@ -1,7 +1,7 @@
 [package]
 name = "ccfocus"
 version = "0.2.0"
-description = "Hook-driven status board of every Claude Code session (waiting / working / done)"
+description = "Hook-driven status board of every Claude Code session (waiting / working / done / failed)"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
