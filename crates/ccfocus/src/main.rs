@@ -37,8 +37,8 @@ enum Command {
         /// Hook event name, e.g. `SessionStart`
         event: String,
 
-        /// State directory (default: ~/.claude/focus)
-        #[arg(long, env = cctk::focus::STATE_DIR_ENV)]
+        /// State directory (default: `$CCFOCUS_STATE_DIR`, else ~/.claude/focus)
+        #[arg(long)]
         state_dir: Option<PathBuf>,
     },
 }

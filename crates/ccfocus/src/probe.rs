@@ -84,27 +84,31 @@ impl Probe for SystemProbe {
     }
 
     fn git(&self, cwd: &Path) -> GitInfo {
-        let base = || {
+        let rev_parse = |args: &[&str]| {
             let mut cmd = Command::new("git");
             cmd.arg("-C")
                 .arg(cwd)
-                .args([
-                    "rev-parse",
-                    "--path-format=absolute",
-                    "--git-common-dir",
-                    "--show-toplevel",
-                ])
+                .args(["rev-parse", "--path-format=absolute"])
+                .args(args)
                 // Resolve from cwd only, and never take optional locks.
                 .env_remove("GIT_DIR")
                 .env_remove("GIT_WORK_TREE")
                 .env("GIT_OPTIONAL_LOCKS", "0");
-            cmd
+            run(cmd)
         };
-        let mut with_head = base();
-        with_head.args(["--symbolic-full-name", "HEAD"]);
-        // An unborn branch makes `HEAD` ambiguous; retry without it.
-        let out = run(with_head).or_else(|| run(base()));
-        out.map(|o| parse_rev_parse(&o)).unwrap_or_default()
+        // Usually one call. An unborn branch makes `HEAD` ambiguous, and a bare
+        // repo or a cwd inside `.git` has no toplevel; each failure drops the
+        // last query so the remaining fields are still filled.
+        rev_parse(&[
+            "--git-common-dir",
+            "--show-toplevel",
+            "--symbolic-full-name",
+            "HEAD",
+        ])
+        .or_else(|| rev_parse(&["--git-common-dir", "--show-toplevel"]))
+        .or_else(|| rev_parse(&["--git-common-dir"]))
+        .map(|o| parse_rev_parse(&o))
+        .unwrap_or_default()
     }
 }
 

@@ -1,7 +1,7 @@
 //! Private, symlink-refusing filesystem writes for the state directory.
 //!
-//! Directories are created `0700` and files `0600` (tightened when found
-//! wider). A symlink where a state directory or file should be is an error,
+//! Directories are created `0700` and files `0600` (ours are tightened when
+//! found wider). A symlink where a state directory or file should be is an error,
 //! never followed. Session files are replaced atomically (temp file + rename),
 //! so a reader never sees a half-written file.
 
@@ -16,41 +16,49 @@ use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
 const DIR_MODE: u32 = 0o700;
 const FILE_MODE: u32 = 0o600;
 
-/// Ensure `path` is a real (non-symlink) directory with mode `0700`, creating
-/// it — and, when `parents` is set, its missing ancestors — if absent.
-pub fn ensure_private_dir(path: &Path, parents: bool) -> Result<()> {
-    match fs::symlink_metadata(path) {
-        Ok(meta) => {
-            if !meta.file_type().is_dir() {
-                bail!(
-                    "{} is not a directory (symlinks are not followed)",
-                    path.display()
-                );
-            }
-            tighten(path, &meta, DIR_MODE)
-        }
+/// How [`ensure_private_dir`] treats a directory.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Create {
+    /// The state root: create it and missing ancestors `0700`, but leave an
+    /// existing one's mode alone — the user may have pointed us at it.
+    WithParents,
+    /// A directory only ccfocus uses: its parent must exist, and an existing
+    /// one is tightened to `0700`.
+    Owned,
+}
+
+/// Ensure `path` is a real (non-symlink) directory, creating it `0700` if
+/// absent (see [`Create`] for ancestors and existing modes).
+pub fn ensure_private_dir(path: &Path, how: Create) -> Result<()> {
+    let meta = match fs::symlink_metadata(path) {
+        Ok(meta) => meta,
         Err(e) if e.kind() == ErrorKind::NotFound => {
             let mut builder = fs::DirBuilder::new();
-            builder.recursive(parents);
+            builder.recursive(how == Create::WithParents);
             #[cfg(unix)]
             builder.mode(DIR_MODE);
             match builder.create(path) {
                 Ok(()) => {}
-                // A concurrent hook created it first; re-check below.
+                // A concurrent hook created it first; checked below.
                 Err(e) if e.kind() == ErrorKind::AlreadyExists => {}
                 Err(e) => {
                     return Err(e).with_context(|| format!("create {}", path.display()));
                 }
             }
-            let meta =
-                fs::symlink_metadata(path).with_context(|| format!("stat {}", path.display()))?;
-            if !meta.file_type().is_dir() {
-                bail!("{} is not a directory", path.display());
-            }
-            tighten(path, &meta, DIR_MODE)
+            fs::symlink_metadata(path).with_context(|| format!("stat {}", path.display()))?
         }
-        Err(e) => Err(e).with_context(|| format!("stat {}", path.display())),
+        Err(e) => return Err(e).with_context(|| format!("stat {}", path.display())),
+    };
+    if !meta.file_type().is_dir() {
+        bail!(
+            "{} is not a directory (symlinks are not followed)",
+            path.display()
+        );
     }
+    if how == Create::Owned {
+        tighten(path, &meta, DIR_MODE)?;
+    }
+    Ok(())
 }
 
 /// True when `path` exists as a real directory; false when missing. Errors

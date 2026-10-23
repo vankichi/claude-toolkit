@@ -14,6 +14,7 @@ use cctk::focus::{self, SCHEMA, SessionState, Status};
 use chrono::{DateTime, FixedOffset, SecondsFormat};
 use probe::Probe;
 use serde::Deserialize;
+use std::io::Read;
 use std::path::Path;
 
 /// How much of the transcript tail to scan for a `custom-title` line when the
@@ -78,6 +79,9 @@ struct HookInput {
     session_title: Option<String>,
     #[serde(default)]
     notification_type: Option<String>,
+    /// `SessionStart` only: startup / resume / clear / compact / fork.
+    #[serde(default)]
+    source: Option<String>,
 }
 
 /// What [`handle`] did.
@@ -116,6 +120,7 @@ pub fn handle(
             }
             return Ok(Outcome::Removed);
         }
+        // Refined below: a mid-turn compaction keeps the current status.
         Event::SessionStart => Status::Idle,
         Event::UserPromptSubmit => Status::Working,
         Event::Notification => {
@@ -128,30 +133,25 @@ pub fn handle(
         Event::Stop => Status::Done,
     };
 
-    fsx::ensure_private_dir(state_dir, true)?;
+    // The root may be a directory the user pointed us at, so only the
+    // subdirectories we own are tightened when found wider than 0700.
+    fsx::ensure_private_dir(state_dir, fsx::Create::WithParents)?;
     let sessions = focus::sessions_dir(state_dir);
     let events = focus::events_dir(state_dir);
-    fsx::ensure_private_dir(&sessions, false)?;
-    fsx::ensure_private_dir(&events, false)?;
+    fsx::ensure_private_dir(&sessions, fsx::Create::Owned)?;
+    fsx::ensure_private_dir(&events, fsx::Create::Owned)?;
 
     let existing = focus::read_session(&path);
-    let stamp = now.to_rfc3339_opts(SecondsFormat::Secs, false);
+    let stamp = rfc3339(&now);
+    let transcript = input.transcript_path.as_deref().map(Path::new);
 
-    // Title precedence: the hook's session_title, then (only on SessionStart
-    // or the first sighting, to keep per-prompt hooks cheap) the transcript's
-    // last custom-title, then whatever we recorded before.
-    let mut project = input.session_title.as_deref().and_then(clean_project);
-    if project.is_none() && (event == Event::SessionStart || existing.is_none()) {
-        project = input
-            .transcript_path
-            .as_deref()
-            .and_then(|p| last_custom_title(Path::new(p)))
-            .as_deref()
-            .and_then(clean_project);
-    }
-    if project.is_none() {
-        project = existing.as_ref().and_then(|s| s.project.clone());
-    }
+    // Auto-compaction fires SessionStart in the middle of a turn; it must not
+    // flip a working (or waiting) session back to idle.
+    let status = match (&existing, input.source.as_deref()) {
+        (Some(prev), Some("compact")) if event == Event::SessionStart => prev.status,
+        _ => status,
+    };
+    let project = resolve_project(&input, event, existing.as_ref(), transcript);
 
     let cwd = input
         .cwd
@@ -164,12 +164,29 @@ pub fn handle(
         probe.git(Path::new(&cwd))
     };
     let tmux = probe.tmux();
+    // The hostname can't change within a session; skip the probe once known.
+    let hostname = existing
+        .as_ref()
+        .and_then(|s| s.hostname.clone())
+        .or_else(|| probe.hostname());
+    // Kept while the file lives. SessionEnd deletes it, so a resumed session
+    // recovers its original start from the transcript's first timestamp.
+    let started_at = match existing {
+        Some(prev) => prev.started_at,
+        None if event == Event::SessionStart && input.source.as_deref() == Some("resume") => {
+            transcript.and_then(first_timestamp).map_or_else(
+                || stamp.clone(),
+                |t| rfc3339(&t.with_timezone(&now.timezone())),
+            )
+        }
+        None => stamp.clone(),
+    };
 
     let state = SessionState {
         schema: SCHEMA,
         session_id: input.session_id.clone(),
         host: probe.host(),
-        hostname: probe.hostname(),
+        hostname,
         tmux: tmux.location,
         tmux_pane: tmux.pane,
         pid: probe.pid(),
@@ -179,13 +196,17 @@ pub fn handle(
         branch: git.branch,
         project,
         status,
-        // Kept across resume (and every later event); new sessions start now.
-        started_at: existing.map_or_else(|| stamp.clone(), |s| s.started_at),
+        started_at,
         updated_at: stamp.clone(),
     };
     let mut json = serde_json::to_vec_pretty(&state).context("serialize state")?;
     json.push(b'\n');
-    fsx::write_atomic(&sessions, &format!("{}.json", input.session_id), &json)?;
+    // Hooks of one session can overlap (a slow git probe in UserPromptSubmit
+    // while a Notification lands). If a hook that started later has already
+    // written, keep its newer state instead of overwriting it.
+    if !newer_on_disk(&path, now) {
+        fsx::write_atomic(&sessions, &format!("{}.json", input.session_id), &json)?;
+    }
 
     let log = events.join(format!("{}.tsv", now.format("%Y%m%d")));
     fsx::append_line(
@@ -193,6 +214,29 @@ pub fn handle(
         &format!("{stamp}\t{}\t{}\n", input.session_id, event.as_str()),
     )?;
     Ok(Outcome::Written(status))
+}
+
+/// Title precedence: the hook's `session_title`, then (only on `SessionStart`
+/// or the first sighting, to keep per-prompt hooks cheap) the transcript's
+/// last custom-title, then whatever was recorded before.
+fn resolve_project(
+    input: &HookInput,
+    event: Event,
+    existing: Option<&SessionState>,
+    transcript: Option<&Path>,
+) -> Option<String> {
+    input
+        .session_title
+        .as_deref()
+        .and_then(clean_project)
+        .or_else(|| {
+            (event == Event::SessionStart || existing.is_none())
+                .then(|| transcript.and_then(last_custom_title))
+                .flatten()
+                .as_deref()
+                .and_then(clean_project)
+        })
+        .or_else(|| existing.and_then(|s| s.project.clone()))
 }
 
 /// The last `{"type":"custom-title","customTitle":…}` in the transcript's
@@ -217,16 +261,75 @@ fn last_custom_title(transcript: &Path) -> Option<String> {
         .next_back()
 }
 
-/// Strip control characters (they would reach the dashboard's terminal) and
-/// cap the length. `None` when nothing printable remains.
+/// Timestamps are written with millisecond precision so overlapping hooks of
+/// one session can be ordered (see [`newer_on_disk`]).
+fn rfc3339<Tz: chrono::TimeZone>(t: &DateTime<Tz>) -> String
+where
+    Tz::Offset: std::fmt::Display,
+{
+    t.to_rfc3339_opts(SecondsFormat::Millis, false)
+}
+
+/// True when the session file on disk was written by a hook that started
+/// after `now`.
+fn newer_on_disk(path: &Path, now: DateTime<FixedOffset>) -> bool {
+    focus::read_session(path)
+        .and_then(|s| DateTime::parse_from_rfc3339(&s.updated_at).ok())
+        .is_some_and(|t| t > now)
+}
+
+/// How much of the transcript head to scan for its first `timestamp`.
+const START_SCAN_BYTES: u64 = 64 * 1024;
+
+/// The first `timestamp` in the transcript: when the session was created.
+/// Refuses symlinks and non-regular files.
+fn first_timestamp(transcript: &Path) -> Option<DateTime<FixedOffset>> {
+    #[derive(Deserialize)]
+    struct Stamped {
+        timestamp: Option<String>,
+    }
+    if !std::fs::symlink_metadata(transcript).is_ok_and(|m| m.file_type().is_file()) {
+        return None;
+    }
+    let mut head = Vec::new();
+    std::fs::File::open(transcript)
+        .ok()?
+        .take(START_SCAN_BYTES)
+        .read_to_end(&mut head)
+        .ok()?;
+    head.split(|&b| b == b'\n')
+        .filter_map(|line| serde_json::from_slice::<Stamped>(line).ok())
+        .find_map(|l| DateTime::parse_from_rfc3339(l.timestamp.as_deref()?).ok())
+}
+
+/// Strip control characters and invisible formatting (bidi overrides,
+/// zero-width marks) — they would reach the dashboard's terminal and could
+/// reorder or hide text — and cap the length. `None` when nothing printable
+/// remains.
 fn clean_project(raw: &str) -> Option<String> {
     let cleaned: String = raw
         .chars()
-        .filter(|c| !c.is_control())
+        .filter(|&c| !c.is_control() && !is_invisible_format(c))
         .take(MAX_PROJECT_CHARS)
         .collect();
     let trimmed = cleaned.trim();
     (!trimmed.is_empty()).then(|| trimmed.to_string())
+}
+
+/// Unicode format characters (category Cf) that change how surrounding text
+/// is shown: soft hyphen, Arabic letter mark, zero-width and directional
+/// marks, bidi embeddings/overrides/isolates, invisible operators, BOM.
+fn is_invisible_format(c: char) -> bool {
+    matches!(
+        c,
+        '\u{00AD}'
+            | '\u{061C}'
+            | '\u{200B}'..='\u{200F}'
+            | '\u{202A}'..='\u{202E}'
+            | '\u{2060}'..='\u{2064}'
+            | '\u{2066}'..='\u{2069}'
+            | '\u{FEFF}'
+    )
 }
 
 #[cfg(test)]

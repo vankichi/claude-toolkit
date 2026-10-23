@@ -47,8 +47,8 @@ fn at(s: &str) -> DateTime<FixedOffset> {
     DateTime::parse_from_rfc3339(s).unwrap()
 }
 
-const T1: &str = "2026-01-02T03:04:05+09:00";
-const T2: &str = "2026-01-02T03:10:00+09:00";
+const T1: &str = "2026-01-02T03:04:05.000+09:00";
+const T2: &str = "2026-01-02T03:10:00.000+09:00";
 
 fn run(event: &str, input: &str, dir: &Path, now: &str) -> Result<Outcome> {
     handle(event, input.as_bytes(), dir, at(now), &FakeProbe)
@@ -163,6 +163,70 @@ fn resume_keeps_started_at() {
 }
 
 #[test]
+fn resume_after_session_end_takes_start_from_transcript() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (transcript, _) = with_transcript(
+        tmp.path(),
+        &[
+            r#"{"type":"summary","summary":"no timestamp here"}"#,
+            r#"{"type":"user","timestamp":"2026-01-01T15:00:00.250Z"}"#,
+            r#"{"type":"assistant","timestamp":"2026-01-01T16:00:00.000Z"}"#,
+        ],
+    );
+    let input = serde_json::json!({
+        "session_id": SID,
+        "transcript_path": transcript,
+        "cwd": "/work/example",
+        "source": "resume",
+    })
+    .to_string();
+    let d = tmp.path().join("focus");
+    run("SessionStart", &input, &d, T2).unwrap();
+    // 15:00 UTC in the hook's +09:00 offset.
+    assert_eq!(state(&d).started_at, "2026-01-02T00:00:00.250+09:00");
+}
+
+#[test]
+fn compaction_keeps_the_current_status() {
+    let tmp = tempfile::tempdir().unwrap();
+    let d = tmp.path();
+    run("SessionStart", START, d, T1).unwrap();
+    run("UserPromptSubmit", PROMPT, d, T1).unwrap();
+    let compact = START.replace("\"startup\"", "\"compact\"");
+    assert_eq!(
+        run("SessionStart", &compact, d, T2).unwrap(),
+        Outcome::Written(Status::Working)
+    );
+    assert_eq!(state(d).status, Status::Working);
+    // A fresh SessionStart (no prior file) is still idle.
+    let other = tempfile::tempdir().unwrap();
+    run("SessionStart", &compact, other.path(), T2).unwrap();
+    assert_eq!(state(other.path()).status, Status::Idle);
+}
+
+#[test]
+fn an_older_hook_does_not_overwrite_a_newer_state() {
+    let tmp = tempfile::tempdir().unwrap();
+    let d = tmp.path();
+    run("SessionStart", START, d, T1).unwrap();
+    // The Notification hook started (and wrote) after the prompt hook began.
+    run("Notification", PERMISSION, d, T2).unwrap();
+    // The slower UserPromptSubmit, stamped earlier, finishes last.
+    run(
+        "UserPromptSubmit",
+        PROMPT,
+        d,
+        "2026-01-02T03:09:59.900+09:00",
+    )
+    .unwrap();
+    let s = state(d);
+    assert_eq!(s.status, Status::Waiting);
+    assert_eq!(s.updated_at, T2);
+    // Its event is still logged.
+    assert!(events(d).ends_with("\tUserPromptSubmit\n"));
+}
+
+#[test]
 fn session_end_without_state_dir_is_a_noop() {
     let tmp = tempfile::tempdir().unwrap();
     let dir = tmp.path().join("focus");
@@ -243,6 +307,10 @@ fn project_drops_control_characters() {
         Some("demo[31m-x")
     );
     assert_eq!(clean_project(" \u{7} "), None);
+    assert_eq!(
+        clean_project("a\u{202E}b\u{200B}c\u{2066}d\u{FEFF}").as_deref(),
+        Some("abcd")
+    );
     assert_eq!(clean_project(&"a".repeat(500)).unwrap().len(), 200);
 }
 
@@ -280,15 +348,19 @@ mod unix {
     }
 
     #[test]
-    fn widened_modes_are_tightened() {
+    fn widened_modes_are_tightened_except_the_root() {
         let tmp = tempfile::tempdir().unwrap();
         let d = tmp.path().join("focus");
         run("SessionStart", START, &d, T1).unwrap();
+        let sessions = focus::sessions_dir(&d);
         let log = focus::events_dir(&d).join("20260102.tsv");
-        std::fs::set_permissions(&d, std::fs::Permissions::from_mode(0o755)).unwrap();
-        std::fs::set_permissions(&log, std::fs::Permissions::from_mode(0o644)).unwrap();
+        for (p, m) in [(&d, 0o755), (&sessions, 0o755), (&log, 0o644)] {
+            std::fs::set_permissions(p, std::fs::Permissions::from_mode(m)).unwrap();
+        }
         run("Stop", STOP, &d, T2).unwrap();
-        assert_eq!(mode(&d), 0o700);
+        // The root may be a directory the user chose; it is not chmodded.
+        assert_eq!(mode(&d), 0o755);
+        assert_eq!(mode(&sessions), 0o700);
         assert_eq!(mode(&log), 0o600);
     }
 

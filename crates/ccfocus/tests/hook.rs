@@ -78,7 +78,28 @@ fn unknown_event_and_bad_args_exit_zero() {
     assert_quiet_success(&ccfocus(&["bogus"], ""), true);
 }
 
-#[cfg(unix)]
+#[test]
+fn empty_state_dir_env_falls_back_to_default() {
+    let tmp = tempfile::tempdir().unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_ccfocus"))
+        .args(["hook", "SessionStart"])
+        .env("CCFOCUS_STATE_DIR", "")
+        .env("HOME", tmp.path())
+        .env("USERPROFILE", tmp.path())
+        .env_remove("TMUX_PANE")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .and_then(|mut child| {
+            child.stdin.take().unwrap().write_all(START.as_bytes())?;
+            child.wait_with_output()
+        })
+        .unwrap();
+    assert_quiet_success(&out, false);
+    assert!(tmp.path().join(".claude/focus/sessions").is_dir());
+}
+
 #[test]
 fn unwritable_state_dir_exits_zero() {
     let tmp = tempfile::tempdir().unwrap();
