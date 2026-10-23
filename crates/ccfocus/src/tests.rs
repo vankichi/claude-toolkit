@@ -231,6 +231,29 @@ fn writes_wait_for_the_session_lock() {
 }
 
 #[test]
+fn session_end_waits_for_a_writer_holding_the_lock() {
+    let tmp = tempfile::tempdir().unwrap();
+    let d = tmp.path().to_path_buf();
+    run("SessionStart", START, &d, T1).unwrap();
+    let held = fsx::lock_exclusive(&session_lock_path(&d, SID)).unwrap();
+
+    let ender = {
+        let d = d.clone();
+        std::thread::spawn(move || run("SessionEnd", END, &d, T2).unwrap())
+    };
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    assert!(
+        focus::session_path(&d, SID).exists(),
+        "removed under a held lock"
+    );
+
+    drop(held);
+    assert_eq!(ender.join().unwrap(), Outcome::Removed);
+    assert!(!focus::session_path(&d, SID).exists());
+    assert!(!session_lock_path(&d, SID).exists());
+}
+
+#[test]
 fn the_lock_file_is_hidden_from_readers_and_removed_at_end() {
     let tmp = tempfile::tempdir().unwrap();
     let d = tmp.path();
@@ -547,6 +570,27 @@ mod unix {
         run("SessionEnd", END, &d, T2).unwrap();
         assert!(std::fs::symlink_metadata(&path).is_err());
         assert!(outside.exists());
+    }
+
+    #[test]
+    fn a_waiter_on_an_unlinked_lock_retries_on_the_current_file() {
+        use std::os::unix::fs::MetadataExt;
+        let tmp = tempfile::tempdir().unwrap();
+        let lock = tmp.path().join(".s.lock");
+        let held = fsx::lock_exclusive(&lock).unwrap();
+
+        let waiter = {
+            let lock = lock.clone();
+            std::thread::spawn(move || fsx::lock_exclusive(&lock).unwrap())
+        };
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        // What SessionEnd does: unlink while holding, then release.
+        std::fs::remove_file(&lock).unwrap();
+        drop(held);
+
+        let got = waiter.join().unwrap();
+        let on_disk = std::fs::symlink_metadata(&lock).unwrap();
+        assert_eq!(got.metadata().unwrap().ino(), on_disk.ino());
     }
 
     #[test]

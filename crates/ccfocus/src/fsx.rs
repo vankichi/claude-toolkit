@@ -123,11 +123,22 @@ pub fn append_line(path: &Path, line: &str) -> Result<()> {
 /// Open `path` (created `0600` if absent) and take an exclusive advisory
 /// lock on it, held until the returned file is dropped. Blocks while another
 /// hook holds it. Refuses symlinks and other non-regular files.
+///
+/// The lock file can be unlinked while a waiter is blocked on it (the
+/// session's last hook removes it under the lock), so after acquiring, the
+/// path must still name the locked file; otherwise retry on the current one.
 pub fn lock_exclusive(path: &Path) -> Result<fs::File> {
-    let f = open_private(path, |o| o.write(true))?;
-    f.lock()
-        .with_context(|| format!("lock {}", path.display()))?;
-    Ok(f)
+    // Each retry means the file was replaced under us; a few are plenty.
+    const ATTEMPTS: usize = 5;
+    for _ in 0..ATTEMPTS {
+        let f = open_private(path, |o| o.write(true))?;
+        f.lock()
+            .with_context(|| format!("lock {}", path.display()))?;
+        if ensure_same_file(path, &f).is_ok() {
+            return Ok(f);
+        }
+    }
+    bail!("{} kept changing while locking", path.display())
 }
 
 /// Open a private regular file with the access `access` sets, creating it

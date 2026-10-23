@@ -129,9 +129,14 @@ pub fn handle(
     let status = match event {
         Event::SessionEnd => {
             // Stay fast (1.5 s budget): no probes, no event line.
+            // Removed under the session lock so a writer still holding it
+            // finishes first (waiters then retry on a fresh lock file).
             if fsx::is_real_dir(state_dir)? && fsx::is_real_dir(&focus::sessions_dir(state_dir))? {
+                let lock_path = session_lock_path(state_dir, &input.session_id);
+                let lock = fsx::lock_exclusive(&lock_path)?;
                 fsx::remove_if_present(&path)?;
-                fsx::remove_if_present(&session_lock_path(state_dir, &input.session_id))?;
+                fsx::remove_if_present(&lock_path)?;
+                drop(lock);
             }
             return Ok(Outcome::Removed);
         }
