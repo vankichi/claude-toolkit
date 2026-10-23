@@ -133,6 +133,16 @@ impl Probe for SystemProbe {
 /// Parse `rev-parse --git-common-dir --show-toplevel [--symbolic-full-name HEAD]`
 /// output, one value per line in that order.
 fn parse_rev_parse(out: &str) -> GitInfo {
+    // git before 2.31 doesn't know `--path-format`: it echoes the flag back
+    // as the first line and exits 0, which would shift every field. A real
+    // first line is a rooted path (`/…`, or `C:/…` on Windows).
+    if !out
+        .lines()
+        .next()
+        .is_some_and(|l| Path::new(l.trim()).has_root())
+    {
+        return GitInfo::default();
+    }
     let mut lines = out.lines().map(str::trim);
     let common = lines.next().and_then(non_empty);
     let worktree = lines.next().and_then(non_empty);
@@ -219,6 +229,14 @@ mod tests {
                 branch: Some("feat/x".into()),
             }
         );
+    }
+
+    #[test]
+    fn output_of_a_git_without_path_format_is_rejected() {
+        // git < 2.31 echoes the unknown flag, then prints relative paths.
+        let got = parse_rev_parse("--path-format=absolute\n.git\n/work/example\nrefs/heads/main\n");
+        assert_eq!(got, GitInfo::default());
+        assert_eq!(parse_rev_parse(""), GitInfo::default());
     }
 
     #[test]
