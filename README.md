@@ -23,8 +23,9 @@ A Cargo workspace of small terminal tools for working with Claude Code.
 ### Prebuilt binaries (recommended)
 
 macOS / Linux — one command downloads the latest release, verifies its SHA-256
-checksum, and installs all the tools into `~/.local/bin`, replacing any older
-copies:
+checksum, and installs the tools included in that release into `~/.local/bin`,
+replacing any older copies (a release pinned with `VERSION` that predates a
+tool simply doesn't install it):
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/vankichi/claude-toolkit/main/install.sh | sh
@@ -133,7 +134,10 @@ locations can be overridden with `--projects-dir` / `--claude-dir` /
 
 `ccfocus hook <event>` records each session's status (`idle` / `working` /
 `waiting` / `done` / `failed`) in `~/.claude/focus/sessions/<session_id>.json`
-and appends one line per event to `~/.claude/focus/events/<YYYYMMDD>.tsv`.
+and appends one line to `~/.claude/focus/events/<YYYYMMDD>.tsv` for each event
+it records — including one whose state was superseded by a later overlapping
+hook. `SessionEnd` (which removes the session file) and ignored events (other
+`Notification` types, and `PostToolBatch` unless it ends a wait) add no line.
 Prompt, message, and tool bodies are never stored. Override the location with
 `--state-dir` or `CCFOCUS_STATE_DIR`.
 

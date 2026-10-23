@@ -23,7 +23,9 @@ Claude Code を扱うための小さなターミナルツール群を集めた C
 ### ビルド済みバイナリ (推奨)
 
 macOS / Linux はコマンド 1 発で、最新 release のダウンロード → SHA-256 checksum
-検証 → 4 ツールを `~/.local/bin` へ配置 (既存の古いバイナリは置換) まで実行:
+検証 → その release に含まれるツールを `~/.local/bin` へ配置 (既存の古いバイナリは
+置換) まで実行する。`VERSION` で古い release を指定すると、その時点に無いツールは
+入らない:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/vankichi/claude-toolkit/main/install.sh | sh
@@ -130,8 +132,11 @@ ccmap            # agent / skill / command / plugin / MCP server を一覧
 
 `ccfocus hook <event>` は、session ごとの状態 (`idle` / `working` / `waiting` /
 `done` / `failed`) を `~/.claude/focus/sessions/<session_id>.json` に記録し、
-event ごとに 1 行を `~/.claude/focus/events/<YYYYMMDD>.tsv` に追記する。prompt・
-message・tool の本文は保存しない。場所は `--state-dir` か `CCFOCUS_STATE_DIR` で
+記録した event ごとに 1 行を `~/.claude/focus/events/<YYYYMMDD>.tsv` に追記する
+(重なった hook のうち、後の hook に状態を譲ったものも行は書く)。`SessionEnd`
+(session の file を消す) と、無視した event (対象外の `Notification`、wait を
+解かない `PostToolBatch`) では行を書かない。prompt・message・tool の本文は保存
+しない。場所は `--state-dir` か `CCFOCUS_STATE_DIR` で
 変えられる。
 
 Claude Code の settings (例: `~/.claude/settings.json`) に、次の 7 つの event で
