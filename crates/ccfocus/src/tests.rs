@@ -211,6 +211,38 @@ fn a_subagent_batch_does_not_end_the_main_wait() {
 }
 
 #[test]
+fn writes_wait_for_the_session_lock() {
+    let tmp = tempfile::tempdir().unwrap();
+    let d = tmp.path().to_path_buf();
+    run("SessionStart", START, &d, T1).unwrap();
+    let held = fsx::lock_exclusive(&session_lock_path(&d, SID)).unwrap();
+
+    let writer = {
+        let d = d.clone();
+        std::thread::spawn(move || run("Stop", STOP, &d, T2).unwrap())
+    };
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    // Still blocked on the lock: nothing has been written yet.
+    assert_eq!(state(&d).status, Status::Idle);
+
+    drop(held);
+    assert_eq!(writer.join().unwrap(), Outcome::Written(Status::Done));
+    assert_eq!(state(&d).status, Status::Done);
+}
+
+#[test]
+fn the_lock_file_is_hidden_from_readers_and_removed_at_end() {
+    let tmp = tempfile::tempdir().unwrap();
+    let d = tmp.path();
+    run("SessionStart", START, d, T1).unwrap();
+    let lock = session_lock_path(d, SID);
+    assert!(lock.is_file());
+    assert_eq!(focus::list_sessions(d).len(), 1);
+    run("SessionEnd", END, d, T2).unwrap();
+    assert!(!lock.exists());
+}
+
+#[test]
 fn a_clock_stepped_back_does_not_freeze_updates() {
     let tmp = tempfile::tempdir().unwrap();
     let d = tmp.path();
@@ -460,6 +492,7 @@ mod unix {
         assert_eq!(mode(&focus::sessions_dir(&d)), 0o700);
         assert_eq!(mode(&focus::events_dir(&d)), 0o700);
         assert_eq!(mode(&focus::session_path(&d, SID)), 0o600);
+        assert_eq!(mode(&session_lock_path(&d, SID)), 0o600);
         assert_eq!(mode(&focus::events_dir(&d).join("20260102.tsv")), 0o600);
     }
 

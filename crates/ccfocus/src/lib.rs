@@ -131,6 +131,7 @@ pub fn handle(
             // Stay fast (1.5 s budget): no probes, no event line.
             if fsx::is_real_dir(state_dir)? && fsx::is_real_dir(&focus::sessions_dir(state_dir))? {
                 fsx::remove_if_present(&path)?;
+                fsx::remove_if_present(&session_lock_path(state_dir, &input.session_id))?;
             }
             return Ok(Outcome::Removed);
         }
@@ -242,13 +243,15 @@ fn resume_after_wait(state_dir: &Path, path: &Path, now: DateTime<FixedOffset>) 
 /// Write `state` atomically and log `event`. Hooks of one session can overlap
 /// (a slow git probe in `UserPromptSubmit` while a `Notification` lands); if a
 /// hook that started after `now` has already written, its newer state is kept
-/// and only the event line is added.
+/// and only the event line is added. The check and the rename run under the
+/// session's lock, so no write can land between them.
 fn persist(
     state_dir: &Path,
     state: &SessionState,
     event: Event,
     now: DateTime<FixedOffset>,
 ) -> Result<()> {
+    let _lock = fsx::lock_exclusive(&session_lock_path(state_dir, &state.session_id))?;
     if !newer_on_disk(&focus::session_path(state_dir, &state.session_id), now) {
         let mut json = serde_json::to_vec_pretty(state).context("serialize state")?;
         json.push(b'\n');
@@ -268,6 +271,12 @@ fn persist(
             event.as_str()
         ),
     )
+}
+
+/// Per-session lock file. Dot-prefixed, so `cctk::focus::list_sessions` skips
+/// it.
+fn session_lock_path(state_dir: &Path, session_id: &str) -> std::path::PathBuf {
+    focus::sessions_dir(state_dir).join(format!(".{session_id}.lock"))
 }
 
 /// Title precedence: the hook's `session_title`, then (only on `SessionStart`

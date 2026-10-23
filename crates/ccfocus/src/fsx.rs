@@ -113,11 +113,32 @@ pub fn write_atomic(dir: &Path, name: &str, bytes: &[u8]) -> Result<()> {
 }
 
 /// Append `line` to `path` in one `O_APPEND` write, creating the file `0600`.
-/// Refuses when `path` is a symlink or other non-regular file — also when one
-/// is swapped in between the check and the open: a new file is created
-/// exclusively, and an existing one is re-checked against the opened handle
-/// before anything is written.
+/// Refuses symlinks and other non-regular files (see [`open_private`]).
 pub fn append_line(path: &Path, line: &str) -> Result<()> {
+    let mut f = open_private(path, |o| o.append(true))?;
+    f.write_all(line.as_bytes())
+        .with_context(|| format!("append {}", path.display()))
+}
+
+/// Open `path` (created `0600` if absent) and take an exclusive advisory
+/// lock on it, held until the returned file is dropped. Blocks while another
+/// hook holds it. Refuses symlinks and other non-regular files.
+pub fn lock_exclusive(path: &Path) -> Result<fs::File> {
+    let f = open_private(path, |o| o.write(true))?;
+    f.lock()
+        .with_context(|| format!("lock {}", path.display()))?;
+    Ok(f)
+}
+
+/// Open a private regular file with the access `access` sets, creating it
+/// `0600` when absent. Refuses when `path` is a symlink or other non-regular
+/// file — also when one is swapped in between the check and the open: a new
+/// file is created exclusively, and an existing one is re-checked against the
+/// opened handle. Group/other bits are cleared through the handle.
+fn open_private(
+    path: &Path,
+    access: impl Fn(&mut OpenOptions) -> &mut OpenOptions,
+) -> Result<fs::File> {
     let existed = match fs::symlink_metadata(path) {
         Ok(meta) if meta.file_type().is_file() => true,
         Ok(_) => bail!(
@@ -127,12 +148,12 @@ pub fn append_line(path: &Path, line: &str) -> Result<()> {
         Err(e) if e.kind() == ErrorKind::NotFound => false,
         Err(e) => return Err(e).with_context(|| format!("stat {}", path.display())),
     };
-    let open_existing = || OpenOptions::new().append(true).open(path);
+    let open_existing = || access(&mut OpenOptions::new()).open(path);
     let opened = if existed {
         open_existing()
     } else {
         let mut opts = OpenOptions::new();
-        opts.append(true).create_new(true);
+        access(&mut opts).create_new(true);
         #[cfg(unix)]
         opts.mode(FILE_MODE);
         match opts.open(path) {
@@ -141,11 +162,10 @@ pub fn append_line(path: &Path, line: &str) -> Result<()> {
             other => other,
         }
     };
-    let mut f = opened.with_context(|| format!("open {}", path.display()))?;
+    let f = opened.with_context(|| format!("open {}", path.display()))?;
     ensure_same_file(path, &f)?;
     tighten_file(path, &f)?;
-    f.write_all(line.as_bytes())
-        .with_context(|| format!("append {}", path.display()))
+    Ok(f)
 }
 
 /// Error unless `path` is still the regular file `f` was opened from.
