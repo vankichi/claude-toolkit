@@ -11,8 +11,9 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-/// Upper bound for each external command (git, tmux, hostname). The hook
-/// blocks prompt submission while it runs, so a hung command must not stall it.
+/// Upper bound for each external command (git, tmux, hostname), within the
+/// probe's overall budget. The hook blocks prompt submission while it runs,
+/// so a hung command must not stall it.
 const COMMAND_TIMEOUT: Duration = Duration::from_millis(500);
 
 /// Where the session's working directory sits in git.
@@ -41,8 +42,24 @@ pub trait Probe {
 }
 
 /// Probe backed by the environment, the OS, and the `git` / `tmux` /
-/// `hostname` commands.
-pub struct SystemProbe;
+/// `hostname` commands, all sharing one time budget.
+pub struct SystemProbe {
+    budget_end: Instant,
+}
+
+impl SystemProbe {
+    /// A probe whose external commands together may take at most `budget`.
+    #[must_use]
+    pub fn new(budget: Duration) -> Self {
+        Self {
+            budget_end: Instant::now() + budget,
+        }
+    }
+
+    fn run(&self, cmd: Command) -> Option<String> {
+        run(cmd, self.budget_end)
+    }
+}
 
 impl Probe for SystemProbe {
     fn host(&self) -> HostKind {
@@ -57,7 +74,8 @@ impl Probe for SystemProbe {
         if let Ok(name) = std::fs::read_to_string("/proc/sys/kernel/hostname") {
             return non_empty(name.trim());
         }
-        run(Command::new("hostname")).and_then(|out| non_empty(out.trim()))
+        self.run(Command::new("hostname"))
+            .and_then(|out| non_empty(out.trim()))
     }
 
     fn tmux(&self) -> TmuxInfo {
@@ -67,7 +85,7 @@ impl Probe for SystemProbe {
         let mut cmd = Command::new("tmux");
         cmd.args(["display-message", "-p", "-t", &pane, "#S:#I.#P"]);
         TmuxInfo {
-            location: run(cmd).and_then(|out| non_empty(out.trim())),
+            location: self.run(cmd).and_then(|out| non_empty(out.trim())),
             pane: Some(pane),
         }
     }
@@ -94,7 +112,7 @@ impl Probe for SystemProbe {
                 .env_remove("GIT_DIR")
                 .env_remove("GIT_WORK_TREE")
                 .env("GIT_OPTIONAL_LOCKS", "0");
-            run(cmd)
+            self.run(cmd)
         };
         // Usually one call. An unborn branch makes `HEAD` ambiguous, and a bare
         // repo or a cwd inside `.git` has no toplevel; each failure drops the
@@ -150,16 +168,19 @@ fn non_empty(s: &str) -> Option<String> {
 }
 
 /// Run `cmd` with no stdin and stderr discarded; `Some(stdout)` on a zero
-/// exit within [`COMMAND_TIMEOUT`], else `None` (the child is killed on
-/// timeout).
-fn run(mut cmd: Command) -> Option<String> {
+/// exit within [`COMMAND_TIMEOUT`] and before `budget_end`, else `None` (the
+/// child is killed on timeout; nothing is spawned once the budget is spent).
+fn run(mut cmd: Command, budget_end: Instant) -> Option<String> {
+    let deadline = budget_end.min(Instant::now() + COMMAND_TIMEOUT);
+    if Instant::now() >= deadline {
+        return None;
+    }
     let mut child = cmd
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .spawn()
         .ok()?;
-    let deadline = Instant::now() + COMMAND_TIMEOUT;
     let status = loop {
         match child.try_wait() {
             Ok(Some(status)) => break status,
@@ -208,10 +229,19 @@ mod tests {
     }
 
     #[test]
-    fn bare_common_dir_is_the_repo() {
+    fn parses_a_non_dotgit_common_dir_as_the_repo() {
         let got = parse_rev_parse("/work/example.git\n");
         assert_eq!(got.repo.as_deref(), Some("/work/example.git"));
         assert_eq!(got.worktree, None);
+    }
+
+    #[test]
+    fn a_spent_budget_spawns_nothing() {
+        let probe = SystemProbe::new(Duration::ZERO);
+        let tmp = tempfile::tempdir().unwrap();
+        let started = Instant::now();
+        assert_eq!(probe.git(tmp.path()), GitInfo::default());
+        assert!(started.elapsed() < Duration::from_millis(100));
     }
 
     #[test]
@@ -227,7 +257,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         // A temp dir is normally outside any repo; if the runner nests TMPDIR
         // in one, at least the call must not fail.
-        let got = SystemProbe.git(tmp.path());
+        let got = SystemProbe::new(Duration::from_secs(1)).git(tmp.path());
         if got.repo.is_none() {
             assert_eq!(got, GitInfo::default());
         }

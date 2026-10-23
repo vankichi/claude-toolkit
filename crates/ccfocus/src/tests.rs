@@ -181,6 +181,9 @@ fn resume_after_session_end_takes_start_from_transcript() {
     })
     .to_string();
     let d = tmp.path().join("focus");
+    // The real order: the first run ends (file removed), then it is resumed.
+    run("SessionStart", START, &d, T1).unwrap();
+    run("SessionEnd", END, &d, T1).unwrap();
     run("SessionStart", &input, &d, T2).unwrap();
     // 15:00 UTC in the hook's +09:00 offset.
     assert_eq!(state(&d).started_at, "2026-01-02T00:00:00.250+09:00");
@@ -398,6 +401,21 @@ mod unix {
         run("SessionEnd", END, &d, T2).unwrap();
         assert!(std::fs::symlink_metadata(&path).is_err());
         assert!(outside.exists());
+    }
+
+    #[test]
+    fn symlinked_sessions_or_events_dir_is_refused() {
+        for sub in ["sessions", "events"] {
+            let tmp = tempfile::tempdir().unwrap();
+            let d = tmp.path().join("focus");
+            std::fs::create_dir(&d).unwrap();
+            let outside = tmp.path().join("outside");
+            std::fs::create_dir(&outside).unwrap();
+            symlink(&outside, d.join(sub)).unwrap();
+
+            assert!(run("SessionStart", START, &d, T1).is_err(), "{sub}");
+            assert_eq!(std::fs::read_dir(&outside).unwrap().count(), 0, "{sub}");
+        }
     }
 
     #[test]

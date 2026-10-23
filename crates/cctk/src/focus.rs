@@ -54,7 +54,9 @@ pub struct SessionState {
     /// container-namespace pid.
     pub pid: Option<u32>,
     pub cwd: String,
-    /// Main checkout: parent of `git rev-parse --git-common-dir`.
+    /// Main checkout: the parent of `git rev-parse --git-common-dir` when that
+    /// is a `.git` directory, else the common dir itself (bare repo, submodule,
+    /// separate git dir).
     pub repo: Option<String>,
     /// Checked-out worktree: `git rev-parse --show-toplevel`.
     pub worktree: Option<String>,
@@ -98,11 +100,18 @@ pub fn is_valid_session_id(id: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
 }
 
+/// File name of the state file for `session_id` (not validated; see
+/// [`is_valid_session_id`]).
+#[must_use]
+pub fn session_file_name(session_id: &str) -> String {
+    format!("{session_id}.json")
+}
+
 /// Path of the state file for `session_id` (not validated; see
 /// [`is_valid_session_id`]).
 #[must_use]
 pub fn session_path(state_dir: &Path, session_id: &str) -> PathBuf {
-    sessions_dir(state_dir).join(format!("{session_id}.json"))
+    sessions_dir(state_dir).join(session_file_name(session_id))
 }
 
 /// Read one state file. `None` when it is missing, a symlink or other

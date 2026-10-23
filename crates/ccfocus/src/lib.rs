@@ -205,7 +205,11 @@ pub fn handle(
     // while a Notification lands). If a hook that started later has already
     // written, keep its newer state instead of overwriting it.
     if !newer_on_disk(&path, now) {
-        fsx::write_atomic(&sessions, &format!("{}.json", input.session_id), &json)?;
+        fsx::write_atomic(
+            &sessions,
+            &focus::session_file_name(&input.session_id),
+            &json,
+        )?;
     }
 
     let log = events.join(format!("{}.tsv", now.format("%Y%m%d")));
@@ -249,12 +253,14 @@ fn last_custom_title(transcript: &Path) -> Option<String> {
         #[serde(rename = "customTitle")]
         custom_title: Option<String>,
     }
+    // Cheap pre-filter so only candidate lines are parsed as JSON.
+    const NEEDLE: &[u8] = b"\"custom-title\"";
     if !std::fs::symlink_metadata(transcript).is_ok_and(|m| m.file_type().is_file()) {
         return None;
     }
     let tail = cctk::paths::read_tail(transcript, TITLE_SCAN_BYTES);
     tail.split(|&b| b == b'\n')
-        .filter(|line| line.windows(14).any(|w| w == b"\"custom-title\""))
+        .filter(|line| line.windows(NEEDLE.len()).any(|w| w == NEEDLE))
         .filter_map(|line| serde_json::from_slice::<TitleLine>(line).ok())
         .filter(|l| l.kind == "custom-title")
         .filter_map(|l| l.custom_title)
