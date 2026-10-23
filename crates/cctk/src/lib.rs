@@ -6,6 +6,7 @@
 //! of maintaining parallel copies.
 
 pub mod chart;
+pub mod focus;
 pub mod fuzzy;
 pub mod jsonl;
 pub mod paths;

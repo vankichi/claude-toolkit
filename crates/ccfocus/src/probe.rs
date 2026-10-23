@@ -1,0 +1,231 @@
+//! Facts about the running Claude process that the hook input doesn't carry:
+//! host vs container, hostname, tmux pane, parent pid, and git location.
+//!
+//! [`Probe`] is a trait so tests can inject fixed values; [`SystemProbe`]
+//! asks the OS. Every external command runs with a timeout, and any failure
+//! degrades to `None` rather than an error.
+
+use cctk::focus::HostKind;
+use std::io::Read;
+use std::path::Path;
+use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
+
+/// Upper bound for each external command (git, tmux, hostname). The hook
+/// blocks prompt submission while it runs, so a hung command must not stall it.
+const COMMAND_TIMEOUT: Duration = Duration::from_millis(500);
+
+/// Where the session's working directory sits in git.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct GitInfo {
+    pub repo: Option<String>,
+    pub worktree: Option<String>,
+    pub branch: Option<String>,
+}
+
+/// tmux location of the session's pane.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct TmuxInfo {
+    /// `#S:#I.#P`
+    pub location: Option<String>,
+    /// `$TMUX_PANE` (`%N`)
+    pub pane: Option<String>,
+}
+
+pub trait Probe {
+    fn host(&self) -> HostKind;
+    fn hostname(&self) -> Option<String>;
+    fn tmux(&self) -> TmuxInfo;
+    fn pid(&self) -> Option<u32>;
+    fn git(&self, cwd: &Path) -> GitInfo;
+}
+
+/// Probe backed by the environment, the OS, and the `git` / `tmux` /
+/// `hostname` commands.
+pub struct SystemProbe;
+
+impl Probe for SystemProbe {
+    fn host(&self) -> HostKind {
+        if std::env::var_os("DEV_CONTAINER").is_some_and(|v| !v.is_empty()) {
+            HostKind::Container
+        } else {
+            HostKind::Host
+        }
+    }
+
+    fn hostname(&self) -> Option<String> {
+        if let Ok(name) = std::fs::read_to_string("/proc/sys/kernel/hostname") {
+            return non_empty(name.trim());
+        }
+        run(Command::new("hostname")).and_then(|out| non_empty(out.trim()))
+    }
+
+    fn tmux(&self) -> TmuxInfo {
+        let Some(pane) = std::env::var("TMUX_PANE").ok().filter(|p| is_pane_id(p)) else {
+            return TmuxInfo::default();
+        };
+        let mut cmd = Command::new("tmux");
+        cmd.args(["display-message", "-p", "-t", &pane, "#S:#I.#P"]);
+        TmuxInfo {
+            location: run(cmd).and_then(|out| non_empty(out.trim())),
+            pane: Some(pane),
+        }
+    }
+
+    fn pid(&self) -> Option<u32> {
+        #[cfg(unix)]
+        {
+            Some(std::os::unix::process::parent_id())
+        }
+        #[cfg(not(unix))]
+        {
+            None
+        }
+    }
+
+    fn git(&self, cwd: &Path) -> GitInfo {
+        let base = || {
+            let mut cmd = Command::new("git");
+            cmd.arg("-C")
+                .arg(cwd)
+                .args([
+                    "rev-parse",
+                    "--path-format=absolute",
+                    "--git-common-dir",
+                    "--show-toplevel",
+                ])
+                // Resolve from cwd only, and never take optional locks.
+                .env_remove("GIT_DIR")
+                .env_remove("GIT_WORK_TREE")
+                .env("GIT_OPTIONAL_LOCKS", "0");
+            cmd
+        };
+        let mut with_head = base();
+        with_head.args(["--symbolic-full-name", "HEAD"]);
+        // An unborn branch makes `HEAD` ambiguous; retry without it.
+        let out = run(with_head).or_else(|| run(base()));
+        out.map(|o| parse_rev_parse(&o)).unwrap_or_default()
+    }
+}
+
+/// Parse `rev-parse --git-common-dir --show-toplevel [--symbolic-full-name HEAD]`
+/// output, one value per line in that order.
+fn parse_rev_parse(out: &str) -> GitInfo {
+    let mut lines = out.lines().map(str::trim);
+    let common = lines.next().and_then(non_empty);
+    let worktree = lines.next().and_then(non_empty);
+    let branch = lines
+        .next()
+        .and_then(|r| r.strip_prefix("refs/heads/"))
+        .and_then(non_empty);
+    let repo = common.map(|c| {
+        let p = Path::new(&c);
+        // `<checkout>/.git` → `<checkout>`; a bare repo's dir is the repo.
+        if p.file_name().is_some_and(|n| n == ".git") {
+            p.parent()
+                .map_or(c.clone(), |parent| parent.to_string_lossy().into_owned())
+        } else {
+            c
+        }
+    });
+    GitInfo {
+        repo,
+        worktree,
+        branch,
+    }
+}
+
+/// `%` followed by digits, as tmux sets `$TMUX_PANE`.
+fn is_pane_id(s: &str) -> bool {
+    s.strip_prefix('%')
+        .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+}
+
+fn non_empty(s: &str) -> Option<String> {
+    (!s.is_empty()).then(|| s.to_string())
+}
+
+/// Run `cmd` with no stdin and stderr discarded; `Some(stdout)` on a zero
+/// exit within [`COMMAND_TIMEOUT`], else `None` (the child is killed on
+/// timeout).
+fn run(mut cmd: Command) -> Option<String> {
+    let mut child = cmd
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()?;
+    let deadline = Instant::now() + COMMAND_TIMEOUT;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(2));
+            }
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+        }
+    };
+    if !status.success() {
+        return None;
+    }
+    let mut out = String::new();
+    child.stdout.take()?.read_to_string(&mut out).ok()?;
+    Some(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_worktree_rev_parse() {
+        let got = parse_rev_parse(
+            "/work/example/.git\n/work/example/.claude/worktrees/wt\nrefs/heads/feat/x\n",
+        );
+        assert_eq!(
+            got,
+            GitInfo {
+                repo: Some("/work/example".into()),
+                worktree: Some("/work/example/.claude/worktrees/wt".into()),
+                branch: Some("feat/x".into()),
+            }
+        );
+    }
+
+    #[test]
+    fn detached_head_has_no_branch() {
+        let got = parse_rev_parse("/work/example/.git\n/work/example\nHEAD\n");
+        assert_eq!(got.branch, None);
+        assert_eq!(got.repo.as_deref(), Some("/work/example"));
+    }
+
+    #[test]
+    fn bare_common_dir_is_the_repo() {
+        let got = parse_rev_parse("/work/example.git\n");
+        assert_eq!(got.repo.as_deref(), Some("/work/example.git"));
+        assert_eq!(got.worktree, None);
+    }
+
+    #[test]
+    fn pane_ids() {
+        assert!(is_pane_id("%12"));
+        assert!(!is_pane_id("%"));
+        assert!(!is_pane_id("12"));
+        assert!(!is_pane_id("%1;rm"));
+    }
+
+    #[test]
+    fn git_outside_a_repo_is_empty() {
+        let tmp = tempfile::tempdir().unwrap();
+        // A temp dir is normally outside any repo; if the runner nests TMPDIR
+        // in one, at least the call must not fail.
+        let got = SystemProbe.git(tmp.path());
+        if got.repo.is_none() {
+            assert_eq!(got, GitInfo::default());
+        }
+    }
+}

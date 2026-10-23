@@ -177,6 +177,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "ccfocus"
+version = "0.2.0"
+dependencies = [
+ "anyhow",
+ "cctk",
+ "chrono",
+ "clap",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "ccmap"
 version = "0.2.0"
 dependencies = [
