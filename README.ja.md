@@ -16,13 +16,16 @@ Claude Code を扱うための小さなターミナルツール群を集めた C
 | [`ccmap`](crates/ccmap) | 利用可能な agent / skill / command / plugin / MCP server を一覧する read-only TUI。 |
 | [`ccstat`](crates/ccstat) | 全セッションログを横断集計し、model / agent / skill / command / MCP の利用状況をランキング表示する read-only TUI。`--watch` で実行中インジケータ付きの live 表示。 |
 | [`cctop`](crates/cctop) | live 使用状況 (Now)・横断ランキング・config map を 1 画面に束ねる bottom 風統合ダッシュボード。braille ドットバー / fuzzy filter / 各ツールのフルビューへの drill-down を備える。 |
+| [`ccfocus`](crates/ccfocus) | Claude Code の hook (`ccfocus hook <event>`)。全 session の状態 (idle / working / waiting / done / failed)・project 名・repo・worktree・tmux の pane を、session ごとに 1 つの JSON file として `~/.claude/focus/` に記録する。読む側は `cctk::focus` を使う。prompt や message の本文は保存しない。TUI ではなく、登録した hook から動く ([下記](#ccfocus--session-の状態を記録する-hook))。 |
 
 ## Install
 
 ### ビルド済みバイナリ (推奨)
 
 macOS / Linux はコマンド 1 発で、最新 release のダウンロード → SHA-256 checksum
-検証 → 4 ツールを `~/.local/bin` へ配置 (既存の古いバイナリは置換) まで実行:
+検証 → その release に含まれるツールを `~/.local/bin` へ配置 (既存の古いバイナリは
+置換) まで実行する。`VERSION` で古い release を指定すると、その時点に無いツールは
+入らない:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/vankichi/claude-toolkit/main/install.sh | sh
@@ -71,8 +74,10 @@ make uninstall           # 各 binary を $(PREFIX) から削除
 
 ## 使い方
 
-どのツールも `~/.claude/` 配下の Claude Code ログを自動で読むので、引数なしで
-起動するだけ。いずれも全画面 TUI で、`q` で終了。
+TUI のツール (`cctop`・`ccwatch`・`ccstat`・`ccmap`) は `~/.claude/` 配下の
+Claude Code ログを自動で読むので、引数なしで起動するだけ。いずれも全画面 TUI で、
+`q` で終了。`ccfocus` だけは違い、Claude Code が hook として呼ぶので、最初に 1 回
+登録する ([下記](#ccfocus--session-の状態を記録する-hook))。
 
 ### `cctop` — 全部入りダッシュボード
 
@@ -123,11 +128,43 @@ ccmap            # agent / skill / command / plugin / MCP server を一覧
 どのツールも `--help` (全 flag) と `--version` に対応。ログ / config の場所は
 `--projects-dir` / `--claude-dir` / `--project-dir` で上書き可 (該当ツールのみ)。
 
+### `ccfocus` — session の状態を記録する hook
+
+`ccfocus hook <event>` は、session ごとの状態 (`idle` / `working` / `waiting` /
+`done` / `failed`) を `~/.claude/focus/sessions/<session_id>.json` に記録し、
+記録した event ごとに 1 行を `~/.claude/focus/events/<YYYYMMDD>.tsv` に追記する
+(重なった hook のうち、後の hook に状態を譲ったものも行は書く)。`SessionEnd`
+(session の file を消す) と、無視した event (対象外の `Notification`、wait を
+解かない `PostToolBatch`) では行を書かない。prompt・message・tool の本文は保存
+しない。場所は `--state-dir` か `CCFOCUS_STATE_DIR` で
+変えられる。
+
+Claude Code の settings (例: `~/.claude/settings.json`) に、次の 7 つの event で
+登録する。記録する `pid` が shell ではなく Claude のものになるように exec form
+(`command` + `args`) で書き、binary は絶対 path で指す:
+
+```json
+{
+  "hooks": {
+    "SessionStart":     [{ "hooks": [{ "type": "command", "command": "/path/to/ccfocus", "args": ["hook", "SessionStart"] }] }],
+    "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": "/path/to/ccfocus", "args": ["hook", "UserPromptSubmit"] }] }],
+    "Notification":     [{ "hooks": [{ "type": "command", "command": "/path/to/ccfocus", "args": ["hook", "Notification"] }] }],
+    "PostToolBatch":    [{ "hooks": [{ "type": "command", "command": "/path/to/ccfocus", "args": ["hook", "PostToolBatch"] }] }],
+    "Stop":             [{ "hooks": [{ "type": "command", "command": "/path/to/ccfocus", "args": ["hook", "Stop"] }] }],
+    "StopFailure":      [{ "hooks": [{ "type": "command", "command": "/path/to/ccfocus", "args": ["hook", "StopFailure"] }] }],
+    "SessionEnd":       [{ "hooks": [{ "type": "command", "command": "/path/to/ccfocus", "args": ["hook", "SessionEnd"] }] }]
+  }
+}
+```
+
+hook は常に exit 0 で終わり、stdout には何も出さないので、失敗しても Claude を
+止めない。問題は stderr に 1 行で出る。
+
 ## Releasing
 
 `v*` tag を push すると [`.github/workflows/release.yml`](.github/workflows/release.yml)
 が発火し、各バイナリをそれぞれの native runner (macOS / Linux / Windows) で
-ビルド → target ごとに 4 ツールを bundle 化 → `SHA256SUMS` を生成し、
+ビルド → target ごとに全ツールを bundle 化 → `SHA256SUMS` を生成し、
 archive を添付した GitHub Release を作成する。
 
 ```sh

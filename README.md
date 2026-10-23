@@ -16,14 +16,16 @@ A Cargo workspace of small terminal tools for working with Claude Code.
 | [`ccmap`](crates/ccmap) | Read-only TUI to browse available agents, skills, commands, plugins, and MCP servers. |
 | [`ccstat`](crates/ccstat) | Read-only TUI ranking model/agent/skill/command/MCP usage aggregated across all session logs; `--watch` adds a live view with a running indicator. |
 | [`cctop`](crates/cctop) | Unified bottom-style dashboard combining live usage (Now), the cross-session ranking, and the config map in one screen, with braille-dot bars, fuzzy filtering, and drill-down into each tool's full view. |
+| [`ccfocus`](crates/ccfocus) | Claude Code hook (`ccfocus hook <event>`) that records every session's status (idle / working / waiting / done / failed), project name, repo, worktree, and tmux pane as one JSON file per session under `~/.claude/focus/`, read through `cctk::focus`. Never stores prompt or message text. Not a TUI: it runs from hooks you register (see [below](#ccfocus--session-status-hook)). |
 
 ## Install
 
 ### Prebuilt binaries (recommended)
 
 macOS / Linux — one command downloads the latest release, verifies its SHA-256
-checksum, and installs all four tools into `~/.local/bin`, replacing any older
-copies:
+checksum, and installs the tools included in that release into `~/.local/bin`,
+replacing any older copies (a release pinned with `VERSION` that predates a
+tool simply doesn't install it):
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/vankichi/claude-toolkit/main/install.sh | sh
@@ -72,9 +74,11 @@ If `~/.local/bin` is on your `PATH`, the tools are runnable right after
 
 ## Usage
 
-Every tool reads your Claude Code logs under `~/.claude/` automatically — just
-run it, no setup or arguments needed. Each is a full-screen TUI; press `q` to
-quit.
+The TUI tools (`cctop`, `ccwatch`, `ccstat`, `ccmap`) read your Claude Code
+logs under `~/.claude/` automatically — just run them, no setup or arguments
+needed. Each is a full-screen TUI; press `q` to quit. `ccfocus` is different:
+Claude Code runs it as a hook, which you register once (see
+[below](#ccfocus--session-status-hook)).
 
 ### `cctop` — the all-in-one dashboard
 
@@ -126,11 +130,44 @@ Every tool accepts `--help` (full flag list) and `--version`. Log and config
 locations can be overridden with `--projects-dir` / `--claude-dir` /
 `--project-dir` where they apply.
 
+### `ccfocus` — session status hook
+
+`ccfocus hook <event>` records each session's status (`idle` / `working` /
+`waiting` / `done` / `failed`) in `~/.claude/focus/sessions/<session_id>.json`
+and appends one line to `~/.claude/focus/events/<YYYYMMDD>.tsv` for each event
+it records — including one whose state was superseded by a later overlapping
+hook. `SessionEnd` (which removes the session file) and ignored events (other
+`Notification` types, and `PostToolBatch` unless it ends a wait) add no line.
+Prompt, message, and tool bodies are never stored. Override the location with
+`--state-dir` or `CCFOCUS_STATE_DIR`.
+
+Register it for these seven events in your Claude Code settings (for example
+`~/.claude/settings.json`). Use the exec form (`command` + `args`) so the
+recorded `pid` is Claude's rather than a wrapping shell's, and give the
+absolute path to the binary:
+
+```json
+{
+  "hooks": {
+    "SessionStart":     [{ "hooks": [{ "type": "command", "command": "/path/to/ccfocus", "args": ["hook", "SessionStart"] }] }],
+    "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": "/path/to/ccfocus", "args": ["hook", "UserPromptSubmit"] }] }],
+    "Notification":     [{ "hooks": [{ "type": "command", "command": "/path/to/ccfocus", "args": ["hook", "Notification"] }] }],
+    "PostToolBatch":    [{ "hooks": [{ "type": "command", "command": "/path/to/ccfocus", "args": ["hook", "PostToolBatch"] }] }],
+    "Stop":             [{ "hooks": [{ "type": "command", "command": "/path/to/ccfocus", "args": ["hook", "Stop"] }] }],
+    "StopFailure":      [{ "hooks": [{ "type": "command", "command": "/path/to/ccfocus", "args": ["hook", "StopFailure"] }] }],
+    "SessionEnd":       [{ "hooks": [{ "type": "command", "command": "/path/to/ccfocus", "args": ["hook", "SessionEnd"] }] }]
+  }
+}
+```
+
+The hook always exits 0 and prints nothing to stdout, so a failure never
+blocks Claude; problems go to stderr as a single line.
+
 ## Releasing
 
 Pushing a `v*` tag triggers [`.github/workflows/release.yml`](.github/workflows/release.yml),
 which builds every binary on its native runner (macOS / Linux / Windows),
-bundles the four tools per target, generates `SHA256SUMS`, and publishes a
+bundles the tools per target, generates `SHA256SUMS`, and publishes a
 GitHub Release with the archives attached.
 
 ```sh

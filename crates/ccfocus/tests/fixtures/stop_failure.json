@@ -1,0 +1,1 @@
+{"session_id":"00000000-0000-4000-8000-000000000001","transcript_path":"/nonexistent/example/transcript.jsonl","cwd":"/work/example","hook_event_name":"StopFailure","error":"rate_limit","error_details":"SYNTHETIC-ERROR-DETAILS","last_assistant_message":"SYNTHETIC-ASSISTANT-BODY partial"}
