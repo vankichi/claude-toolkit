@@ -1,6 +1,6 @@
 [package]
 name = "ccmap"
-version = "0.3.0"
+version = "0.4.0"
 description = "Terminal explorer for Claude Code agents, skills, commands, plugins, and MCP servers"
 edition.workspace = true
 rust-version.workspace = true
@@ -18,7 +18,7 @@ path = "src/main.rs"
 
 [dependencies]
 anyhow.workspace = true
-cctk = { path = "../cctk", version = "0.3.0" }
+cctk = { path = "../cctk", version = "0.4.0" }
 clap.workspace = true
 crossterm.workspace = true
 ratatui.workspace = true
