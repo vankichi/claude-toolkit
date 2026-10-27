@@ -76,11 +76,9 @@ async fn main() -> Result<()> {
         None => std::env::current_dir().context("could not determine current directory")?,
     };
 
-    // Same resolution as the hook: `$CCFOCUS_STATE_DIR`, else `focus` under
-    // the Claude config directory.
-    let focus_dir = std::env::var_os(cctk::focus::STATE_DIR_ENV)
-        .filter(|v| !v.is_empty())
-        .map_or_else(|| claude_dir.join("focus"), PathBuf::from);
+    // Where the hook writes (`$CCFOCUS_STATE_DIR`, else ~/.claude/focus);
+    // `--claude-dir` does not move it.
+    let focus_dir = cctk::focus::default_state_dir().unwrap_or_else(|| claude_dir.join("focus"));
 
     run::run(run::RunConfig {
         projects_dir,

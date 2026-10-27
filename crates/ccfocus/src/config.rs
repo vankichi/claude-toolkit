@@ -38,13 +38,19 @@ impl Default for Config {
     }
 }
 
-/// The config in `state_dir`, plus a one-line warning when the file exists
-/// but could not be used (the defaults apply then). A missing file is not a
-/// warning.
+/// The config in `state_dir`, plus a one-line warning (cleaned for display:
+/// it can quote the file) when the file exists but could not be used (the
+/// defaults apply then). A missing file is not a warning. A symlink is
+/// followed, so a config managed elsewhere (e.g. a dotfiles link) works.
 #[must_use]
 pub fn load(state_dir: &Path) -> (Config, Option<String>) {
+    let (config, warning) = load_raw(state_dir);
+    (config, warning.map(|w| crate::text::clean(&w)))
+}
+
+fn load_raw(state_dir: &Path) -> (Config, Option<String>) {
     let path = state_dir.join(FILE_NAME);
-    match std::fs::symlink_metadata(&path) {
+    match std::fs::metadata(&path) {
         Err(_) => return (Config::default(), None),
         Ok(m) if !m.file_type().is_file() => {
             return (
@@ -183,5 +189,26 @@ mod tests {
         assert!(warning.unwrap().contains("line 1"));
         std::fs::write(tmp.path().join(FILE_NAME), "limit = 2\n").unwrap();
         assert_eq!(load(tmp.path()).0.limit, 2);
+        std::fs::write(tmp.path().join(FILE_NAME), "co\u{1b}[2Jlour = 1\n").unwrap();
+        assert!(!load(tmp.path()).1.unwrap().contains('\u{1b}'));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn follows_a_symlinked_config() {
+        let tmp = tempfile::tempdir().unwrap();
+        let elsewhere = tmp.path().join("managed.toml");
+        std::fs::write(&elsewhere, "limit = 3\n").unwrap();
+        std::os::unix::fs::symlink(&elsewhere, tmp.path().join(FILE_NAME)).unwrap();
+        assert_eq!(
+            load(tmp.path()),
+            (
+                Config {
+                    limit: 3,
+                    ..Config::default()
+                },
+                None
+            )
+        );
     }
 }

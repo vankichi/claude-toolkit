@@ -64,10 +64,11 @@ const GIT_TIMEOUT: Duration = Duration::from_secs(3);
 
 /// `git -C dir <args>` stdout on success. Resolves from `dir` only and never
 /// takes optional locks (the dashboard must not contend with the session's
-/// own git work).
+/// own git work). `core.fsmonitor` is off: it runs a configured command on
+/// `status`, and `dir` comes from a state file.
 pub(crate) fn git(dir: &Path, args: &[&str]) -> Option<String> {
     let mut cmd = Command::new("git");
-    cmd.arg("-C")
+    cmd.args(["-c", "core.fsmonitor=false", "-C"])
         .arg(dir)
         .args(args)
         .env_remove("GIT_DIR")

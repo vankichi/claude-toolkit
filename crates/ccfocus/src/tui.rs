@@ -1,7 +1,8 @@
 //! `ccfocus` / `ccfocus tui`: the focus board full screen. A plain
-//! synchronous loop: poll the keyboard briefly, tick, draw. Slow work (git,
-//! gh) runs on [`crate::repos::Job`] threads, so a key is never kept waiting
-//! longer than one poll.
+//! synchronous loop: poll the keyboard briefly, tick, draw. The worktree scan
+//! and gh run on [`crate::repos::Job`] threads; what stays on this thread is
+//! bounded by timeouts (a key action's tmux / merge-base call, the periodic
+//! `kill -0` checks).
 
 use crate::app::Focus;
 use anyhow::Result;

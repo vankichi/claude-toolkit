@@ -1,6 +1,9 @@
 //! The dashboard's key actions as tmux commands. Planning is pure (an
 //! argument list or the reason it can't be done); [`run`] executes one.
-//! Arguments go to tmux directly, never through a shell.
+//! Arguments go to tmux directly, never through a shell. tmux itself
+//! format-expands some of them (the `rename-window` name and the
+//! `split-window -c` directory), where `#(…)` would run a shell command, so
+//! values from the state files are passed through [`literal`] there.
 
 use crate::board::{Row, Shown};
 use crate::config::Config;
@@ -82,7 +85,14 @@ pub fn diff(row: &Row, client: &Client, base: Option<&str>) -> Plan {
     if let Some(pane) = &client.pane {
         a.extend(args(&["-t", pane]));
     }
-    a.extend(args(&["-c", worktree, "hunk", "diff", base, "--watch"]));
+    a.extend(args(&[
+        "-c",
+        &literal(worktree),
+        "hunk",
+        "diff",
+        base,
+        "--watch",
+    ]));
     Ok(a)
 }
 
@@ -98,9 +108,16 @@ pub fn rename(row: &Row, client: &Client) -> Plan {
     if row.project.is_empty() {
         return Err("project 名がありません (claude -n で付けられます)".into());
     }
-    let name = crate::text::fit(&row.project, MAX_WINDOW_NAME);
+    let name = literal(&crate::text::fit(&row.project, MAX_WINDOW_NAME));
     // `--`: a project like `-a todo` must not be read as flags.
     Ok(args(&["rename-window", "-t", pane, "--", &name]))
+}
+
+/// `s` as a tmux format that expands to itself: every `#` doubled, so
+/// `#(cmd)`, `#{…}`, and `#H` stay text.
+#[must_use]
+pub fn literal(s: &str) -> String {
+    s.replace('#', "##")
 }
 
 fn args(a: &[&str]) -> Vec<String> {
@@ -208,6 +225,17 @@ mod tests {
         let mut r = row();
         r.worktree_path = None;
         assert!(diff(&r, &inside(), Some(&base)).is_err());
+    }
+
+    #[test]
+    fn values_tmux_expands_are_escaped() {
+        let mut r = row();
+        r.project = "a #(touch x) #H".into();
+        assert_eq!(rename(&r, &inside()).unwrap()[4], "a ##(touch x) ##H");
+        r.worktree_path = Some("/w/#(x)".into());
+        let plan = diff(&r, &inside(), Some(&"a".repeat(40))).unwrap();
+        let c = plan.iter().position(|a| a == "-c").unwrap();
+        assert_eq!(plan[c + 1], "/w/##(x)");
     }
 
     #[test]
