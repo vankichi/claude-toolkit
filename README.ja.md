@@ -15,8 +15,8 @@ Claude Code を扱うための小さなターミナルツール群を集めた C
 | [`ccwatch`](crates/ccwatch) | Claude Code のセッション使用状況 (token / cost / context / tool) をリアルタイム監視する TUI。 |
 | [`ccmap`](crates/ccmap) | 利用可能な agent / skill / command / plugin / MCP server を一覧する read-only TUI。 |
 | [`ccstat`](crates/ccstat) | 全セッションログを横断集計し、model / agent / skill / command / MCP の利用状況をランキング表示する read-only TUI。`--watch` で実行中インジケータ付きの live 表示。 |
-| [`cctop`](crates/cctop) | live 使用状況 (Now)・横断ランキング・config map を 1 画面に束ねる bottom 風統合ダッシュボード。braille ドットバー / fuzzy filter / 各ツールのフルビューへの drill-down を備える。 |
-| [`ccfocus`](crates/ccfocus) | Claude Code の hook (`ccfocus hook <event>`)。全 session の状態 (idle / working / waiting / done / failed)・project 名・repo・worktree・tmux の pane を、session ごとに 1 つの JSON file として `~/.claude/focus/` に記録する。読む側は `cctk::focus` を使う。prompt や message の本文は保存しない。TUI ではなく、登録した hook から動く ([下記](#ccfocus--session-の状態を記録する-hook))。 |
+| [`cctop`](crates/cctop) | live 使用状況 (Now)・横断ランキング・config map・Focus panel (`ccfocus` の board) を 1 画面に束ねる bottom 風統合ダッシュボード。braille ドットバー / fuzzy filter / 各ツールのフルビューへの drill-down を備える。 |
+| [`ccfocus`](crates/ccfocus) | Claude Code の hook (`ccfocus hook <event>`)。全 session の状態 (idle / working / waiting / done / failed)・project 名・repo・worktree・tmux の pane を、session ごとに 1 つの JSON file として `~/.claude/focus/` に記録する。読む側は `cctk::focus` を使う。prompt や message の本文は保存しない。TUI でもある: `ccfocus` (引数なし) か `ccfocus tui` で focus board が開き、次に見る session・全 session の一覧・終わらせる worktree・今日の数字を表示する ([下記](#ccfocus--focus-board-と-session-の状態を記録する-hook))。 |
 
 ## Install
 
@@ -76,12 +76,13 @@ make uninstall           # 各 binary を $(PREFIX) から削除
 
 TUI のツール (`cctop`・`ccwatch`・`ccstat`・`ccmap`) は `~/.claude/` 配下の
 Claude Code ログを自動で読むので、引数なしで起動するだけ。いずれも全画面 TUI で、
-`q` で終了。`ccfocus` だけは違い、Claude Code が hook として呼ぶので、最初に 1 回
-登録する ([下記](#ccfocus--session-の状態を記録する-hook))。
+`q` で終了。`ccfocus` は hook でもあり TUI でもある。Claude Code が hook として
+呼ぶので最初に 1 回登録し、開く focus board はその hook が記録した内容から作る
+([下記](#ccfocus--focus-board-と-session-の状態を記録する-hook))。
 
 ### `cctop` — 全部入りダッシュボード
 
-まずはこれ。1 画面に 3 パネルを live 表示:
+まずはこれ。1 画面に 4 パネルを live 表示:
 
 ```sh
 cctop
@@ -92,12 +93,13 @@ cctop
 | **Now** `[1]` | active な全セッションを合算 — 合計 token / cost / context % + tokens/分のリアルタイムチャート。`Enter` でセッション別に分解。 |
 | **Top usage** `[2]` | 直近 30 分の横断ランキング (model / agent / skill / command / MCP 別)。 |
 | **Config map** `[3]` | agent / skill / command / plugin / MCP の数と、今まさに動いているもの。 |
+| **Focus** `[4]` | [`ccfocus`](#ccfocus--focus-board-と-session-の状態を記録する-hook) の board の要約 — 並行の数と上限・今日の数字・次に見る 1 件・先頭の数 session。`Enter` で board を全画面表示、`q` / `Esc` で overview に戻る。読む場所は hook が書く場所と同じで、`$CCFOCUS_STATE_DIR`、無ければ `~/.claude/focus` (`--claude-dir` では動かない)。 |
 
 キー操作:
 
 | キー | 動作 |
 |---|---|
-| `1` `2` `3` | パネル選択 (`j` / `k` / `Tab` でも移動) |
+| `1` `2` `3` `4` | パネル選択 (`j` / `k` / `Tab` でも移動) |
 | `Enter` | 選択中パネルのフルビューへ drill-down |
 | `c` | **Top usage** でカテゴリ切替: model → agent → skill → command → MCP |
 | `/` | fuzzy filter (入力で絞り込み、`Enter` で確定、`Esc` でクリア) |
@@ -128,7 +130,14 @@ ccmap            # agent / skill / command / plugin / MCP server を一覧
 どのツールも `--help` (全 flag) と `--version` に対応。ログ / config の場所は
 `--projects-dir` / `--claude-dir` / `--project-dir` で上書き可 (該当ツールのみ)。
 
-### `ccfocus` — session の状態を記録する hook
+### `ccfocus` — focus board と session の状態を記録する hook
+
+`ccfocus` は、1 つの state dir を共有する 2 つの部品でできている。hook
+(`ccfocus hook <event>`) は Claude Code の全 session の状態を動作中に記録し、
+focus board (`ccfocus` か `ccfocus tui`) はその記録を読んで、次に見るべき
+session を表示する。先に hook を登録する。hook が無いと board に出る内容が無い。
+
+#### hook の登録
 
 `ccfocus hook <event>` は、session ごとの状態 (`idle` / `working` / `waiting` /
 `done` / `failed`) を `~/.claude/focus/sessions/<session_id>.json` に記録し、
@@ -159,6 +168,123 @@ Claude Code の settings (例: `~/.claude/settings.json`) に、次の 7 つの 
 
 hook は常に exit 0 で終わり、stdout には何も出さないので、失敗しても Claude を
 止めない。問題は stderr に 1 行で出る。
+
+#### focus board
+
+```sh
+ccfocus                          # `ccfocus tui` と同じ
+ccfocus tui --state-dir DIR      # 既定の代わりに DIR を読む
+```
+
+state dir は `--state-dir`、無ければ `$CCFOCUS_STATE_DIR`、それも無ければ
+`~/.claude/focus`。次は合成のデータによる例 (幅 120):
+
+```text
+focus · main:0                                                              parallel 5 / 4 · next round 14:30 (in 6 min)
+┌ next up · waiting 3m ────────────────────────────────────────────────────────────────────┐ ┌ today ──────────────────┐
+│[1] repo-a / tmux status line · feat/tmux · dev:2.1                                       │ │tasks done             1 │
+└──────────────────────────────────────────────────────────────────────────────────────────┘ │switches              12 │
+ # status   repo         project                               worktree       start updated  │yesterday             56 │
+ 1 waiting  repo-a       tmux status line                      feat-tmux      01/02      3m  │parallel avg/max 2.4 / 5 │
+ 2 done     repo-b       e2e 安定化                            e2e-388        12/31     12m  │week (switches/day)      │
+ 3 working  repo-c       token auth                            guard-token    01/03     40s  │▄▇█▃▆█▂                  │
+ 4 working  repo-a       -                                     main           09:12      2m  └─────────────────────────┘
+ - stopped  repo-d       renovate batching                     renovate-2     12/29      6h
+   2 sessions done or stopped 2+ days ago
+
+
+
+
+
+
+
+
+
+to finish (ahead of base · no PR)
+   repo-a       guard-egress   ↑1 ↓5 clean
+   repo-c       guard-token    ↑3 ↓0 2 uncommitted [3]
+1-9 jump · j/k select · d diff (hunk) · p name window · r reload · q quit
+```
+
+画面は 4 つの部分と、header・key の案内行でできている:
+
+- **header**: `parallel N / L` は、直近 30 分に event がある session の数 (N) と
+  上限 (L)。上限ちょうどで黄色、超えると赤になる。警告するだけで、何も止めない。
+  隣の `next round` は次の見回りの時刻で、ローカルの 0 時から `round_minutes`
+  ごとの格子で決まる。
+- **next up**: 次に見る session。承認待ち (`waiting`、待ちが長い順) → 失敗
+  (`failed`) → まだ見ていない完了 (`done`) → 作業中 (`working`) の順で選ぶ。
+  完了した session は、board から移動した時点で見たものとして扱う。
+- **一覧**: 全 session を `#`・status・repo・project・worktree・start (開始)・
+  updated (最後の更新からの経過) で表示する。並びは上の順で、その後に待機
+  (`idle`)、止まっている (`stopped`) が続く。`1`-`9` の行は数字 key で移動でき、
+  止まっている行に番号は付かない。
+- **to finish** (終わらせ候補): `origin/HEAD` より先行していて、その branch に
+  open か merge 済みの自分の PR が無い worktree。close して merge していない PR は
+  branch を隠さない (まだ終わっていないので候補に残る)。各行に先行 (`↑`) と遅れ
+  (`↓`) の commit 数、未 commit の数 (`N uncommitted`、無ければ `clean`)、使って
+  いる session の番号を出す。
+- **today**: `tasks done` は今日作成または merge した自分の PR の数。`switches` は、
+  直前の prompt と別の session に prompt を送った回数。`yesterday` は昨日の
+  `switches`。`parallel avg/max` は、今日の 30 分ごとの区間で event があった
+  session 数の平均と最大。棒グラフ (`week`) は今日までの 7 日間の 1 日ごとの
+  切り替え数。幅が 110 桁未満だと、この枠は一覧の上の 1 行
+  (`today  done 1 · switches …`) にまとめる。
+
+session の status:
+
+- board と同じ側 (host か container かと hostname が同じ) の session は、`pid`
+  が無くなると `stopped` になる。
+- それ以外は event が来ないことだけが手掛かりなので、30 分 event が無いと
+  `stopped` になる。対象は、`pid` を確かめられない反対側の session (host から
+  見た container の session、またはその逆) と、同じ側でも生存を判定できない
+  session (`pid` が記録されていない・`kill` が無い・Windows など)。
+- 完了または止まっていて 2 日以上たった session は、1 行の件数にまとめる
+  (`N sessions done or stopped 2+ days ago`)。
+
+key:
+
+| キー | 動作 |
+|---|---|
+| `1`-`9` | その session の tmux pane に移る (`tmux switch-client`)。container の session は `container_target` の window に移る |
+| `j` / `k` (`↓` / `↑`) | 選ぶ行を動かす |
+| `Enter` | 選んだ行に移る |
+| `d` | 選んだ行の worktree で `hunk diff <merge-base> --watch` を board の横に開く (`<merge-base>` は `git merge-base HEAD origin/HEAD`) |
+| `p` | 選んだ行の tmux window 名を project 名にする |
+| `r` | 今すぐ読み直す (`config.toml` も) |
+| `q` / `Esc` | board を閉じる |
+
+tmux の外では、移動や名前変更の key (`1`-`9`・`Enter`・`d`・`p`) は、できない
+理由を最下行に 1 行出すだけ。
+
+board が呼ぶ tool:
+
+- `tmux`: `1`-`9`・`Enter`・`d`・`p` の key。
+- `hunk`: `d` の key。
+- `gh`: `tasks done` と、`to finish` の PR の判定。`gh` が無い・失敗した時は、
+  `tasks done` が `n/a` になり、`to finish` は PR で絞らない。
+
+board は `git fetch` をしない。local の ref だけを読む。session の file と events は
+2 秒ごと、worktree は 30 秒ごとに読み直し、`gh` の結果は 10 分 cache する (`r` でも
+`gh` は取り直さない)。
+
+設定は `<state dir>/config.toml` に書く。読むのは平らな `key = value` の行だけ
+(table と escape は使えない)。`config.toml` は symlink でもよい (辿って読む) ので、
+dotfiles から link で配れる。壊れていたら既定の値で動き、理由を最下行に出す。
+
+```toml
+limit = 4                # 並行の上限 (1-99)
+round_minutes = 30       # 次に回る時刻の間隔。0 で出さない (0-1440)
+container_target = "dev" # container の session に移る時の tmux target
+```
+
+掃除: board (`ccfocus` の TUI と cctop の Focus panel) が、起動時と 1 時間ごとに、
+90 日より古い event の log (`events/*.tsv`) と、10 分より古い hook の temp file
+(`.<id>.json.<pid>.<nanos>.tmp`) を消す。
+
+外への送信: `gh` が GitHub に問い合わせるのは、自分 (`@me`) の PR の検索と、
+各 session の repo での `gh pr list --author @me` だけ。board は prompt や
+transcript を読まない。
 
 ## Releasing
 

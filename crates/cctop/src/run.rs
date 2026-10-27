@@ -3,7 +3,7 @@
 //! / render ticks / keyboard input in a single `tokio::select!` loop.
 //!
 //! Rendering and key dispatch branch on [`App::mode`]: the overview draws all
-//! three panels, while a drilled-in panel renders and drives the corresponding
+//! four panels, while a drilled-in panel renders and drives the corresponding
 //! full view (`ccstat`/`ccmap` re-entrant API, or the self-rendered Now
 //! detail). The Now panel rolls up all active sessions (see [`crate::now`]).
 
@@ -29,6 +29,8 @@ pub struct RunConfig {
     pub projects_dir: PathBuf,
     pub claude_dir: PathBuf,
     pub project_dir: PathBuf,
+    /// ccfocus state directory for the Focus panel.
+    pub focus_dir: PathBuf,
     pub refresh: Duration,
     pub rescan_every: Duration,
 }
@@ -53,7 +55,8 @@ pub async fn run(cfg: RunConfig) -> Result<()> {
     };
     let today = Utc::now().date_naive();
 
-    let mut dash = Dashboard::load(&scan_cfg, &ctx, today);
+    let mut dash = Dashboard::load(&scan_cfg, &ctx, today, cfg.focus_dir.clone());
+    dash.focus.tick(true);
     let mut app = App::new();
 
     let (tx, rx) = mpsc::channel::<(usize, Line)>(TAIL_CHANNEL_CAPACITY);
@@ -112,7 +115,7 @@ async fn run_loop(
                     dash.now.ingest(tag, &line);
                 }
             }
-            _ = render_tick.tick() => {}
+            _ = render_tick.tick() => dash.focus.tick(false),
             _ = rescan_tick.tick() => {
                 let today = Utc::now().date_naive();
                 dash.rescan(scan_cfg, ctx, today);
@@ -151,6 +154,9 @@ fn draw(terminal: &mut DefaultTerminal, dash: &mut Dashboard, app: &App) -> Resu
         Mode::Drill(Panel::Map) => {
             terminal.draw(|f| ccmap::ui::draw(f, &dash.map))?;
         }
+        Mode::Drill(Panel::Focus) => {
+            terminal.draw(|f| ccfocus::ui::draw(f, f.area(), dash.focus.view()))?;
+        }
     }
     Ok(())
 }
@@ -182,6 +188,11 @@ fn handle_key(
         }
         Mode::Drill(Panel::Map) => {
             if ccmap::ui::handle_key(code, &mut dash.map, ctx, terminal)? {
+                app.exit_drill();
+            }
+        }
+        Mode::Drill(Panel::Focus) => {
+            if dash.focus.on_key(code) {
                 app.exit_drill();
             }
         }

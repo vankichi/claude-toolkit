@@ -1,5 +1,5 @@
 //! Overview rendering: top "Now" band, a Top-usage / Config-map two-column
-//! middle, and a Recent-tools bottom band. Usage magnitudes render as braille
+//! middle, the ccfocus "Focus" band, and a Recent-tools bottom band. Usage magnitudes render as braille
 //! dot bars (`cctk::viz`); the token-rate trend is a bottom-style braille line
 //! chart (ratatui `Chart`). The selected panel gets a highlighted border.
 //!
@@ -58,6 +58,7 @@ pub fn draw(f: &mut Frame<'_>, dash: &Dashboard, app: &App) {
     let rows = Layout::vertical([
         Constraint::Length(8),
         Constraint::Min(3),
+        Constraint::Length(focus_height(dash.focus.view())),
         Constraint::Length(3),
     ])
     .split(area);
@@ -68,7 +69,24 @@ pub fn draw(f: &mut Frame<'_>, dash: &Dashboard, app: &App) {
     draw_usage(f, cols[0], dash, app);
     draw_map(f, cols[1], dash, app);
 
-    draw_recent(f, rows[2], dash, app);
+    draw_focus(f, rows[2], dash, app);
+    draw_recent(f, rows[3], dash, app);
+}
+
+/// Session rows the Focus band lists before the drill-down.
+const FOCUS_ROWS: usize = 4;
+
+/// Borders, the summary and next-session lines, and up to [`FOCUS_ROWS`]
+/// rows.
+fn focus_height(v: &ccfocus::ui::View) -> u16 {
+    u16::try_from(4 + v.board.rows.len().min(FOCUS_ROWS)).unwrap_or(u16::MAX)
+}
+
+fn draw_focus(f: &mut Frame<'_>, area: Rect, dash: &Dashboard, app: &App) {
+    let block = panel_block("Focus  [4]", Panel::Focus, app);
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+    ccfocus::ui::draw_compact(f, inner, dash.focus.view());
 }
 
 /// Short project summary for the Now drill-down: the project, up to two
@@ -382,7 +400,7 @@ fn draw_recent(f: &mut Frame<'_>, area: Rect, dash: &Dashboard, app: &App) {
     let title = if app.filtering || !app.filter.is_empty() {
         format!("Tool usage   /{}", app.filter)
     } else {
-        "Tool usage   ( 1/2/3 select · Enter drill · c usage-cat · / filter · q quit )".to_string()
+        "Tool usage   ( 1-4 select · Enter drill · c usage-cat · / filter · q quit )".to_string()
     };
     let block = Block::default()
         .borders(Borders::ALL)

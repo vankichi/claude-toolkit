@@ -6,8 +6,19 @@
 //! line in `<state>/events/<YYYYMMDD>.tsv`. Prompt and message bodies are
 //! never stored. All writes live in this crate; `cctk` only reads.
 
+pub mod app;
+pub mod board;
+mod cmd;
+pub mod config;
+pub mod events;
 pub mod fsx;
 pub mod probe;
+pub mod prune;
+pub mod repos;
+pub mod text;
+pub mod tmux;
+pub mod tui;
+pub mod ui;
 
 use anyhow::{Context, Result, bail};
 use cctk::focus::{self, SCHEMA, SessionState, Status};
@@ -385,33 +396,11 @@ fn first_timestamp(transcript: &Path) -> Option<DateTime<FixedOffset>> {
 fn clean_project(raw: &str) -> Option<String> {
     let cleaned: String = raw
         .chars()
-        .filter(|&c| !c.is_control() && !is_invisible_format(c))
+        .filter(|&c| !text::is_hidden(c))
         .take(MAX_PROJECT_CHARS)
         .collect();
     let trimmed = cleaned.trim();
     (!trimmed.is_empty()).then(|| trimmed.to_string())
-}
-
-/// Invisible Unicode format characters (category Cf) that change or hide how
-/// surrounding text is shown: soft hyphen, Arabic letter mark, Mongolian vowel
-/// separator, zero-width and directional marks, bidi embeddings / overrides /
-/// isolates, invisible operators, BOM, interlinear annotation marks, and tag
-/// characters (which can smuggle hidden ASCII).
-fn is_invisible_format(c: char) -> bool {
-    matches!(
-        c,
-        '\u{00AD}'
-            | '\u{061C}'
-            | '\u{180E}'
-            | '\u{200B}'..='\u{200F}'
-            | '\u{202A}'..='\u{202E}'
-            | '\u{2060}'..='\u{2064}'
-            | '\u{2066}'..='\u{206F}'
-            | '\u{FEFF}'
-            | '\u{FFF9}'..='\u{FFFB}'
-            | '\u{E0001}'
-            | '\u{E0020}'..='\u{E007F}'
-    )
 }
 
 #[cfg(test)]

@@ -1,11 +1,12 @@
 //! ccfocus — hook-driven status board of every Claude Code session.
 //!
-//! `ccfocus hook <event>` is meant to be registered as a Claude Code command
-//! hook. Whatever goes wrong, it prints at most one line to stderr and exits 0
-//! so Claude's work is never blocked (exit 2 would block a prompt or a stop),
-//! and the hook path never writes to stdout (`SessionStart` /
-//! `UserPromptSubmit` stdout is injected into Claude's context); only
-//! `--help` / `--version` print there.
+//! `ccfocus` (or `ccfocus tui`) opens the focus board. `ccfocus hook <event>`
+//! is meant to be registered as a Claude Code command hook. Whatever goes
+//! wrong, the hook prints at most one line to stderr and exits 0 so Claude's
+//! work is never blocked (exit 2 would block a prompt or a stop), and it never
+//! writes to stdout (`SessionStart` / `UserPromptSubmit` stdout is injected
+//! into Claude's context); only `--help` / `--version` print there. Argument
+//! errors also exit 0, since a hook registered with a typo must not block.
 
 use anyhow::{Context, Result, bail};
 use clap::error::ErrorKind;
@@ -32,7 +33,7 @@ const PROBE_BUDGET: Duration = Duration::from_secs(1);
 )]
 struct Cli {
     #[command(subcommand)]
-    command: Command,
+    command: Option<Command>,
 }
 
 #[derive(Subcommand, Debug)]
@@ -44,6 +45,14 @@ enum Command {
         /// Hook event name, e.g. `SessionStart`
         event: String,
 
+        /// State directory (default: `$CCFOCUS_STATE_DIR`, else ~/.claude/focus)
+        #[arg(long)]
+        state_dir: Option<PathBuf>,
+    },
+    /// Open the focus board (the default with no subcommand): the next
+    /// session to look at, every session, worktrees to finish, and today's
+    /// numbers.
+    Tui {
         /// State directory (default: `$CCFOCUS_STATE_DIR`, else ~/.claude/focus)
         #[arg(long)]
         state_dir: Option<PathBuf>,
@@ -63,11 +72,31 @@ fn main() -> ExitCode {
             return ExitCode::SUCCESS;
         }
     };
-    let Command::Hook { event, state_dir } = cli.command;
-    if let Err(e) = hook(&event, state_dir) {
-        warn(&format!("{event}: {e:#}"));
+    match cli.command {
+        Some(Command::Hook { event, state_dir }) => {
+            if let Err(e) = hook(&event, state_dir) {
+                warn(&format!("{event}: {e:#}"));
+            }
+            ExitCode::SUCCESS
+        }
+        Some(Command::Tui { state_dir }) => tui(state_dir),
+        None => tui(None),
     }
-    ExitCode::SUCCESS
+}
+
+/// Unlike the hook, the board reports failures through its exit status.
+fn tui(state_dir: Option<PathBuf>) -> ExitCode {
+    let Some(state_dir) = state_dir.or_else(cctk::focus::default_state_dir) else {
+        warn("could not determine the state directory");
+        return ExitCode::FAILURE;
+    };
+    match ccfocus::tui::run(state_dir) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            warn(&format!("{e:#}"));
+            ExitCode::FAILURE
+        }
+    }
 }
 
 /// One stderr line. Unlike `eprintln!`, a failed write is ignored rather than

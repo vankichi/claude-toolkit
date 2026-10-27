@@ -15,8 +15,8 @@ A Cargo workspace of small terminal tools for working with Claude Code.
 | [`ccwatch`](crates/ccwatch) | Real-time TUI monitor for Claude Code session usage (tokens, cost, context, tools). |
 | [`ccmap`](crates/ccmap) | Read-only TUI to browse available agents, skills, commands, plugins, and MCP servers. |
 | [`ccstat`](crates/ccstat) | Read-only TUI ranking model/agent/skill/command/MCP usage aggregated across all session logs; `--watch` adds a live view with a running indicator. |
-| [`cctop`](crates/cctop) | Unified bottom-style dashboard combining live usage (Now), the cross-session ranking, and the config map in one screen, with braille-dot bars, fuzzy filtering, and drill-down into each tool's full view. |
-| [`ccfocus`](crates/ccfocus) | Claude Code hook (`ccfocus hook <event>`) that records every session's status (idle / working / waiting / done / failed), project name, repo, worktree, and tmux pane as one JSON file per session under `~/.claude/focus/`, read through `cctk::focus`. Never stores prompt or message text. Not a TUI: it runs from hooks you register (see [below](#ccfocus--session-status-hook)). |
+| [`cctop`](crates/cctop) | Unified bottom-style dashboard combining live usage (Now), the cross-session ranking, the config map, and the Focus panel (the `ccfocus` board) in one screen, with braille-dot bars, fuzzy filtering, and drill-down into each tool's full view. |
+| [`ccfocus`](crates/ccfocus) | Claude Code hook (`ccfocus hook <event>`) that records every session's status (idle / working / waiting / done / failed), project name, repo, worktree, and tmux pane as one JSON file per session under `~/.claude/focus/`, read through `cctk::focus`. Never stores prompt or message text. Also a TUI: `ccfocus` (no arguments) or `ccfocus tui` opens the focus board, which shows what to look at next, every session, worktrees left to finish, and today's numbers (see [below](#ccfocus--focus-board-and-session-status-hook)). |
 
 ## Install
 
@@ -76,13 +76,14 @@ If `~/.local/bin` is on your `PATH`, the tools are runnable right after
 
 The TUI tools (`cctop`, `ccwatch`, `ccstat`, `ccmap`) read your Claude Code
 logs under `~/.claude/` automatically — just run them, no setup or arguments
-needed. Each is a full-screen TUI; press `q` to quit. `ccfocus` is different:
-Claude Code runs it as a hook, which you register once (see
-[below](#ccfocus--session-status-hook)).
+needed. Each is a full-screen TUI; press `q` to quit. `ccfocus` is both a hook
+and a TUI: Claude Code runs it as a hook, which you register once, and the
+focus board it opens is built from what the hook records (see
+[below](#ccfocus--focus-board-and-session-status-hook)).
 
 ### `cctop` — the all-in-one dashboard
 
-Start here. One screen, three live panels:
+Start here. One screen, four live panels:
 
 ```sh
 cctop
@@ -93,12 +94,13 @@ cctop
 | **Now** `[1]` | Live rollup of every active session — total tokens, cost, context %, and a real-time tokens/min chart. `Enter` breaks it down per session. |
 | **Top usage** `[2]` | Cross-session ranking over the last 30 min, per model / agent / skill / command / MCP. |
 | **Config map** `[3]` | How many agents / skills / commands / plugins / MCP you have, and which are running right now. |
+| **Focus** `[4]` | The [`ccfocus`](#ccfocus--focus-board-and-session-status-hook) board in brief: parallel sessions against the limit, today's numbers, the next session to look at, and the first few sessions. `Enter` opens the full board; `q` / `Esc` returns to the overview. It reads the same directory the hook writes to: `$CCFOCUS_STATE_DIR`, else `~/.claude/focus` (`--claude-dir` does not move it). |
 
 Keys:
 
 | Key | Action |
 |---|---|
-| `1` `2` `3` | Focus a panel (or `j` / `k` / `Tab` to cycle) |
+| `1` `2` `3` `4` | Focus a panel (or `j` / `k` / `Tab` to cycle) |
 | `Enter` | Drill into the focused panel's full view |
 | `c` | On **Top usage**, cycle the category: model → agent → skill → command → MCP |
 | `/` | Fuzzy-filter (type to narrow, `Enter` to apply, `Esc` to clear) |
@@ -130,7 +132,15 @@ Every tool accepts `--help` (full flag list) and `--version`. Log and config
 locations can be overridden with `--projects-dir` / `--claude-dir` /
 `--project-dir` where they apply.
 
-### `ccfocus` — session status hook
+### `ccfocus` — focus board and session status hook
+
+`ccfocus` has two parts that share one state directory. The hook
+(`ccfocus hook <event>`) records every Claude Code session's status as Claude
+runs; the focus board (`ccfocus` or `ccfocus tui`) reads those records and shows
+which session needs you next. Register the hook first: the board has nothing to
+show without it.
+
+#### Register the hook
 
 `ccfocus hook <event>` records each session's status (`idle` / `working` /
 `waiting` / `done` / `failed`) in `~/.claude/focus/sessions/<session_id>.json`
@@ -162,6 +172,130 @@ absolute path to the binary:
 
 The hook always exits 0 and prints nothing to stdout, so a failure never
 blocks Claude; problems go to stderr as a single line.
+
+#### Focus board
+
+```sh
+ccfocus                          # same as `ccfocus tui`
+ccfocus tui --state-dir DIR      # read DIR instead of the default
+```
+
+The state directory is `--state-dir`, else `$CCFOCUS_STATE_DIR`, else
+`~/.claude/focus`. This is a synthetic example (120 columns wide):
+
+```text
+focus · main:0                                                              parallel 5 / 4 · next round 14:30 (in 6 min)
+┌ next up · waiting 3m ────────────────────────────────────────────────────────────────────┐ ┌ today ──────────────────┐
+│[1] repo-a / tmux status line · feat/tmux · dev:2.1                                       │ │tasks done             1 │
+└──────────────────────────────────────────────────────────────────────────────────────────┘ │switches              12 │
+ # status   repo         project                               worktree       start updated  │yesterday             56 │
+ 1 waiting  repo-a       tmux status line                      feat-tmux      01/02      3m  │parallel avg/max 2.4 / 5 │
+ 2 done     repo-b       e2e 安定化                            e2e-388        12/31     12m  │week (switches/day)      │
+ 3 working  repo-c       token auth                            guard-token    01/03     40s  │▄▇█▃▆█▂                  │
+ 4 working  repo-a       -                                     main           09:12      2m  └─────────────────────────┘
+ - stopped  repo-d       renovate batching                     renovate-2     12/29      6h
+   2 sessions done or stopped 2+ days ago
+
+
+
+
+
+
+
+
+
+to finish (ahead of base · no PR)
+   repo-a       guard-egress   ↑1 ↓5 clean
+   repo-c       guard-token    ↑3 ↓0 2 uncommitted [3]
+1-9 jump · j/k select · d diff (hunk) · p name window · r reload · q quit
+```
+
+The screen has four parts, plus a header and a key help line:
+
+- **Header**: `parallel N / L` is the number of sessions with an event in the
+  last 30 minutes (N) against your limit (L). It turns yellow at the limit and
+  red above it; it only warns and never stops anything. Next to it is the time
+  of the next check-in (`next round`), on a grid of `round_minutes` from local
+  midnight.
+- **Next up** (`next up`): the session to look at next. The order is waiting
+  for approval (`waiting`, longest wait first), then failed (`failed`), then
+  finished but not yet visited (`done`), then working (`working`). A finished
+  session counts as visited once you jump to it from the board.
+- **List**: every session as `#`, status, repo, project, worktree, start time,
+  and time since the last update. Rows are in the same order as above, then idle
+  (`idle`), then stopped (`stopped`). Rows `1`-`9` can be jumped to with the
+  number key; stopped rows have no number.
+- **Worktrees to finish** (`to finish`): worktrees that are ahead of
+  `origin/HEAD` and whose branch has no open or merged PR of yours. A PR that
+  was closed without merging does not hide the branch (the work is not
+  finished, so it stays a candidate). Each line shows the commits ahead (`↑`)
+  and behind (`↓`), the number of uncommitted entries (`N uncommitted`, or
+  `clean`), and the numbers of the sessions using it.
+- **Today** (`today`): `tasks done` is the number of your PRs created or merged
+  today; `switches` counts prompts sent to a different session than the previous
+  prompt; `yesterday` is yesterday's `switches`; `parallel avg/max` is the mean
+  and maximum number of sessions active in one of today's 30-minute windows; the
+  bars (`week`) show switches per day for the last seven days, ending today.
+  Below 110 columns the box becomes a single line above the list
+  (`today  done 1 · switches …`).
+
+Session status:
+
+- A session on the same side as the board (same host or container, and the same
+  hostname) shows `stopped` once its `pid` is gone.
+- Otherwise, silence is the only signal: `stopped` appears after 30 minutes
+  without an event. This applies to a session on the other side (a container
+  session seen from the host, or the reverse), whose `pid` can't be checked,
+  and to a same-side session whose liveness can't be determined (no recorded
+  `pid`, no `kill` command, Windows, and so on).
+- A finished or stopped session untouched for 2 days or more is folded into one
+  count line (`N sessions done or stopped 2+ days ago`).
+
+Keys:
+
+| Key | Action |
+|---|---|
+| `1`-`9` | Switch to that session's tmux pane (`tmux switch-client`). A container session goes to the `container_target` window. |
+| `j` / `k` (`↓` / `↑`) | Move the selection |
+| `Enter` | Switch to the selected row |
+| `d` | Open `hunk diff <merge-base> --watch` beside the board, in the selected row's worktree (`<merge-base>` is `git merge-base HEAD origin/HEAD`) |
+| `p` | Rename the selected row's tmux window to its project name |
+| `r` | Re-read now (including `config.toml`) |
+| `q` / `Esc` | Close the board |
+
+Outside tmux, the keys that move or rename (`1`-`9`, `Enter`, `d`, `p`) only
+print the reason on the bottom line.
+
+Tools the board calls:
+
+- `tmux`: the `1`-`9`, `Enter`, `d`, and `p` keys.
+- `hunk`: the `d` key.
+- `gh`: `tasks done` and the PR check for worktrees to finish. When `gh` is
+  missing or fails, `tasks done` shows `n/a` and worktrees to finish are not
+  narrowed by PR.
+
+The board never runs `git fetch`; it reads local refs only. Session files and
+events are re-read every 2 seconds, worktrees every 30 seconds, and `gh` results
+are cached for 10 minutes (`r` does not refresh `gh`).
+
+Settings go in `<state dir>/config.toml`. Only flat `key = value` lines are
+read (no tables, no escapes). `config.toml` may be a symlink (it is followed),
+so you can distribute it from your dotfiles. If the file is broken, the board
+runs with the defaults and shows the reason on the bottom line.
+
+```toml
+limit = 4                # parallel-session limit (1-99)
+round_minutes = 30       # check-in interval; 0 hides it (0-1440)
+container_target = "dev" # tmux target for jumping to a container session
+```
+
+Housekeeping: the board (`ccfocus` and cctop's Focus panel) runs a cleanup at
+start-up and every hour. It deletes event logs (`events/*.tsv`) older than 90
+days and hook temp files (`.<id>.json.<pid>.<nanos>.tmp`) older than 10 minutes.
+
+What leaves your machine: `gh` asks GitHub only for a search of your own
+(`@me`) PRs and, in each session's repo, `gh pr list --author @me`. The board
+never reads prompts or transcripts.
 
 ## Releasing
 

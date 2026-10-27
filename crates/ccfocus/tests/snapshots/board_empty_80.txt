@@ -1,0 +1,12 @@
+focus · main:0                                                    parallel 0 / 4
+┌ next up ─────────────────────────────────────────────────────────────────────┐
+│none                                                                          │
+└──────────────────────────────────────────────────────────────────────────────┘
+today  done n/a · switches 12 (yesterday 56) · parallel 2.4 / 5 · week ▄▇█▃▆█▂
+ # status   repo         project                   worktree       start updated
+no sessions yet (register the ccfocus hook: see the README)
+
+
+
+to finish: checking…
+config.toml: line 1: unknown key `colour`

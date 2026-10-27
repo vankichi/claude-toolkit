@@ -8,17 +8,18 @@
 use ccstat::model::Category;
 use crossterm::event::KeyCode;
 
-/// The three overview panels.
+/// The four overview panels.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Panel {
     Now,
     Stats,
     Map,
+    Focus,
 }
 
 impl Panel {
     /// Cycle order for j/k navigation.
-    const ORDER: [Panel; 3] = [Panel::Now, Panel::Stats, Panel::Map];
+    const ORDER: [Panel; 4] = [Panel::Now, Panel::Stats, Panel::Map, Panel::Focus];
 
     fn index(self) -> usize {
         Self::ORDER.iter().position(|&p| p == self).unwrap_or(0)
@@ -110,6 +111,10 @@ impl App {
                 self.selected = Panel::Map;
                 Action::None
             }
+            KeyCode::Char('4') => {
+                self.selected = Panel::Focus;
+                Action::None
+            }
             KeyCode::Char('j') | KeyCode::Down | KeyCode::Tab => {
                 self.selected = self.selected.next();
                 Action::None
@@ -160,6 +165,8 @@ mod tests {
         assert_eq!(app.selected, Panel::Stats);
         app.on_overview_key(KeyCode::Char('3'));
         assert_eq!(app.selected, Panel::Map);
+        app.on_overview_key(KeyCode::Char('4'));
+        assert_eq!(app.selected, Panel::Focus);
         app.on_overview_key(KeyCode::Char('1'));
         assert_eq!(app.selected, Panel::Now);
     }
@@ -172,9 +179,11 @@ mod tests {
         app.on_overview_key(KeyCode::Char('j'));
         assert_eq!(app.selected, Panel::Map);
         app.on_overview_key(KeyCode::Char('j'));
+        assert_eq!(app.selected, Panel::Focus);
+        app.on_overview_key(KeyCode::Char('j'));
         assert_eq!(app.selected, Panel::Now); // wraps
         app.on_overview_key(KeyCode::Char('k'));
-        assert_eq!(app.selected, Panel::Map); // wraps back
+        assert_eq!(app.selected, Panel::Focus); // wraps back
     }
 
     #[test]

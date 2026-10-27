@@ -2,7 +2,8 @@
 //!
 //! Holds the self-aggregated [`NowStats`] plus a `ccstat` and a `ccmap`
 //! `AppState` (reused verbatim for both the compact overview panels and the
-//! drill-down full views). `load` does the initial scan/discover; `rescan`
+//! drill-down full views), and the ccfocus board (which schedules its own
+//! re-reads on [`ccfocus::app::Focus::tick`]). `load` does the initial scan/discover; `rescan`
 //! refreshes the stats + map subsystems while preserving the Now aggregate and
 //! any in-view selection/filter state.
 
@@ -13,6 +14,7 @@ use ccstat::live::ActiveSet;
 use ccstat::provenance::ProvenanceMap;
 use ccstat::scan::{self, ScanConfig};
 use chrono::{Duration, NaiveDate, Utc};
+use std::path::PathBuf;
 
 /// How recently a skill/agent must have run to count as "running now" in the
 /// config map.
@@ -66,13 +68,21 @@ pub struct Dashboard {
     pub map_counts: MapCounts,
     /// Skills/agents/etc. running right now (config-map live highlight).
     pub active: ActiveSet,
+    /// Every session's status from the ccfocus hook's state files.
+    pub focus: ccfocus::app::Focus,
 }
 
 impl Dashboard {
     /// Initial load: scan every session into the stats store and discover the
-    /// config map. The Now aggregate starts empty and is filled by the tail.
+    /// config map. The Now aggregate starts empty and is filled by the tail;
+    /// the Focus board reads `focus_dir` on its first tick.
     #[must_use]
-    pub fn load(scan_cfg: &ScanConfig, ctx: &Context, today: NaiveDate) -> Self {
+    pub fn load(
+        scan_cfg: &ScanConfig,
+        ctx: &Context,
+        today: NaiveDate,
+        focus_dir: PathBuf,
+    ) -> Self {
         let db = scan::scan(scan_cfg, today);
         let provenance = ProvenanceMap::build(&discover::discover_extensions(ctx));
         let stats = ccstat::ui::AppState::new(db, provenance, today);
@@ -87,6 +97,7 @@ impl Dashboard {
             map,
             map_counts,
             active: running_now(scan_cfg),
+            focus: ccfocus::app::Focus::open(focus_dir),
         }
     }
 
@@ -160,8 +171,10 @@ mod tests {
             project_dir: project.path().to_path_buf(),
         };
         let today = NaiveDate::from_ymd_opt(2026, 7, 18).unwrap();
-        let dash = Dashboard::load(&scan_cfg, &ctx, today);
+        let focus = tempfile::tempdir().unwrap();
+        let dash = Dashboard::load(&scan_cfg, &ctx, today, focus.path().to_path_buf());
         assert_eq!(dash.map_counts, MapCounts::default());
         assert_eq!(dash.now.total_tokens(), 0);
+        assert!(dash.focus.view().board.rows.is_empty());
     }
 }

@@ -117,15 +117,29 @@ pub fn session_path(state_dir: &Path, session_id: &str) -> PathBuf {
     sessions_dir(state_dir).join(session_file_name(session_id))
 }
 
+/// State files are a few hundred bytes; anything larger than this is not one
+/// (and dashboards read every file every few seconds).
+pub const MAX_SESSION_BYTES: u64 = 64 * 1024;
+
 /// Read one state file. `None` when it is missing, a symlink or other
-/// non-regular file, unparsable, or of a different [`SCHEMA`].
+/// non-regular file, larger than [`MAX_SESSION_BYTES`], unparsable, or of a
+/// different [`SCHEMA`].
 #[must_use]
 pub fn read_session(path: &Path) -> Option<SessionState> {
+    use std::io::Read;
     let meta = std::fs::symlink_metadata(path).ok()?;
-    if !meta.file_type().is_file() {
+    if !meta.file_type().is_file() || meta.len() > MAX_SESSION_BYTES {
         return None;
     }
-    let bytes = std::fs::read(path).ok()?;
+    let mut bytes = Vec::new();
+    std::fs::File::open(path)
+        .ok()?
+        .take(MAX_SESSION_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .ok()?;
+    if bytes.len() as u64 > MAX_SESSION_BYTES {
+        return None;
+    }
     let state: SessionState = serde_json::from_slice(&bytes).ok()?;
     (state.schema == SCHEMA).then_some(state)
 }
@@ -228,6 +242,20 @@ mod tests {
 
         let got = list_sessions(tmp.path());
         assert_eq!(got, vec![sample("s1")]);
+    }
+
+    #[test]
+    fn oversized_files_are_skipped() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut big = serde_json::to_string(&sample("big")).unwrap();
+        big.push_str(&" ".repeat(usize::try_from(MAX_SESSION_BYTES).unwrap()));
+        write(tmp.path(), "big.json", &big);
+        write(
+            tmp.path(),
+            "ok.json",
+            &serde_json::to_string(&sample("ok")).unwrap(),
+        );
+        assert_eq!(list_sessions(tmp.path()), vec![sample("ok")]);
     }
 
     #[test]
