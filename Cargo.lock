@@ -184,6 +184,8 @@ dependencies = [
  "cctk",
  "chrono",
  "clap",
+ "crossterm",
+ "ratatui",
  "serde",
  "serde_json",
  "tempfile",
@@ -238,6 +240,7 @@ name = "cctop"
 version = "0.3.0"
 dependencies = [
  "anyhow",
+ "ccfocus",
  "ccmap",
  "ccstat",
  "cctk",
