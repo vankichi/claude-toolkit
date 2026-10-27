@@ -94,7 +94,7 @@ cctop
 | **Now** `[1]` | Live rollup of every active session — total tokens, cost, context %, and a real-time tokens/min chart. `Enter` breaks it down per session. |
 | **Top usage** `[2]` | Cross-session ranking over the last 30 min, per model / agent / skill / command / MCP. |
 | **Config map** `[3]` | How many agents / skills / commands / plugins / MCP you have, and which are running right now. |
-| **Focus** `[4]` | The [`ccfocus`](#ccfocus--focus-board-and-session-status-hook) board in brief: parallel sessions against the limit, today's numbers, the next session to look at, and the first few sessions. `Enter` opens the full board; `q` / `Esc` returns to the overview. It reads `$CCFOCUS_STATE_DIR`, or `focus/` under the Claude config directory (`~/.claude/focus`). |
+| **Focus** `[4]` | The [`ccfocus`](#ccfocus--focus-board-and-session-status-hook) board in brief: parallel sessions against the limit, today's numbers, the next session to look at, and the first few sessions. `Enter` opens the full board; `q` / `Esc` returns to the overview. It reads the same directory the hook writes to: `$CCFOCUS_STATE_DIR`, else `~/.claude/focus` (`--claude-dir` does not move it). |
 
 Keys:
 
@@ -279,8 +279,9 @@ events are re-read every 2 seconds, worktrees every 30 seconds, and `gh` results
 are cached for 10 minutes (`r` does not refresh `gh`).
 
 Settings go in `<state dir>/config.toml`. Only flat `key = value` lines are
-read (no tables, no escapes). If the file is broken, the board runs with the
-defaults and shows the reason on the bottom line.
+read (no tables, no escapes). `config.toml` may be a symlink (it is followed),
+so you can distribute it from your dotfiles. If the file is broken, the board
+runs with the defaults and shows the reason on the bottom line.
 
 ```toml
 limit = 4                # parallel-session limit (1-99)

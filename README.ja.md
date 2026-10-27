@@ -93,7 +93,7 @@ cctop
 | **Now** `[1]` | active な全セッションを合算 — 合計 token / cost / context % + tokens/分のリアルタイムチャート。`Enter` でセッション別に分解。 |
 | **Top usage** `[2]` | 直近 30 分の横断ランキング (model / agent / skill / command / MCP 別)。 |
 | **Config map** `[3]` | agent / skill / command / plugin / MCP の数と、今まさに動いているもの。 |
-| **Focus** `[4]` | [`ccfocus`](#ccfocus--focus-board-と-session-の状態を記録する-hook) の board の要約 — 並行の数と上限・今日の数字・次に見る 1 件・先頭の数 session。`Enter` で board を全画面表示、`q` / `Esc` で overview に戻る。読む場所は `$CCFOCUS_STATE_DIR`、無ければ Claude の config dir 配下の `focus/` (`~/.claude/focus`)。 |
+| **Focus** `[4]` | [`ccfocus`](#ccfocus--focus-board-と-session-の状態を記録する-hook) の board の要約 — 並行の数と上限・今日の数字・次に見る 1 件・先頭の数 session。`Enter` で board を全画面表示、`q` / `Esc` で overview に戻る。読む場所は hook が書く場所と同じで、`$CCFOCUS_STATE_DIR`、無ければ `~/.claude/focus` (`--claude-dir` では動かない)。 |
 
 キー操作:
 
@@ -267,7 +267,8 @@ board は `git fetch` をしない。local の ref だけを読む。session の
 `gh` は取り直さない)。
 
 設定は `<state dir>/config.toml` に書く。読むのは平らな `key = value` の行だけ
-(table と escape は使えない)。壊れていたら既定の値で動き、理由を最下行に出す。
+(table と escape は使えない)。`config.toml` は symlink でもよい (辿って読む) ので、
+dotfiles から link で配れる。壊れていたら既定の値で動き、理由を最下行に出す。
 
 ```toml
 limit = 4                # 並行の上限 (1-99)
