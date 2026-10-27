@@ -1,9 +1,10 @@
 //! cctop — unified bottom-style TUI dashboard for Claude Code.
 //!
 //! One screen that combines the live active-session monitor (Now), the
-//! cross-session usage ranking (Top usage), and the config map (agents /
-//! skills / commands / plugins / MCP). Select a panel with 1/2/3 (or j/k) and
-//! press Enter to drill into its full view; `/` fuzzy-filters; `q` quits.
+//! cross-session usage ranking (Top usage), the config map (agents /
+//! skills / commands / plugins / MCP), and the ccfocus board of every
+//! session's status (Focus). Select a panel with 1/2/3/4 (or j/k) and press
+//! Enter to drill into its full view; `/` fuzzy-filters; `q` quits.
 
 mod agents;
 mod app;
@@ -75,10 +76,17 @@ async fn main() -> Result<()> {
         None => std::env::current_dir().context("could not determine current directory")?,
     };
 
+    // Same resolution as the hook: `$CCFOCUS_STATE_DIR`, else `focus` under
+    // the Claude config directory.
+    let focus_dir = std::env::var_os(cctk::focus::STATE_DIR_ENV)
+        .filter(|v| !v.is_empty())
+        .map_or_else(|| claude_dir.join("focus"), PathBuf::from);
+
     run::run(run::RunConfig {
         projects_dir,
         claude_dir,
         project_dir,
+        focus_dir,
         refresh: Duration::from_millis(cli.refresh_ms.max(16)),
         rescan_every: Duration::from_secs(cli.rescan_secs.max(1)),
     })
