@@ -1,14 +1,14 @@
-focus · main:0                                                                   並行 5 / 4 · 次に回る 14:30 (残り 6 分)
-┌ 次の 1 件 · 承認待ち 3m ─────────────────────────────────────────────────────────────────┐ ┌ 今日 ───────────────────┐
-│[1] repo-a / tmux 表示の改善 · feat/tmux · dev:2.1                                        │ │終わった task         1  │
-└──────────────────────────────────────────────────────────────────────────────────────────┘ │切り替え             12  │
- # status       repo         project                           worktree       start updated  │昨日の切り替え       56  │
- 1 承認待ち     repo-a       tmux 表示の改善                   feat-tmux      01/02      3m  │並行 平均/最大  2.4 / 5  │
- 2 完了         repo-b       e2e の安定化                      e2e-388        12/31     12m  │今週 (切り替え/日)       │
- 3 作業中       repo-c       token 認証                        guard-token    01/03     40s  │▄▇█▃▆█▂                  │
- 4 作業中       repo-a       -                                 main           09:12      2m  └─────────────────────────┘
- - 止まっている repo-d       renovate 集約                     renovate-2     12/29      6h
-   2 日以上前に終わった・止まった session 2 件
+focus · main:0                                                              parallel 5 / 4 · next round 14:30 (in 6 min)
+┌ next up · waiting 3m ────────────────────────────────────────────────────────────────────┐ ┌ today ──────────────────┐
+│[1] repo-a / tmux status line · feat/tmux · dev:2.1                                       │ │tasks done             1 │
+└──────────────────────────────────────────────────────────────────────────────────────────┘ │switches              12 │
+ # status   repo         project                               worktree       start updated  │yesterday             56 │
+ 1 waiting  repo-a       tmux status line                      feat-tmux      01/02      3m  │parallel avg/max 2.4 / 5 │
+ 2 done     repo-b       e2e 安定化                            e2e-388        12/31     12m  │week (switches/day)      │
+ 3 working  repo-c       token auth                            guard-token    01/03     40s  │▄▇█▃▆█▂                  │
+ 4 working  repo-a       -                                     main           09:12      2m  └─────────────────────────┘
+ - stopped  repo-d       renovate batching                     renovate-2     12/29      6h
+   2 sessions done or stopped 2+ days ago
 
 
 
@@ -18,7 +18,7 @@ focus · main:0                                                                 
 
 
 
-終わらせ候補 (base より先行 · PR 無し)
+to finish (ahead of base · no PR)
    repo-a       guard-egress   ↑1 ↓5 clean
-   repo-c       guard-token    ↑3 ↓0 未 commit 2 [3]
-1-9 移る · j/k 選ぶ · d 差分 (hunk) · p window 名 · r 読み直す · q 閉じる
+   repo-c       guard-token    ↑3 ↓0 2 uncommitted [3]
+1-9 jump · j/k select · d diff (hunk) · p name window · r reload · q quit

@@ -36,12 +36,12 @@ impl Shown {
     #[must_use]
     pub fn label(self) -> &'static str {
         match self {
-            Self::Waiting => "承認待ち",
-            Self::Failed => "失敗",
-            Self::Done => "完了",
-            Self::Working => "作業中",
-            Self::Idle => "待機",
-            Self::Stopped => "止まっている",
+            Self::Waiting => "waiting",
+            Self::Failed => "failed",
+            Self::Done => "done",
+            Self::Working => "working",
+            Self::Idle => "idle",
+            Self::Stopped => "stopped",
         }
     }
 }

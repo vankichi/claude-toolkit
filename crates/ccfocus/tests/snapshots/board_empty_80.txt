@@ -1,12 +1,12 @@
-focus · main:0                                                        並行 0 / 4
-┌ 次の 1 件 ───────────────────────────────────────────────────────────────────┐
-│なし                                                                          │
+focus · main:0                                                    parallel 0 / 4
+┌ next up ─────────────────────────────────────────────────────────────────────┐
+│none                                                                          │
 └──────────────────────────────────────────────────────────────────────────────┘
-今日  終わった task 未取得 · 切り替え 12 (昨日 56) · 並行 2.4 / 5 · 週 ▄▇█▃▆█▂
- # status       repo         project               worktree       start updated
-session はありません (ccfocus hook の登録は README を参照)
+today  done n/a · switches 12 (yesterday 56) · parallel 2.4 / 5 · week ▄▇█▃▆█▂
+ # status   repo         project                   worktree       start updated
+no sessions yet (register the ccfocus hook: see the README)
 
 
 
-終わらせ候補: 確認中…
+to finish: checking…
 config.toml: line 1: unknown key `colour`

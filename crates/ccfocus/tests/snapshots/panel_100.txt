@@ -1,6 +1,6 @@
-並行 5 / 4 · 次に回る 14:30 (残り 6 分) · 今日 終わった task 1 · 切り替え 12
-次: 承認待ち 3m · [1] repo-a / tmux 表示の改善 · feat/tmux · dev:2.1
- 1 承認待ち     repo-a       tmux 表示の改善                           feat-tmux      01/02      3m
- 2 完了         repo-b       e2e の安定化                              e2e-388        12/31     12m
- 3 作業中       repo-c       token 認証                                guard-token    01/03     40s
- 4 作業中       repo-a       -                                         main           09:12      2m
+parallel 5 / 4 · next round 14:30 (in 6 min) · today tasks done 1 · switches 12
+next: waiting 3m · [1] repo-a / tmux status line · feat/tmux · dev:2.1
+ 1 waiting  repo-a       tmux status line                              feat-tmux      01/02      3m
+ 2 done     repo-b       e2e 安定化                                    e2e-388        12/31     12m
+ 3 working  repo-c       token auth                                    guard-token    01/03     40s
+ 4 working  repo-a       -                                             main           09:12      2m

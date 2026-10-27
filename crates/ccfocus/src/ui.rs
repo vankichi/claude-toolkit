@@ -4,9 +4,9 @@
 //! overview panel.
 //!
 //! ```text
-//! focus · main:0                    並行 4 / 4 · 次に回る 14:30 (残り 6 分)
-//! ┌ 次の 1 件 · 承認待ち 3m ─────────────┐ ┌ 今日 ─────────────┐
-//! │[1] repo-a / tmux 表示の改善 · …      │ │終わった task   1  │
+//! focus · main:0               parallel 4 / 4 · next round 14:30 (in 6 min)
+//! ┌ next up · waiting 3m ────────────────┐ ┌ today ────────────┐
+//! │[1] repo-a / tmux status line · …     │ │tasks done      1  │
 //! └──────────────────────────────────────┘ │…                  │
 //!  #  status   repo   project   worktree   start  updated
 //! ```
@@ -28,18 +28,18 @@ use std::fmt::Write as _;
 const WIDE: u16 = 110;
 /// Outer width of that box.
 const TODAY_W: u16 = 27;
-/// Candidate rows shown before "…他 N 件".
+/// Candidate rows shown before "… N more".
 const MAX_CANDIDATES: usize = 4;
 
 const NUM_W: usize = 2;
-const STATUS_W: usize = 12;
+const STATUS_W: usize = 8;
 const REPO_W: usize = 12;
 const WORKTREE_W: usize = 14;
 const START_W: usize = 5;
 const UPDATED_W: usize = 7;
 const MIN_PROJECT_W: usize = 6;
 
-pub const HELP: &str = "1-9 移る · j/k 選ぶ · d 差分 (hunk) · p window 名 · r 読み直す · q 閉じる";
+pub const HELP: &str = "1-9 jump · j/k select · d diff (hunk) · p name window · r reload · q quit";
 
 /// Today's finished tasks, from gh.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -103,10 +103,10 @@ fn dim() -> Style {
     Style::default().fg(Color::DarkGray)
 }
 
-/// `並行 N / L` styled by how it compares with the limit: red over it,
+/// `parallel N / L` styled by how it compares with the limit: red over it,
 /// yellow at it.
 fn parallel_span(v: &View) -> Span<'static> {
-    let text = format!("並行 {} / {}", v.parallel, v.limit);
+    let text = format!("parallel {} / {}", v.parallel, v.limit);
     let style = match v.parallel.cmp(&v.limit) {
         std::cmp::Ordering::Greater => Style::default()
             .fg(Color::White)
@@ -123,7 +123,7 @@ fn parallel_span(v: &View) -> Span<'static> {
 fn round_text(v: &View) -> Option<String> {
     v.round
         .as_ref()
-        .map(|(at, left)| format!("次に回る {at} (残り {left} 分)"))
+        .map(|(at, left)| format!("next round {at} (in {left} min)"))
 }
 
 /// Full-screen board.
@@ -220,11 +220,11 @@ fn draw_next(f: &mut Frame<'_>, area: Rect, v: &View) {
     let next = v.board.next.and_then(|i| v.board.rows.get(i));
     let title = match next {
         Some(r) => Line::from(vec![
-            Span::raw(" 次の 1 件 · "),
+            Span::raw(" next up · "),
             Span::styled(r.shown.label(), status_style(r.shown)),
             Span::raw(format!(" {} ", age(v.now - r.updated_at))),
         ]),
-        None => Line::from(" 次の 1 件 "),
+        None => Line::from(" next up "),
     };
     let block = Block::default()
         .borders(Borders::ALL)
@@ -237,7 +237,7 @@ fn draw_next(f: &mut Frame<'_>, area: Rect, v: &View) {
             fit(&summary(r), usize::from(inner.width)),
             Style::default().add_modifier(Modifier::BOLD),
         )),
-        None => Line::from(Span::styled("なし", dim())),
+        None => Line::from(Span::styled("none", dim())),
     };
     f.render_widget(Paragraph::new(body), inner);
 }
@@ -329,7 +329,7 @@ fn draw_list(f: &mut Frame<'_>, area: Rect, v: &View) {
     let extra = usize::from(v.board.folded > 0);
     if rows.is_empty() && v.board.folded == 0 {
         lines.push(Line::from(Span::styled(
-            "session はありません (ccfocus hook の登録は README を参照)",
+            "no sessions yet (register the ccfocus hook: see the README)",
             dim(),
         )));
     }
@@ -349,16 +349,13 @@ fn draw_list(f: &mut Frame<'_>, area: Rect, v: &View) {
     }
     if shown < rows.len() {
         lines.push(Line::from(Span::styled(
-            format!("   …他 {} 件", rows.len() - shown),
+            format!("   … {} more", rows.len() - shown),
             dim(),
         )));
     }
     if v.board.folded > 0 {
         lines.push(Line::from(Span::styled(
-            format!(
-                "   2 日以上前に終わった・止まった session {} 件",
-                v.board.folded
-            ),
+            format!("   {} sessions done or stopped 2+ days ago", v.board.folded),
             dim(),
         )));
     }
@@ -376,23 +373,23 @@ fn draw_candidates(f: &mut Frame<'_>, area: Rect, v: &View) {
     let bold = Style::default().add_modifier(Modifier::BOLD);
     let Some(cands) = &v.candidates else {
         f.render_widget(
-            Paragraph::new(Line::from(Span::styled("終わらせ候補: 確認中…", dim()))),
+            Paragraph::new(Line::from(Span::styled("to finish: checking…", dim()))),
             area,
         );
         return;
     };
-    let mut title = "終わらせ候補 (base より先行 · PR 無し)".to_string();
+    let mut title = "to finish (ahead of base · no PR)".to_string();
     if !v.pr_known {
-        title.push_str(" · PR は未取得");
+        title.push_str(" · PRs unknown");
     }
     if cands.is_empty() {
-        title = "終わらせ候補: なし".to_string();
+        title = "to finish: none".to_string();
     }
     let mut lines = vec![Line::from(Span::styled(fit(&title, w), bold))];
     for c in cands.iter().take(MAX_CANDIDATES) {
         let state = match c.dirty {
             Some(0) => "clean".to_string(),
-            Some(n) => format!("未 commit {n}"),
+            Some(n) => format!("{n} uncommitted"),
             None => "?".to_string(),
         };
         let mut text = format!(
@@ -410,7 +407,7 @@ fn draw_candidates(f: &mut Frame<'_>, area: Rect, v: &View) {
     }
     if cands.len() > MAX_CANDIDATES {
         lines.push(Line::from(Span::styled(
-            format!("   …他 {} 件", cands.len() - MAX_CANDIDATES),
+            format!("   … {} more", cands.len() - MAX_CANDIDATES),
             dim(),
         )));
     }
@@ -420,7 +417,7 @@ fn draw_candidates(f: &mut Frame<'_>, area: Rect, v: &View) {
 fn task_text(t: TaskCount) -> String {
     match t {
         TaskCount::Pending => "…".to_string(),
-        TaskCount::Unknown => "未取得".to_string(),
+        TaskCount::Unknown => "n/a".to_string(),
         TaskCount::Known(n) => n.to_string(),
     }
 }
@@ -450,23 +447,19 @@ fn draw_today_box(f: &mut Frame<'_>, area: Rect, v: &View) {
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(dim())
-        .title(" 今日 ");
+        .title(" today ");
     let inner = block.inner(area);
     f.render_widget(block, area);
     let t = &v.today;
     let row = |label: &str, value: String| {
-        Line::from(format!("{}{}", pad(label, 17), pad_left(&value, 6)))
+        Line::from(format!("{}{}", pad(label, 17), pad_left(&value, 7)))
     };
     let lines = vec![
-        row("終わった task", task_text(t.tasks)),
-        row("切り替え", t.switches.to_string()),
-        row("昨日の切り替え", t.yesterday_switches.to_string()),
-        Line::from(format!(
-            "{}{:>9}",
-            pad("並行 平均/最大", 14),
-            parallel_text(t)
-        )),
-        Line::from(Span::styled("今週 (切り替え/日)", dim())),
+        row("tasks done", task_text(t.tasks)),
+        row("switches", t.switches.to_string()),
+        row("yesterday", t.yesterday_switches.to_string()),
+        row("parallel avg/max", parallel_text(t)),
+        Line::from(Span::styled("week (switches/day)", dim())),
         Line::from(Span::styled(
             sparkline(&t.week),
             Style::default().fg(Color::Cyan),
@@ -478,7 +471,7 @@ fn draw_today_box(f: &mut Frame<'_>, area: Rect, v: &View) {
 fn today_line(v: &View, w: usize) -> Line<'static> {
     let t = &v.today;
     let text = format!(
-        "今日  終わった task {} · 切り替え {} (昨日 {}) · 並行 {} · 週 ",
+        "today  done {} · switches {} (yesterday {}) · parallel {} · week ",
         task_text(t.tasks),
         t.switches,
         t.yesterday_switches,
@@ -505,7 +498,7 @@ pub fn draw_compact(f: &mut Frame<'_>, area: Rect, v: &View) {
     }
     let _ = write!(
         rest,
-        " · 今日 終わった task {} · 切り替え {}",
+        " · today tasks done {} · switches {}",
         task_text(v.today.tasks),
         v.today.switches
     );
@@ -514,14 +507,14 @@ pub fn draw_compact(f: &mut Frame<'_>, area: Rect, v: &View) {
 
     match v.board.next.and_then(|i| v.board.rows.get(i)) {
         Some(r) => lines.push(Line::from(vec![
-            Span::raw("次: "),
+            Span::raw("next: "),
             Span::styled(r.shown.label(), status_style(r.shown)),
             Span::raw(fit(
                 &format!(" {} · {}", age(v.now - r.updated_at), summary(r)),
                 w.saturating_sub(4 + width(r.shown.label())),
             )),
         ])),
-        None => lines.push(Line::from(Span::styled("次: なし", dim()))),
+        None => lines.push(Line::from(Span::styled("next: none", dim()))),
     }
 
     let room = usize::from(area.height).saturating_sub(lines.len());
@@ -582,7 +575,7 @@ mod tests {
                 Some(1),
                 Shown::Waiting,
                 "repo-a",
-                "tmux 表示の改善",
+                "tmux status line",
                 "feat-tmux",
                 Some("feat/tmux"),
                 Some("dev:2.1"),
@@ -593,7 +586,7 @@ mod tests {
                 Some(2),
                 Shown::Done,
                 "repo-b",
-                "e2e の安定化",
+                "e2e 安定化",
                 "e2e-388",
                 Some("fix/e2e-388"),
                 Some("dev:3.1"),
@@ -604,7 +597,7 @@ mod tests {
                 Some(3),
                 Shown::Working,
                 "repo-c",
-                "token 認証",
+                "token auth",
                 "guard-token",
                 Some("feat/guard-token"),
                 Some("dev:4.1"),
@@ -626,7 +619,7 @@ mod tests {
                 None,
                 Shown::Stopped,
                 "repo-d",
-                "renovate 集約",
+                "renovate batching",
                 "renovate-2",
                 Some("chore/renovate"),
                 None,
@@ -775,13 +768,13 @@ mod tests {
     #[test]
     fn over_the_limit_is_red_and_at_it_is_yellow() {
         let buf = render(&sample(), 120, 24, false);
-        let (x, y) = find(&buf, "並行 5 / 4");
+        let (x, y) = find(&buf, "parallel 5 / 4");
         assert_eq!(buf[(x, y)].bg, Color::Red);
 
         let mut v = sample();
         v.parallel = 4;
         let buf = render(&v, 120, 24, false);
-        let (x, y) = find(&buf, "並行 4 / 4");
+        let (x, y) = find(&buf, "parallel 4 / 4");
         assert_eq!(buf[(x, y)].fg, Color::Yellow);
         assert_eq!(buf[(x, y)].bg, Color::Reset);
     }
@@ -791,17 +784,17 @@ mod tests {
         let mut v = sample();
         v.board.rows[1].shown = Shown::Failed;
         let buf = render(&v, 120, 24, false);
-        let (x, y) = find(&buf, "失敗");
+        let (x, y) = find(&buf, "failed");
         assert_eq!(buf[(x, y)].fg, Color::Red);
     }
 
     #[test]
     fn message_replaces_the_help_line() {
         let mut v = sample();
-        v.message = Some("tmux の外の session です".into());
+        v.message = Some("that session is not in tmux".into());
         let t = text(&render(&v, 80, 24, false));
-        assert!(t.contains("tmux の外の session です"));
-        assert!(!t.contains("r 読み直す"));
+        assert!(t.contains("that session is not in tmux"));
+        assert!(!t.contains("r reload"));
     }
 
     #[test]
@@ -810,8 +803,8 @@ mod tests {
         let extra = v.board.rows[2].clone();
         v.board.rows.extend(std::iter::repeat_n(extra, 20));
         let t = text(&render(&v, 80, 24, false));
-        assert!(t.contains("…他 "), "{t}");
-        assert!(t.contains("2 日以上前に終わった・止まった session 2 件"));
+        assert!(t.contains(" more"), "{t}");
+        assert!(t.contains("2 sessions done or stopped 2+ days ago"));
     }
 
     #[test]
@@ -819,7 +812,7 @@ mod tests {
         let mut v = sample();
         v.today.tasks = TaskCount::Unknown;
         let t = text(&render(&v, 120, 24, false));
-        assert!(t.contains("終わった task    未取得  │"), "{t}");
+        assert!(t.contains("│tasks done           n/a │"), "{t}");
     }
 
     #[test]
@@ -835,7 +828,7 @@ mod tests {
         let t = text(&render(&v, 80, 24, false));
         assert!(t.contains("extra-19"), "{t}");
         assert!(
-            !t.contains("tmux 表示の改善  "),
+            !t.contains("tmux status line  "),
             "scrolled past the first row"
         );
     }

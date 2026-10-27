@@ -310,7 +310,7 @@ impl Focus {
                 let n = u8::try_from(c.to_digit(10).unwrap_or(0)).unwrap_or(0);
                 match self.board.rows.iter().position(|r| r.number == Some(n)) {
                     Some(i) => self.jump(i),
-                    None => self.say(format!("[{n}] はありません")),
+                    None => self.say(format!("no session [{n}]")),
                 }
             }
             KeyCode::Char('j') | KeyCode::Down => self.move_cursor(1),
@@ -546,7 +546,7 @@ mod tests {
         f.on_key(KeyCode::Char('1'));
         assert!(f.view().message.as_deref().unwrap().contains("tmux"));
         f.on_key(KeyCode::Char('7'));
-        assert_eq!(f.view().message.as_deref(), Some("[7] はありません"));
+        assert_eq!(f.view().message.as_deref(), Some("no session [7]"));
         assert!(f.on_key(KeyCode::Char('q')));
     }
 

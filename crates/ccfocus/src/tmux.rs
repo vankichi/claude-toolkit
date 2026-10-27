@@ -43,7 +43,7 @@ fn need_tmux(client: &Client) -> Result<(), String> {
     if client.inside {
         Ok(())
     } else {
-        Err("tmux の中で起動すると使えます".into())
+        Err("run the board inside tmux to use this key".into())
     }
 }
 
@@ -53,18 +53,18 @@ fn need_tmux(client: &Client) -> Result<(), String> {
 pub fn jump(row: &Row, client: &Client, config: &Config) -> Plan {
     need_tmux(client)?;
     if row.shown == Shown::Stopped {
-        return Err("止まっている session です".into());
+        return Err("that session has stopped".into());
     }
     if !row.local {
         return if row.host == HostKind::Container {
             Ok(args(&["switch-client", "-t", &config.container_target]))
         } else {
-            Err("相手側の host の session です".into())
+            Err("that session runs on the other side (host / container)".into())
         };
     }
     match &row.tmux_pane {
         Some(pane) => Ok(args(&["switch-client", "-t", pane])),
-        None => Err("tmux の外の session です".into()),
+        None => Err("that session is not in tmux".into()),
     }
 }
 
@@ -73,13 +73,13 @@ pub fn jump(row: &Row, client: &Client, config: &Config) -> Plan {
 pub fn diff(row: &Row, client: &Client, base: Option<&str>) -> Plan {
     need_tmux(client)?;
     if !row.local {
-        return Err("相手側の host の worktree は開けません".into());
+        return Err("can't open a worktree on the other side (host / container)".into());
     }
     let Some(worktree) = row.worktree_path.as_ref().and_then(|p| p.to_str()) else {
-        return Err("git の外の session です".into());
+        return Err("that session is not in a git worktree".into());
     };
     let Some(base) = base else {
-        return Err("origin/HEAD との merge-base がありません".into());
+        return Err("no merge-base with origin/HEAD".into());
     };
     let mut a = args(&["split-window", "-h"]);
     if let Some(pane) = &client.pane {
@@ -100,13 +100,13 @@ pub fn diff(row: &Row, client: &Client, base: Option<&str>) -> Plan {
 pub fn rename(row: &Row, client: &Client) -> Plan {
     need_tmux(client)?;
     if !row.local {
-        return Err("相手側の host の session です".into());
+        return Err("that session runs on the other side (host / container)".into());
     }
     let Some(pane) = &row.tmux_pane else {
-        return Err("tmux の外の session です".into());
+        return Err("that session is not in tmux".into());
     };
     if row.project.is_empty() {
-        return Err("project 名がありません (claude -n で付けられます)".into());
+        return Err("no project name (set one with claude -n)".into());
     }
     let name = literal(&crate::text::fit(&row.project, MAX_WINDOW_NAME));
     // `--`: a project like `-a todo` must not be read as flags.
@@ -131,7 +131,7 @@ pub fn run(args: &[String]) -> Result<(), String> {
     match crate::cmd::run(cmd, TMUX_TIMEOUT) {
         Some(o) if o.success => Ok(()),
         Some(o) => Err(format!("tmux: {}", crate::cmd::first_line(&o.stderr))),
-        None => Err("tmux を起動できませんでした".into()),
+        None => Err("couldn't run tmux".into()),
     }
 }
 
@@ -196,7 +196,7 @@ mod tests {
         assert!(jump(&r, &inside(), &c).is_err());
         let mut r = row();
         r.tmux_pane = None;
-        assert!(jump(&r, &inside(), &c).unwrap_err().contains("tmux の外"));
+        assert!(jump(&r, &inside(), &c).unwrap_err().contains("not in tmux"));
         let mut r = row();
         r.shown = Shown::Stopped;
         assert!(jump(&r, &inside(), &c).is_err());
