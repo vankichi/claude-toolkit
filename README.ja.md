@@ -249,7 +249,7 @@ key:
 | `1`-`9` | その session の tmux pane に移る (`tmux switch-client`)。container の session は `container_target` の window に移る |
 | `j` / `k` (`↓` / `↑`) | 選ぶ行を動かす |
 | `Enter` | 選んだ行に移る |
-| `d` | 選んだ行の worktree で `hunk diff <merge-base> --watch` を board の上の tmux の popup で開く (`<merge-base>` は `git merge-base HEAD origin/HEAD`)。hunk を終えると popup が閉じ、window の layout は変わらない |
+| `d` | 選んだ行の worktree で `hunk diff <merge-base> --watch` を board の上の tmux の popup で開く (`<merge-base>` は `git merge-base HEAD origin/HEAD`)。hunk を終えると popup が閉じる。hunk が失敗した時は error を出したまま残り、`Esc` で閉じる。window の layout は変わらない |
 | `p` | 選んだ行の tmux window 名を project 名にする |
 | `r` | 今すぐ読み直す (`config.toml` も) |
 | `q` / `Esc` | board を閉じる |

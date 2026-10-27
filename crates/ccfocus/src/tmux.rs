@@ -73,7 +73,7 @@ pub fn jump(row: &Row, client: &Client, config: &Config) -> Plan {
 }
 
 /// Open `hunk diff <merge-base> --watch` in a popup over the dashboard, in
-/// the session's worktree; it closes when hunk exits. A popup leaves the
+/// the session's worktree; it closes when hunk exits cleanly. A popup leaves the
 /// window's layout alone (a split's space would not return to the board).
 /// `base` is the merge-base the caller computed. Run it with [`open`].
 pub fn diff(row: &Row, client: &Client, base: Option<&str>) -> Plan {
@@ -87,7 +87,9 @@ pub fn diff(row: &Row, client: &Client, base: Option<&str>) -> Plan {
     let Some(base) = base else {
         return Err("no merge-base with origin/HEAD".into());
     };
-    let mut a = args(&["display-popup", "-E", "-w", "90%", "-h", "90%"]);
+    // `-EE`: close on a clean exit only, so a failed hunk leaves its error
+    // on screen (`open` has returned by then).
+    let mut a = args(&["display-popup", "-EE", "-w", "90%", "-h", "90%"]);
     if let Some(pane) = &client.pane {
         a.extend(args(&["-t", pane]));
     }
@@ -231,7 +233,7 @@ mod tests {
             diff(&row(), &inside(), Some(&base)).unwrap(),
             [
                 "display-popup",
-                "-E",
+                "-EE",
                 "-w",
                 "90%",
                 "-h",
