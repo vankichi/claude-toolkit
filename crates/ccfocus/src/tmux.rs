@@ -29,7 +29,7 @@ impl Client {
             inside: std::env::var_os("TMUX").is_some_and(|v| !v.is_empty()),
             pane: std::env::var("TMUX_PANE")
                 .ok()
-                .filter(|p| crate::board::is_pane_id(p)),
+                .filter(|p| crate::probe::is_pane_id(p)),
         }
     }
 }
@@ -99,7 +99,8 @@ pub fn rename(row: &Row, client: &Client) -> Plan {
         return Err("project 名がありません (claude -n で付けられます)".into());
     }
     let name = crate::text::fit(&row.project, MAX_WINDOW_NAME);
-    Ok(args(&["rename-window", "-t", pane, &name]))
+    // `--`: a project like `-a todo` must not be read as flags.
+    Ok(args(&["rename-window", "-t", pane, "--", &name]))
 }
 
 fn args(a: &[&str]) -> Vec<String> {
@@ -213,11 +214,13 @@ mod tests {
     fn rename_uses_the_fitted_project_name() {
         assert_eq!(
             rename(&row(), &inside()).unwrap(),
-            ["rename-window", "-t", "%3", "demo"]
+            ["rename-window", "-t", "%3", "--", "demo"]
         );
         let mut r = row();
         r.project = "x".repeat(60);
-        assert_eq!(crate::text::width(&rename(&r, &inside()).unwrap()[3]), 40);
+        assert_eq!(crate::text::width(&rename(&r, &inside()).unwrap()[4]), 40);
+        r.project = "-a todo".into();
+        assert_eq!(rename(&r, &inside()).unwrap()[3..], ["--", "-a todo"]);
         r.project.clear();
         assert!(rename(&r, &inside()).is_err());
     }

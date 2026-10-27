@@ -183,7 +183,7 @@ pub fn local_repos(rows: &[Row]) -> Vec<PathBuf> {
 pub struct Tasks {
     /// Distinct PRs created or merged today.
     pub done: usize,
-    /// Head branches of `@me`'s PRs (any state) per repo, for
+    /// Head branches of `@me`'s open or merged PRs per repo, for
     /// [`candidates`]. A repo is missing when its query failed.
     pub heads: HashMap<PathBuf, HashSet<String>>,
 }
@@ -216,11 +216,17 @@ fn pr_keys(v: &serde_json::Value) -> Option<HashSet<String>> {
         .collect()
 }
 
+/// Heads of open or merged PRs. A closed, unmerged PR leaves its branch
+/// unfinished, so it doesn't count.
 fn head_names(v: &serde_json::Value) -> Option<HashSet<String>> {
-    v.as_array()?
-        .iter()
-        .map(|pr| Some(pr.get("headRefName")?.as_str()?.to_string()))
-        .collect()
+    let mut heads = HashSet::new();
+    for pr in v.as_array()? {
+        let head = pr.get("headRefName")?.as_str()?;
+        if matches!(pr.get("state")?.as_str()?, "OPEN" | "MERGED") {
+            heads.insert(head.to_string());
+        }
+    }
+    Some(heads)
 }
 
 /// Query gh. `since` is the start of today as RFC 3339 with the local offset
@@ -263,7 +269,7 @@ pub fn fetch_tasks(since: &str, repos: &[PathBuf]) -> Option<Tasks> {
                     "--state",
                     "all",
                     "--json",
-                    "headRefName",
+                    "headRefName,state",
                     "--limit",
                     "200",
                 ],
@@ -299,13 +305,19 @@ impl<T: Send + 'static> Job<T> {
 
     /// Start `work` unless one is running or the last start was less than
     /// `every` ago (`force` skips the wait, not the one-at-a-time rule).
-    pub fn kick(&mut self, now: Instant, force: bool, work: impl FnOnce() -> T + Send + 'static) {
+    /// `true` when it started.
+    pub fn kick(
+        &mut self,
+        now: Instant,
+        force: bool,
+        work: impl FnOnce() -> T + Send + 'static,
+    ) -> bool {
         let due = force
             || self
                 .started
                 .is_none_or(|t| now.duration_since(t) >= self.every);
         if self.running.is_some() || !due {
-            return;
+            return false;
         }
         let (tx, rx) = mpsc::channel();
         std::thread::spawn(move || {
@@ -313,6 +325,7 @@ impl<T: Send + 'static> Job<T> {
         });
         self.started = Some(now);
         self.running = Some(rx);
+        true
     }
 
     /// The finished result, if the running work is done.
@@ -449,8 +462,16 @@ prunable gitdir file points to non-existent location
         .unwrap();
         assert_eq!(pr_keys(&v).unwrap().len(), 2);
         assert!(pr_keys(&serde_json::json!([{"number":1}])).is_none());
-        let v = serde_json::json!([{"headRefName":"feat/x"}]);
-        assert_eq!(head_names(&v).unwrap(), ["feat/x".to_string()].into());
+        let v = serde_json::json!([
+            {"headRefName":"feat/x","state":"OPEN"},
+            {"headRefName":"feat/y","state":"MERGED"},
+            {"headRefName":"feat/z","state":"CLOSED"}
+        ]);
+        assert_eq!(
+            head_names(&v).unwrap(),
+            ["feat/x".to_string(), "feat/y".to_string()].into()
+        );
+        assert!(head_names(&serde_json::json!([{"headRefName":"a"}])).is_none());
     }
 
     #[test]
@@ -465,8 +486,8 @@ prunable gitdir file points to non-existent location
     fn job_runs_one_at_a_time_and_waits_between_runs() {
         let mut job: Job<u32> = Job::new(Duration::from_mins(10));
         let t0 = Instant::now();
-        job.kick(t0, false, || 1);
-        job.kick(t0, true, || 2); // still running (or unpolled): ignored
+        assert!(job.kick(t0, false, || 1));
+        assert!(!job.kick(t0, true, || 2), "still running (or unpolled)");
         let mut got = None;
         for _ in 0..200 {
             got = job.poll();

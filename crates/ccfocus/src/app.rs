@@ -17,7 +17,7 @@ use cctk::focus;
 use chrono::{DateTime, Days, FixedOffset, Local, NaiveDate, TimeDelta, Timelike};
 use crossterm::event::KeyCode;
 use std::collections::{HashMap, HashSet};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::time::{Duration, Instant, SystemTime};
 
 /// State files and today's events are re-read this often.
@@ -49,7 +49,8 @@ pub struct Focus {
     alive: HashMap<u32, (Instant, Option<bool>)>,
     worktree_job: Job<Vec<Worktree>>,
     worktrees: Option<Vec<Worktree>>,
-    task_job: Job<Option<Tasks>>,
+    /// Results carry the day they were fetched for.
+    task_job: Job<(NaiveDate, Option<Tasks>)>,
     /// `repos::fetch_tasks`; replaced in tests so they never call gh.
     fetch_tasks: fn(&str, &[PathBuf]) -> Option<Tasks>,
     tasks: TaskState,
@@ -141,11 +142,6 @@ impl Focus {
         &self.view
     }
 
-    #[must_use]
-    pub fn state_dir(&self) -> &Path {
-        &self.state_dir
-    }
-
     /// Do whatever is due. `force` re-reads everything now (and the config),
     /// except gh, which keeps its cache.
     pub fn tick(&mut self, force: bool) {
@@ -158,8 +154,15 @@ impl Focus {
             self.worktrees = Some(w);
             changed = true;
         }
-        if let Some(t) = self.task_job.poll() {
-            self.tasks = t.map_or(TaskState::Failed, TaskState::Ready);
+        let today = now.date_naive();
+        if let Some((day, t)) = self.task_job.poll() {
+            if day == today {
+                self.tasks = t.map_or(TaskState::Failed, TaskState::Ready);
+            } else {
+                // Fetched for a day that has ended: fetch again for this one.
+                self.tasks = TaskState::Pending;
+                self.tasks_day = None;
+            }
             changed = true;
         }
         if self
@@ -180,7 +183,6 @@ impl Focus {
             if force {
                 (self.config, self.warning) = config::load(&self.state_dir);
             }
-            let today = now.date_naive();
             if self
                 .last_prune
                 .is_none_or(|t| clock.duration_since(t) >= PRUNE_EVERY)
@@ -193,17 +195,23 @@ impl Focus {
 
             let repos = repos::local_repos(&self.board.rows);
             let scan = repos.clone();
-            self.worktree_job.kick(clock, force, move || {
+            let _ = self.worktree_job.kick(clock, force, move || {
                 scan.iter().flat_map(|r| repos::scan_repo(r)).collect()
             });
             let new_day = self.tasks_day != Some(today);
             if new_day {
-                self.tasks_day = Some(today);
+                self.tasks = TaskState::Pending;
             }
             let since = start_of_day(now);
             let fetch = self.fetch_tasks;
-            self.task_job
-                .kick(clock, new_day, move || fetch(&since, &repos));
+            let started = self
+                .task_job
+                .kick(clock, new_day, move || (today, fetch(&since, &repos)));
+            // A fetch still running at midnight ignores the kick; the next
+            // tick tries again.
+            if started {
+                self.tasks_day = Some(today);
+            }
             changed = true;
         }
         if changed {
@@ -413,6 +421,7 @@ pub fn pid_alive(pid: u32) -> Option<bool> {
 mod tests {
     use super::*;
     use cctk::focus::{HostKind, SCHEMA, SessionState, Status};
+    use std::path::Path;
 
     fn at(s: &str) -> DateTime<FixedOffset> {
         DateTime::parse_from_rfc3339(s).unwrap()

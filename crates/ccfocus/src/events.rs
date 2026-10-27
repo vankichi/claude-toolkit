@@ -62,36 +62,69 @@ pub fn parse_line(line: &str) -> Option<Line<'_>> {
     })
 }
 
+/// Running fold of one day's lines. Today's fold is kept so each refresh
+/// only feeds the bytes appended since the last one.
+#[derive(Debug, Default)]
+struct Fold {
+    prompts: u32,
+    switches: u32,
+    previous_prompt: Option<String>,
+    /// Sessions seen in each 30-minute window of the day (at most 48 windows).
+    windows: BTreeMap<u32, HashSet<String>>,
+    last_seen: HashMap<String, DateTime<FixedOffset>>,
+}
+
+impl Fold {
+    fn feed(&mut self, text: &str) {
+        // Lines are appended as hooks run, so file order is time order.
+        for line in text.lines().filter_map(parse_line) {
+            let window = line.at.num_seconds_from_midnight() / 1800;
+            let seen = self.windows.entry(window).or_default();
+            if !seen.contains(line.session_id) {
+                seen.insert(line.session_id.to_string());
+            }
+            self.last_seen
+                .entry(line.session_id.to_string())
+                .and_modify(|t| *t = (*t).max(line.at))
+                .or_insert(line.at);
+            if line.event == "UserPromptSubmit" {
+                self.prompts += 1;
+                if self
+                    .previous_prompt
+                    .as_deref()
+                    .is_some_and(|p| p != line.session_id)
+                {
+                    self.switches += 1;
+                }
+                if self.previous_prompt.as_deref() != Some(line.session_id) {
+                    self.previous_prompt = Some(line.session_id.to_string());
+                }
+            }
+        }
+    }
+
+    fn stats(&self) -> DayStats {
+        let mut stats = DayStats {
+            prompts: self.prompts,
+            switches: self.switches,
+            ..DayStats::default()
+        };
+        if !self.windows.is_empty() {
+            let total: usize = self.windows.values().map(HashSet::len).sum();
+            stats.parallel_avg = total as f64 / self.windows.len() as f64;
+            stats.parallel_max = self.windows.values().map(HashSet::len).max().unwrap_or(0);
+        }
+        stats
+    }
+}
+
 /// Fold one day file's text. Also returns each session's last event time, for
 /// [`EventLog::active_since`].
 #[must_use]
 pub fn fold_day(text: &str) -> (DayStats, HashMap<String, DateTime<FixedOffset>>) {
-    let mut stats = DayStats::default();
-    let mut last_seen: HashMap<String, DateTime<FixedOffset>> = HashMap::new();
-    let mut windows: BTreeMap<u32, HashSet<&str>> = BTreeMap::new();
-    let mut previous_prompt: Option<&str> = None;
-    // Lines are appended as hooks run, so file order is time order.
-    for line in text.lines().filter_map(parse_line) {
-        let window = line.at.num_seconds_from_midnight() / 1800;
-        windows.entry(window).or_default().insert(line.session_id);
-        last_seen
-            .entry(line.session_id.to_string())
-            .and_modify(|t| *t = (*t).max(line.at))
-            .or_insert(line.at);
-        if line.event == "UserPromptSubmit" {
-            stats.prompts += 1;
-            if previous_prompt.is_some_and(|p| p != line.session_id) {
-                stats.switches += 1;
-            }
-            previous_prompt = Some(line.session_id);
-        }
-    }
-    if !windows.is_empty() {
-        let total: usize = windows.values().map(HashSet::len).sum();
-        stats.parallel_avg = total as f64 / windows.len() as f64;
-        stats.parallel_max = windows.values().map(HashSet::len).max().unwrap_or(0);
-    }
-    (stats, last_seen)
+    let mut fold = Fold::default();
+    fold.feed(text);
+    (fold.stats(), fold.last_seen)
 }
 
 /// Read side of the event log with per-day caching.
@@ -103,8 +136,11 @@ pub struct EventLog {
 
 #[derive(Debug)]
 struct Cached {
-    len: u64,
+    /// Bytes of the file folded so far (whole lines only).
+    read: u64,
     stats: DayStats,
+    /// Today's running fold; `None` for days that no longer grow.
+    fold: Option<Fold>,
     /// Kept for today and yesterday only (a 30-minute window can reach back
     /// across midnight); dropped for older days.
     last_seen: HashMap<String, DateTime<FixedOffset>>,
@@ -136,26 +172,46 @@ impl EventLog {
                 self.days.remove(&day);
                 continue;
             };
-            if self.days.get(&day).is_some_and(|c| c.len == len) {
+            let cached = self.days.get_mut(&day);
+            if cached.as_ref().is_some_and(|c| c.read == len) {
                 continue;
             }
-            let Some(text) = read_capped(&path) else {
+            // Today grows by appends: fold only what was added. A file that
+            // shrank (or an older day that changed) is folded again in full.
+            let (mut fold, from) = match cached {
+                Some(c) if day == today && c.fold.is_some() && len > c.read => {
+                    (c.fold.take().unwrap_or_default(), c.read)
+                }
+                _ => (Fold::default(), 0),
+            };
+            let Some(chunk) = read_lines_from(&path, from) else {
                 continue;
             };
-            let (stats, mut last_seen) = fold_day(&text);
-            if day < yesterday {
-                last_seen = HashMap::new();
-            }
+            fold.feed(&chunk);
+            let read = from + chunk.len() as u64;
+            let stats = fold.stats();
+            let (fold, last_seen) = if day == today {
+                let last_seen = fold.last_seen.clone();
+                (Some(fold), last_seen)
+            } else if day == yesterday {
+                (None, fold.last_seen)
+            } else {
+                (None, HashMap::new())
+            };
             self.days.insert(
                 day,
                 Cached {
-                    len,
+                    read,
                     stats,
+                    fold,
                     last_seen,
                 },
             );
         }
         for (day, cached) in &mut self.days {
+            if *day < today {
+                cached.fold = None;
+            }
             if *day < yesterday && !cached.last_seen.is_empty() {
                 cached.last_seen = HashMap::new();
             }
@@ -185,13 +241,20 @@ impl EventLog {
     }
 }
 
-fn read_capped(path: &Path) -> Option<String> {
+/// The complete lines of `path` from byte `from` on (a line still being
+/// appended is left for the next read), at most [`MAX_DAY_BYTES`].
+fn read_lines_from(path: &Path, from: u64) -> Option<String> {
+    use std::io::{Seek, SeekFrom};
+    let mut file = std::fs::File::open(path).ok()?;
+    file.seek(SeekFrom::Start(from)).ok()?;
     let mut bytes = Vec::new();
-    std::fs::File::open(path)
-        .ok()?
-        .take(MAX_DAY_BYTES)
+    file.take(MAX_DAY_BYTES.saturating_sub(from))
         .read_to_end(&mut bytes)
         .ok()?;
+    let end = bytes.iter().rposition(|&b| b == b'\n').map_or(0, |i| i + 1);
+    bytes.truncate(end);
+    // Lines are written whole (one O_APPEND write each), so a cut never
+    // splits a character; lossy only guards a corrupt file.
     Some(String::from_utf8_lossy(&bytes).into_owned())
 }
 
@@ -305,6 +368,25 @@ mod tests {
         log.refresh(today);
         assert_eq!(log.day(today).prompts, 2);
         assert_eq!(log.day(today).switches, 1);
+    }
+
+    #[test]
+    fn a_half_written_line_waits_for_its_newline() {
+        let tmp = tempfile::tempdir().unwrap();
+        let today = NaiveDate::from_ymd_opt(2026, 1, 5).unwrap();
+        let full = line("09:00:00", A, "UserPromptSubmit");
+        let next = line("09:01:00", B, "UserPromptSubmit");
+        write_day(tmp.path(), "20260105", &format!("{full}{}", &next[..20]));
+        let mut log = EventLog::new(tmp.path());
+        log.refresh(today);
+        assert_eq!(log.day(today).prompts, 1);
+        write_day(tmp.path(), "20260105", &format!("{full}{next}"));
+        log.refresh(today);
+        assert_eq!((log.day(today).prompts, log.day(today).switches), (2, 1));
+        // Replaced by a shorter file: folded again from the start.
+        write_day(tmp.path(), "20260105", &next);
+        log.refresh(today);
+        assert_eq!((log.day(today).prompts, log.day(today).switches), (1, 0));
     }
 
     #[test]

@@ -339,7 +339,12 @@ fn draw_list(f: &mut Frame<'_>, area: Rect, v: &View) {
     } else {
         rows.len()
     };
-    for (i, r) in rows.iter().take(shown).enumerate() {
+    // Scroll so the cursor row (the one d / p / Enter act on) is drawn.
+    let first = v
+        .cursor
+        .map_or(0, |c| (c + 1).saturating_sub(shown))
+        .min(rows.len() - shown);
+    for (i, r) in rows.iter().enumerate().skip(first).take(shown) {
         lines.push(list_line(v, r, &c, v.cursor == Some(i)));
     }
     if shown < rows.len() {
@@ -815,6 +820,24 @@ mod tests {
         v.today.tasks = TaskCount::Unknown;
         let t = text(&render(&v, 120, 24, false));
         assert!(t.contains("終わった task    未取得  │"), "{t}");
+    }
+
+    #[test]
+    fn the_cursor_row_stays_on_screen() {
+        let mut v = sample();
+        let extra = v.board.rows[2].clone();
+        for i in 0..20 {
+            let mut r = extra.clone();
+            r.project = format!("extra-{i:02}");
+            v.board.rows.push(r);
+        }
+        v.cursor = Some(v.board.rows.len() - 1);
+        let t = text(&render(&v, 80, 24, false));
+        assert!(t.contains("extra-19"), "{t}");
+        assert!(
+            !t.contains("tmux 表示の改善  "),
+            "scrolled past the first row"
+        );
     }
 
     #[test]

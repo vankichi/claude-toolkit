@@ -168,7 +168,8 @@ fn parse_rev_parse(out: &str) -> GitInfo {
 }
 
 /// `%` followed by digits, as tmux sets `$TMUX_PANE`.
-fn is_pane_id(s: &str) -> bool {
+#[must_use]
+pub fn is_pane_id(s: &str) -> bool {
     s.strip_prefix('%')
         .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
 }

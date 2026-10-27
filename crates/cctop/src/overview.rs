@@ -79,10 +79,7 @@ const FOCUS_ROWS: usize = 4;
 /// Borders, the summary and next-session lines, and up to [`FOCUS_ROWS`]
 /// rows.
 fn focus_height(v: &ccfocus::ui::View) -> u16 {
-    let rows = v.board.rows.len().min(FOCUS_ROWS);
-    #[allow(clippy::cast_possible_truncation)] // at most 4 + FOCUS_ROWS
-    let h = (4 + rows) as u16;
-    h
+    u16::try_from(4 + v.board.rows.len().min(FOCUS_ROWS)).unwrap_or(u16::MAX)
 }
 
 fn draw_focus(f: &mut Frame<'_>, area: Rect, dash: &Dashboard, app: &App) {

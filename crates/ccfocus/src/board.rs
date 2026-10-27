@@ -8,9 +8,9 @@ use chrono::{DateTime, FixedOffset, TimeDelta};
 use std::collections::HashSet;
 use std::path::PathBuf;
 
-/// A session on the other side of the host / container boundary (whose pid
-/// can't be checked from here) counts as stopped after this long without an
-/// event.
+/// A session whose pid can't be checked from here (the other side of the
+/// host / container boundary, or no answer from `kill`) counts as stopped
+/// after this long without an event.
 pub const STALE_AFTER: TimeDelta = TimeDelta::minutes(30);
 
 /// Finished or stopped sessions this old are folded into one summary line.
@@ -130,8 +130,10 @@ pub fn build<S: std::hash::BuildHasher>(
         };
         let idle_for = now - updated_at;
         let local = side.owns(&s);
+        // Without a usable pid answer (other side, no pid, or no `kill`),
+        // silence is the only signal left.
         let stopped = match (local, s.pid) {
-            (true, Some(pid)) => alive(pid) == Some(false),
+            (true, Some(pid)) => alive(pid).map_or(idle_for >= STALE_AFTER, |a| !a),
             _ => idle_for >= STALE_AFTER,
         };
         let shown = if stopped {
@@ -216,20 +218,13 @@ fn row(
         worktree,
         branch,
         tmux: s.tmux.as_deref().map(text::clean).filter(|t| !t.is_empty()),
-        tmux_pane: s.tmux_pane.filter(|p| is_pane_id(p)),
+        tmux_pane: s.tmux_pane.filter(|p| crate::probe::is_pane_id(p)),
         repo_path: s.repo.map(PathBuf::from),
         worktree_path: s.worktree.map(PathBuf::from),
         session_id: s.session_id,
         started_at,
         updated_at,
     }
-}
-
-/// `%` followed by digits, as tmux sets `$TMUX_PANE`.
-#[must_use]
-pub fn is_pane_id(s: &str) -> bool {
-    s.strip_prefix('%')
-        .is_some_and(|n| !n.is_empty() && n.len() <= 10 && n.bytes().all(|b| b.is_ascii_digit()))
 }
 
 /// Compact age: `40s`, `12m`, `3h`, `6d`.
@@ -402,15 +397,26 @@ mod tests {
     }
 
     #[test]
-    fn unknown_liveness_keeps_the_status() {
+    fn unknown_liveness_falls_back_to_silence() {
         let b = build(
-            vec![session("s", Status::Working, 600)],
+            vec![
+                session("quiet", Status::Working, 30),
+                session("recent", Status::Working, 29),
+            ],
             at(NOW),
             &side(),
             &mut |_| None,
             &HashSet::new(),
         );
-        assert_eq!(b.rows[0].shown, Shown::Working);
+        let shown: Vec<_> = b
+            .rows
+            .iter()
+            .map(|r| (r.session_id.as_str(), r.shown))
+            .collect();
+        assert_eq!(
+            shown,
+            [("recent", Shown::Working), ("quiet", Shown::Stopped)]
+        );
     }
 
     #[test]
@@ -484,13 +490,5 @@ mod tests {
         assert_eq!(age(TimeDelta::hours(3)), "3h");
         assert_eq!(age(TimeDelta::days(6)), "6d");
         assert_eq!(age(TimeDelta::seconds(-5)), "0s");
-    }
-
-    #[test]
-    fn pane_ids() {
-        assert!(is_pane_id("%12"));
-        assert!(!is_pane_id("%"));
-        assert!(!is_pane_id("12"));
-        assert!(!is_pane_id("%1 -t x"));
     }
 }
