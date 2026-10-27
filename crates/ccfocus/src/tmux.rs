@@ -2,7 +2,7 @@
 //! argument list or the reason it can't be done); [`run`] executes one.
 //! Arguments go to tmux directly, never through a shell. tmux itself
 //! format-expands some of them (the `rename-window` name and the
-//! `split-window -c` directory), where `#(…)` would run a shell command, so
+//! `display-popup -d` directory), where `#(…)` would run a shell command, so
 //! values from the state files are passed through [`literal`] there.
 
 use crate::board::{Row, Shown};
@@ -15,6 +15,10 @@ use std::time::Duration;
 const MAX_WINDOW_NAME: usize = 40;
 
 const TMUX_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// How long [`open`] waits for tmux to reject a popup (a bad target fails
+/// in milliseconds).
+const POPUP_SETTLE: Duration = Duration::from_millis(300);
 
 /// The tmux client this dashboard runs in.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -68,8 +72,10 @@ pub fn jump(row: &Row, client: &Client, config: &Config) -> Plan {
     }
 }
 
-/// Open `hunk diff <merge-base> --watch` beside the dashboard, in the
-/// session's worktree. `base` is the merge-base the caller computed.
+/// Open `hunk diff <merge-base> --watch` in a popup over the dashboard, in
+/// the session's worktree; it closes when hunk exits cleanly. A popup leaves the
+/// window's layout alone (a split's space would not return to the board).
+/// `base` is the merge-base the caller computed. Run it with [`open`].
 pub fn diff(row: &Row, client: &Client, base: Option<&str>) -> Plan {
     need_tmux(client)?;
     if !row.local {
@@ -81,19 +87,30 @@ pub fn diff(row: &Row, client: &Client, base: Option<&str>) -> Plan {
     let Some(base) = base else {
         return Err("no merge-base with origin/HEAD".into());
     };
-    let mut a = args(&["split-window", "-h"]);
-    if let Some(pane) = &client.pane {
-        a.extend(args(&["-t", pane]));
-    }
-    a.extend(args(&[
-        "-c",
+    // Without the board's pane tmux would guess the client, and with several
+    // attached the popup could open on another one.
+    let Some(pane) = &client.pane else {
+        return Err("can't tell which tmux pane the board runs in".into());
+    };
+    // `-EE`: close on a clean exit only, so a failed hunk leaves its error
+    // on screen (`open` has returned by then). Two or more command
+    // arguments run as argv, without a shell.
+    Ok(args(&[
+        "display-popup",
+        "-EE",
+        "-w",
+        "90%",
+        "-h",
+        "90%",
+        "-t",
+        pane,
+        "-d",
         &literal(worktree),
         "hunk",
         "diff",
         base,
         "--watch",
-    ]));
-    Ok(a)
+    ]))
 }
 
 /// Name the session's tmux window after its project.
@@ -132,6 +149,20 @@ pub fn run(args: &[String]) -> Result<(), String> {
         Some(o) if o.success => Ok(()),
         Some(o) => Err(format!("tmux: {}", crate::cmd::first_line(&o.stderr))),
         None => Err("couldn't run tmux".into()),
+    }
+}
+
+/// Run `tmux <args>` for a command that stays until it is closed
+/// (`display-popup` returns only then). An error tmux reports at once is
+/// returned; a command still running after [`POPUP_SETTLE`] is open.
+pub fn open(args: &[String]) -> Result<(), String> {
+    let mut cmd = Command::new("tmux");
+    cmd.args(args);
+    match crate::cmd::start(cmd, POPUP_SETTLE) {
+        Ok(None) => Ok(()),
+        Ok(Some(o)) if o.success => Ok(()),
+        Ok(Some(o)) => Err(format!("tmux: {}", crate::cmd::first_line(&o.stderr))),
+        Err(()) => Err("couldn't run tmux".into()),
     }
 }
 
@@ -204,16 +235,20 @@ mod tests {
     }
 
     #[test]
-    fn diff_splits_beside_the_dashboard() {
+    fn diff_opens_a_popup_over_the_dashboard() {
         let base = "a".repeat(40);
         assert_eq!(
             diff(&row(), &inside(), Some(&base)).unwrap(),
             [
-                "split-window",
+                "display-popup",
+                "-EE",
+                "-w",
+                "90%",
                 "-h",
+                "90%",
                 "-t",
                 "%9",
-                "-c",
+                "-d",
                 "/work/repo-a/wt",
                 "hunk",
                 "diff",
@@ -222,6 +257,15 @@ mod tests {
             ]
         );
         assert!(diff(&row(), &inside(), None).is_err());
+        let no_pane = Client {
+            inside: true,
+            pane: None,
+        };
+        assert!(
+            diff(&row(), &no_pane, Some(&base))
+                .unwrap_err()
+                .contains("which tmux pane")
+        );
         let mut r = row();
         r.worktree_path = None;
         assert!(diff(&r, &inside(), Some(&base)).is_err());
@@ -234,8 +278,8 @@ mod tests {
         assert_eq!(rename(&r, &inside()).unwrap()[4], "a ##(touch x) ##H");
         r.worktree_path = Some("/w/#(x)".into());
         let plan = diff(&r, &inside(), Some(&"a".repeat(40))).unwrap();
-        let c = plan.iter().position(|a| a == "-c").unwrap();
-        assert_eq!(plan[c + 1], "/w/##(x)");
+        let d = plan.iter().position(|a| a == "-d").unwrap();
+        assert_eq!(plan[d + 1], "/w/##(x)");
     }
 
     #[test]

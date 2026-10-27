@@ -320,11 +320,14 @@ impl Focus {
                     self.jump(i);
                 }
             }
-            KeyCode::Char('d') => self.on_cursor(|row, client| {
-                let base = row.worktree_path.as_deref().and_then(repos::merge_base);
-                tmux::diff(row, client, base.as_deref())
-            }),
-            KeyCode::Char('p') => self.on_cursor(tmux::rename),
+            KeyCode::Char('d') => self.on_cursor(
+                |row, client| {
+                    let base = row.worktree_path.as_deref().and_then(repos::merge_base);
+                    tmux::diff(row, client, base.as_deref())
+                },
+                tmux::open,
+            ),
+            KeyCode::Char('p') => self.on_cursor(tmux::rename, tmux::run),
             KeyCode::Char('r') => self.tick(true),
             _ => {}
         }
@@ -342,11 +345,15 @@ impl Focus {
         self.rebuild(self.view.now);
     }
 
-    fn on_cursor(&mut self, plan: impl FnOnce(&board::Row, &Client) -> tmux::Plan) {
+    fn on_cursor(
+        &mut self,
+        plan: impl FnOnce(&board::Row, &Client) -> tmux::Plan,
+        exec: fn(&[String]) -> Result<(), String>,
+    ) {
         let Some(row) = self.view.cursor.and_then(|i| self.board.rows.get(i)) else {
             return;
         };
-        match plan(row, &self.client).and_then(|a| tmux::run(&a)) {
+        match plan(row, &self.client).and_then(|a| exec(&a)) {
             Ok(()) => {}
             Err(e) => self.say(e),
         }
