@@ -258,7 +258,7 @@ Keys:
 | `1`-`9` | Switch to that session's tmux pane (`tmux switch-client`). A container session goes to the `container_target` window. |
 | `j` / `k` (`↓` / `↑`) | Move the selection |
 | `Enter` | Switch to the selected row |
-| `d` | Open `hunk diff <merge-base> --watch` beside the board, in the selected row's worktree (`<merge-base>` is `git merge-base HEAD origin/HEAD`) |
+| `d` | Open `hunk diff <merge-base> --watch` in a tmux popup over the board, in the selected row's worktree (`<merge-base>` is `git merge-base HEAD origin/HEAD`). Quitting hunk closes the popup; the window's layout is left as it was |
 | `p` | Rename the selected row's tmux window to its project name |
 | `r` | Re-read now (including `config.toml`) |
 | `q` / `Esc` | Close the board |

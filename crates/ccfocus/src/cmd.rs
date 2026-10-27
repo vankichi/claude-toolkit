@@ -52,6 +52,48 @@ pub(crate) fn run(mut cmd: Command, timeout: Duration) -> Option<Output> {
     })
 }
 
+/// Start `cmd` for a command that may keep running (a tmux popup returns
+/// only when it closes). `Ok(Some(output))` when it exits within `settle`,
+/// `Ok(None)` when it is still running (a thread is left to wait for it),
+/// `Err` when it can't be spawned or waited on.
+pub(crate) fn start(mut cmd: Command, settle: Duration) -> Result<Option<Output>, ()> {
+    let mut child = cmd
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|_| ())?;
+    let (Some(out), Some(err)) = (child.stdout.take(), child.stderr.take()) else {
+        return Err(());
+    };
+    let out = std::thread::spawn(move || drain(out));
+    let err = std::thread::spawn(move || drain(err));
+    let deadline = Instant::now() + settle;
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                return Ok(Some(Output {
+                    success: status.success(),
+                    stdout: out.join().unwrap_or_default(),
+                    stderr: err.join().unwrap_or_default(),
+                }));
+            }
+            Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(5)),
+            Ok(None) => {
+                std::thread::spawn(move || {
+                    let _ = child.wait();
+                });
+                return Ok(None);
+            }
+            Err(_) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(());
+            }
+        }
+    }
+}
+
 fn drain(mut r: impl Read) -> String {
     let mut buf = Vec::new();
     let _ = r.by_ref().take(MAX_OUTPUT).read_to_end(&mut buf);
@@ -105,6 +147,20 @@ mod tests {
         let o = run(cmd, Duration::from_secs(10)).unwrap();
         assert!(o.success);
         assert_eq!(o.stdout.len(), 1_000_000);
+    }
+
+    #[test]
+    fn start_reports_a_quick_exit_and_leaves_a_long_one_running() {
+        let mut cmd = Command::new("sh");
+        cmd.args(["-c", "echo err >&2; exit 1"]);
+        let o = start(cmd, Duration::from_secs(5)).unwrap().unwrap();
+        assert!(!o.success);
+        assert_eq!(o.stderr, "err\n");
+        let mut cmd = Command::new("sleep");
+        cmd.arg("1");
+        let begin = Instant::now();
+        assert!(start(cmd, Duration::from_millis(100)).unwrap().is_none());
+        assert!(begin.elapsed() < Duration::from_secs(1));
     }
 
     #[test]
