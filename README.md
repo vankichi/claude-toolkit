@@ -181,21 +181,20 @@ ccfocus tui --state-dir DIR      # read DIR instead of the default
 ```
 
 The state directory is `--state-dir`, else `$CCFOCUS_STATE_DIR`, else
-`~/.claude/focus`. The board's labels are in Japanese. This is a synthetic
-example (120 columns wide):
+`~/.claude/focus`. This is a synthetic example (120 columns wide):
 
 ```text
-focus · main:0                                                                   並行 5 / 4 · 次に回る 14:30 (残り 6 分)
-┌ 次の 1 件 · 承認待ち 3m ─────────────────────────────────────────────────────────────────┐ ┌ 今日 ───────────────────┐
-│[1] repo-a / tmux 表示の改善 · feat/tmux · dev:2.1                                        │ │終わった task         1  │
-└──────────────────────────────────────────────────────────────────────────────────────────┘ │切り替え             12  │
- # status       repo         project                           worktree       start updated  │昨日の切り替え       56  │
- 1 承認待ち     repo-a       tmux 表示の改善                   feat-tmux      01/02      3m  │並行 平均/最大  2.4 / 5  │
- 2 完了         repo-b       e2e の安定化                      e2e-388        12/31     12m  │今週 (切り替え/日)       │
- 3 作業中       repo-c       token 認証                        guard-token    01/03     40s  │▄▇█▃▆█▂                  │
- 4 作業中       repo-a       -                                 main           09:12      2m  └─────────────────────────┘
- - 止まっている repo-d       renovate 集約                     renovate-2     12/29      6h
-   2 日以上前に終わった・止まった session 2 件
+focus · main:0                                                              parallel 5 / 4 · next round 14:30 (in 6 min)
+┌ next up · waiting 3m ────────────────────────────────────────────────────────────────────┐ ┌ today ──────────────────┐
+│[1] repo-a / tmux status line · feat/tmux · dev:2.1                                       │ │tasks done             1 │
+└──────────────────────────────────────────────────────────────────────────────────────────┘ │switches              12 │
+ # status   repo         project                               worktree       start updated  │yesterday             56 │
+ 1 waiting  repo-a       tmux status line                      feat-tmux      01/02      3m  │parallel avg/max 2.4 / 5 │
+ 2 done     repo-b       e2e 安定化                            e2e-388        12/31     12m  │week (switches/day)      │
+ 3 working  repo-c       token auth                            guard-token    01/03     40s  │▄▇█▃▆█▂                  │
+ 4 working  repo-a       -                                     main           09:12      2m  └─────────────────────────┘
+ - stopped  repo-d       renovate batching                     renovate-2     12/29      6h
+   2 sessions done or stopped 2+ days ago
 
 
 
@@ -205,51 +204,52 @@ focus · main:0                                                                 
 
 
 
-終わらせ候補 (base より先行 · PR 無し)
+to finish (ahead of base · no PR)
    repo-a       guard-egress   ↑1 ↓5 clean
-   repo-c       guard-token    ↑3 ↓0 未 commit 2 [3]
-1-9 移る · j/k 選ぶ · d 差分 (hunk) · p window 名 · r 読み直す · q 閉じる
+   repo-c       guard-token    ↑3 ↓0 2 uncommitted [3]
+1-9 jump · j/k select · d diff (hunk) · p name window · r reload · q quit
 ```
 
 The screen has four parts, plus a header and a key help line:
 
-- **Header**: `並行 N / L` is the number of sessions with an event in the last
-  30 minutes (N) against your limit (L). It turns yellow at the limit and red
-  above it; it only warns and never stops anything. Next to it is the time of
-  the next check-in (`次に回る`), on a grid of `round_minutes` from local
+- **Header**: `parallel N / L` is the number of sessions with an event in the
+  last 30 minutes (N) against your limit (L). It turns yellow at the limit and
+  red above it; it only warns and never stops anything. Next to it is the time
+  of the next check-in (`next round`), on a grid of `round_minutes` from local
   midnight.
-- **Next one** (`次の 1 件`): the session to look at next. The order is waiting
-  for approval (`承認待ち`, longest wait first), then failed (`失敗`), then
-  finished but not yet visited (`完了`), then working (`作業中`). A finished
+- **Next up** (`next up`): the session to look at next. The order is waiting
+  for approval (`waiting`, longest wait first), then failed (`failed`), then
+  finished but not yet visited (`done`), then working (`working`). A finished
   session counts as visited once you jump to it from the board.
 - **List**: every session as `#`, status, repo, project, worktree, start time,
   and time since the last update. Rows are in the same order as above, then idle
-  (`待機`), then stopped (`止まっている`). Rows `1`-`9` can be jumped to with the
+  (`idle`), then stopped (`stopped`). Rows `1`-`9` can be jumped to with the
   number key; stopped rows have no number.
-- **Worktrees to finish** (`終わらせ候補`): worktrees that are ahead of
+- **Worktrees to finish** (`to finish`): worktrees that are ahead of
   `origin/HEAD` and whose branch has no open or merged PR of yours. A PR that
   was closed without merging does not hide the branch (the work is not
   finished, so it stays a candidate). Each line shows the commits ahead (`↑`)
-  and behind (`↓`), the number of uncommitted entries (`未 commit`, or `clean`),
-  and the numbers of the sessions using it.
-- **Today** (`今日`): `終わった task` is the number of your PRs created or merged
-  today; `切り替え` counts prompts sent to a different session than the previous
-  prompt; `昨日の切り替え` is yesterday's count; `並行 平均/最大` is the mean and
-  maximum number of sessions active in one of today's 30-minute windows; the
-  bars show switches per day for the last seven days, ending today. Below 110
-  columns the box becomes a single line above the list.
+  and behind (`↓`), the number of uncommitted entries (`N uncommitted`, or
+  `clean`), and the numbers of the sessions using it.
+- **Today** (`today`): `tasks done` is the number of your PRs created or merged
+  today; `switches` counts prompts sent to a different session than the previous
+  prompt; `yesterday` is yesterday's `switches`; `parallel avg/max` is the mean
+  and maximum number of sessions active in one of today's 30-minute windows; the
+  bars (`week`) show switches per day for the last seven days, ending today.
+  Below 110 columns the box becomes a single line above the list
+  (`today  done 1 · switches …`).
 
 Session status:
 
 - A session on the same side as the board (same host or container, and the same
-  hostname) shows `止まっている` once its `pid` is gone.
-- Otherwise, silence is the only signal: `止まっている` appears after 30 minutes
+  hostname) shows `stopped` once its `pid` is gone.
+- Otherwise, silence is the only signal: `stopped` appears after 30 minutes
   without an event. This applies to a session on the other side (a container
   session seen from the host, or the reverse), whose `pid` can't be checked,
   and to a same-side session whose liveness can't be determined (no recorded
   `pid`, no `kill` command, Windows, and so on).
 - A finished or stopped session untouched for 2 days or more is folded into one
-  count line (`2 日以上前に終わった・止まった session N 件`).
+  count line (`N sessions done or stopped 2+ days ago`).
 
 Keys:
 
@@ -270,9 +270,9 @@ Tools the board calls:
 
 - `tmux`: the `1`-`9`, `Enter`, `d`, and `p` keys.
 - `hunk`: the `d` key.
-- `gh`: `終わった task` and the PR check for worktrees to finish. When `gh` is
-  missing or fails, `終わった task` shows `未取得` and worktrees to finish are
-  not narrowed by PR.
+- `gh`: `tasks done` and the PR check for worktrees to finish. When `gh` is
+  missing or fails, `tasks done` shows `n/a` and worktrees to finish are not
+  narrowed by PR.
 
 The board never runs `git fetch`; it reads local refs only. Session files and
 events are re-read every 2 seconds, worktrees every 30 seconds, and `gh` results

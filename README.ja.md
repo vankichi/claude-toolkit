@@ -177,20 +177,20 @@ ccfocus tui --state-dir DIR      # 既定の代わりに DIR を読む
 ```
 
 state dir は `--state-dir`、無ければ `$CCFOCUS_STATE_DIR`、それも無ければ
-`~/.claude/focus`。画面の表記は日本語。次は合成のデータによる例 (幅 120):
+`~/.claude/focus`。次は合成のデータによる例 (幅 120):
 
 ```text
-focus · main:0                                                                   並行 5 / 4 · 次に回る 14:30 (残り 6 分)
-┌ 次の 1 件 · 承認待ち 3m ─────────────────────────────────────────────────────────────────┐ ┌ 今日 ───────────────────┐
-│[1] repo-a / tmux 表示の改善 · feat/tmux · dev:2.1                                        │ │終わった task         1  │
-└──────────────────────────────────────────────────────────────────────────────────────────┘ │切り替え             12  │
- # status       repo         project                           worktree       start updated  │昨日の切り替え       56  │
- 1 承認待ち     repo-a       tmux 表示の改善                   feat-tmux      01/02      3m  │並行 平均/最大  2.4 / 5  │
- 2 完了         repo-b       e2e の安定化                      e2e-388        12/31     12m  │今週 (切り替え/日)       │
- 3 作業中       repo-c       token 認証                        guard-token    01/03     40s  │▄▇█▃▆█▂                  │
- 4 作業中       repo-a       -                                 main           09:12      2m  └─────────────────────────┘
- - 止まっている repo-d       renovate 集約                     renovate-2     12/29      6h
-   2 日以上前に終わった・止まった session 2 件
+focus · main:0                                                              parallel 5 / 4 · next round 14:30 (in 6 min)
+┌ next up · waiting 3m ────────────────────────────────────────────────────────────────────┐ ┌ today ──────────────────┐
+│[1] repo-a / tmux status line · feat/tmux · dev:2.1                                       │ │tasks done             1 │
+└──────────────────────────────────────────────────────────────────────────────────────────┘ │switches              12 │
+ # status   repo         project                               worktree       start updated  │yesterday             56 │
+ 1 waiting  repo-a       tmux status line                      feat-tmux      01/02      3m  │parallel avg/max 2.4 / 5 │
+ 2 done     repo-b       e2e 安定化                            e2e-388        12/31     12m  │week (switches/day)      │
+ 3 working  repo-c       token auth                            guard-token    01/03     40s  │▄▇█▃▆█▂                  │
+ 4 working  repo-a       -                                     main           09:12      2m  └─────────────────────────┘
+ - stopped  repo-d       renovate batching                     renovate-2     12/29      6h
+   2 sessions done or stopped 2+ days ago
 
 
 
@@ -200,45 +200,47 @@ focus · main:0                                                                 
 
 
 
-終わらせ候補 (base より先行 · PR 無し)
+to finish (ahead of base · no PR)
    repo-a       guard-egress   ↑1 ↓5 clean
-   repo-c       guard-token    ↑3 ↓0 未 commit 2 [3]
-1-9 移る · j/k 選ぶ · d 差分 (hunk) · p window 名 · r 読み直す · q 閉じる
+   repo-c       guard-token    ↑3 ↓0 2 uncommitted [3]
+1-9 jump · j/k select · d diff (hunk) · p name window · r reload · q quit
 ```
 
 画面は 4 つの部分と、header・key の案内行でできている:
 
-- **header**: `並行 N / L` は、直近 30 分に event がある session の数 (N) と
+- **header**: `parallel N / L` は、直近 30 分に event がある session の数 (N) と
   上限 (L)。上限ちょうどで黄色、超えると赤になる。警告するだけで、何も止めない。
-  隣の `次に回る` は次の見回りの時刻で、ローカルの 0 時から `round_minutes` ごとの
-  格子で決まる。
-- **次の 1 件** (`次の 1 件`): 次に見る session。承認待ち (`承認待ち`、待ちが長い
-  順) → 失敗 (`失敗`) → まだ見ていない完了 (`完了`) → 作業中 (`作業中`) の順で選ぶ。
+  隣の `next round` は次の見回りの時刻で、ローカルの 0 時から `round_minutes`
+  ごとの格子で決まる。
+- **next up**: 次に見る session。承認待ち (`waiting`、待ちが長い順) → 失敗
+  (`failed`) → まだ見ていない完了 (`done`) → 作業中 (`working`) の順で選ぶ。
   完了した session は、board から移動した時点で見たものとして扱う。
 - **一覧**: 全 session を `#`・status・repo・project・worktree・start (開始)・
   updated (最後の更新からの経過) で表示する。並びは上の順で、その後に待機
-  (`待機`)、止まっている (`止まっている`) が続く。`1`-`9` の行は数字 key で移動でき、
+  (`idle`)、止まっている (`stopped`) が続く。`1`-`9` の行は数字 key で移動でき、
   止まっている行に番号は付かない。
-- **終わらせ候補** (`終わらせ候補`): `origin/HEAD` より先行していて、
-  その branch に open か merge 済みの自分の PR が無い worktree。close して merge
-  していない PR は branch を隠さない (まだ終わっていないので候補に残る)。各行に先行 (`↑`) と遅れ (`↓`) の commit 数、
-  未 commit の数 (`未 commit`、無ければ `clean`)、使っている session の番号を出す。
-- **今日** (`今日`): `終わった task` は今日作成または merge した自分の PR の数。
-  `切り替え` は、直前の prompt と別の session に prompt を送った回数。
-  `昨日の切り替え` は昨日の回数。`並行 平均/最大` は、今日の 30 分ごとの区間で
-  event があった session 数の平均と最大。棒グラフは今日までの 7 日間の 1 日ごとの
-  切り替え数。幅が 110 桁未満だと、この枠は一覧の上の 1 行にまとめる。
+- **to finish** (終わらせ候補): `origin/HEAD` より先行していて、その branch に
+  open か merge 済みの自分の PR が無い worktree。close して merge していない PR は
+  branch を隠さない (まだ終わっていないので候補に残る)。各行に先行 (`↑`) と遅れ
+  (`↓`) の commit 数、未 commit の数 (`N uncommitted`、無ければ `clean`)、使って
+  いる session の番号を出す。
+- **today**: `tasks done` は今日作成または merge した自分の PR の数。`switches` は、
+  直前の prompt と別の session に prompt を送った回数。`yesterday` は昨日の
+  `switches`。`parallel avg/max` は、今日の 30 分ごとの区間で event があった
+  session 数の平均と最大。棒グラフ (`week`) は今日までの 7 日間の 1 日ごとの
+  切り替え数。幅が 110 桁未満だと、この枠は一覧の上の 1 行
+  (`today  done 1 · switches …`) にまとめる。
 
 session の status:
 
 - board と同じ側 (host か container かと hostname が同じ) の session は、`pid`
-  が無くなると `止まっている` になる。
+  が無くなると `stopped` になる。
 - それ以外は event が来ないことだけが手掛かりなので、30 分 event が無いと
-  `止まっている` になる。対象は、`pid` を確かめられない反対側の session (host から
+  `stopped` になる。対象は、`pid` を確かめられない反対側の session (host から
   見た container の session、またはその逆) と、同じ側でも生存を判定できない
   session (`pid` が記録されていない・`kill` が無い・Windows など)。
 - 完了または止まっていて 2 日以上たった session は、1 行の件数にまとめる
-  (`2 日以上前に終わった・止まった session N 件`)。
+  (`N sessions done or stopped 2+ days ago`)。
 
 key:
 
@@ -259,8 +261,8 @@ board が呼ぶ tool:
 
 - `tmux`: `1`-`9`・`Enter`・`d`・`p` の key。
 - `hunk`: `d` の key。
-- `gh`: `終わった task` と、終わらせ候補の PR の判定。`gh` が無い・失敗した時は、
-  `終わった task` が `未取得` になり、終わらせ候補は PR で絞らない。
+- `gh`: `tasks done` と、`to finish` の PR の判定。`gh` が無い・失敗した時は、
+  `tasks done` が `n/a` になり、`to finish` は PR で絞らない。
 
 board は `git fetch` をしない。local の ref だけを読む。session の file と events は
 2 秒ごと、worktree は 30 秒ごとに読み直し、`gh` の結果は 10 分 cache する (`r` でも
