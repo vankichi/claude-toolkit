@@ -1,6 +1,6 @@
 [package]
 name = "ccfocus"
-version = "0.3.1"
+version = "0.3.2"
 description = "Hook-driven status board of every Claude Code session (waiting / working / done / failed) with a focus TUI"
 edition.workspace = true
 rust-version.workspace = true
@@ -22,7 +22,7 @@ path = "src/main.rs"
 
 [dependencies]
 anyhow.workspace = true
-cctk = { path = "../cctk", version = "0.3.1" }
+cctk = { path = "../cctk", version = "0.3.2" }
 chrono.workspace = true
 clap.workspace = true
 crossterm.workspace = true
