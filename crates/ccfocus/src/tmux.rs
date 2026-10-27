@@ -87,22 +87,30 @@ pub fn diff(row: &Row, client: &Client, base: Option<&str>) -> Plan {
     let Some(base) = base else {
         return Err("no merge-base with origin/HEAD".into());
     };
+    // Without the board's pane tmux would guess the client, and with several
+    // attached the popup could open on another one.
+    let Some(pane) = &client.pane else {
+        return Err("can't tell which tmux pane the board runs in".into());
+    };
     // `-EE`: close on a clean exit only, so a failed hunk leaves its error
-    // on screen (`open` has returned by then).
-    let mut a = args(&["display-popup", "-EE", "-w", "90%", "-h", "90%"]);
-    if let Some(pane) = &client.pane {
-        a.extend(args(&["-t", pane]));
-    }
-    // Two or more command arguments run as argv, without a shell.
-    a.extend(args(&[
+    // on screen (`open` has returned by then). Two or more command
+    // arguments run as argv, without a shell.
+    Ok(args(&[
+        "display-popup",
+        "-EE",
+        "-w",
+        "90%",
+        "-h",
+        "90%",
+        "-t",
+        pane,
         "-d",
         &literal(worktree),
         "hunk",
         "diff",
         base,
         "--watch",
-    ]));
-    Ok(a)
+    ]))
 }
 
 /// Name the session's tmux window after its project.
@@ -249,6 +257,15 @@ mod tests {
             ]
         );
         assert!(diff(&row(), &inside(), None).is_err());
+        let no_pane = Client {
+            inside: true,
+            pane: None,
+        };
+        assert!(
+            diff(&row(), &no_pane, Some(&base))
+                .unwrap_err()
+                .contains("which tmux pane")
+        );
         let mut r = row();
         r.worktree_path = None;
         assert!(diff(&r, &inside(), Some(&base)).is_err());
