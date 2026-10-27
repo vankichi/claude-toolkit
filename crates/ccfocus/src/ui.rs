@@ -716,7 +716,9 @@ mod tests {
             return;
         }
         let want = std::fs::read_to_string(&path)
-            .unwrap_or_else(|_| panic!("missing {}; run with UPDATE_SNAPSHOTS=1", path.display()));
+            .unwrap_or_else(|_| panic!("missing {}; run with UPDATE_SNAPSHOTS=1", path.display()))
+            // A Windows checkout with core.autocrlf turns the file's LF into CRLF.
+            .replace("\r\n", "\n");
         assert_eq!(got, want, "snapshot {name} differs");
     }
 
