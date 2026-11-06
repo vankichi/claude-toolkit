@@ -234,18 +234,25 @@ to finish (ahead of base · no PR)
 
 `--tiny` は、細い pane (20〜40 桁ほど。window の 10% 幅の tmux pane など) 向けの
 表示にする。session ごとに 1 枚の card を出し、番号・status・最後の event からの
-時間・`repo · worktree`・project を載せる。選んでいる card は status の色の太枠、
-next up の card には `▸` が付く。header は `N / L` と次の round だけで、today と
-to finish は出さない (通常の board で見る)。card が入りきらない時は、選んでいる
-card が見える位置まで送り、上 (`↑N`) と下 (`↓N`) に隠れた card の数を 1 行で出す。
-`+N old` は、通常の board と同じく 1 行にまとめた session の数。key は同じ。
-同じ例を幅 24 で出すと:
+時間・`repo · worktree`・project を載せる。選んでいる card は status の色の太枠で、
+1 行増やして branch・tmux の window・開始時刻も出す。next up の card には `▸` が
+付く。header は `N / L` と次の round (残り分数付き) で、その下に today を縮めて
+出す (`done`・`sw` 切り替え・`y` 昨日、次の行に `par` 平均/最大と週の棒グラフ)。
+card が入りきらない時は、選んでいる card が見える位置まで送り、上 (`↑N`) と下
+(`↓N`) に隠れた card の数と、`·` の後に通常の board と同じくまとめた session の数
+(`+N old`) を 1 行で出す。最下部に to finish の先頭 2 件を出す (残りは `+N more`、
+PR が取れない時は `· PR?`)。遅れが無ければ `↓` を省き、未 commit の数は `±N`
+で出して clean なら省く (分からない時は `?`)。背の低い pane では、選んでいる card
+が見えるように、to finish、次に today の順で削る。key は同じ。同じ例を幅 24 で出すと:
 
 ```text
-5 / 4 · 14:30
+5 / 4 · 14:30 (6m)
+done 1 · sw 12 (y 56)
+par 2.4/5 ▄▇█▃▆█▂
 ┏▸1 waiting━━━━━━━━━━3m┓
 ┃repo-a · feat-tmux    ┃
 ┃tmux status line      ┃
+┃feat/tmux · dev… 01/02┃
 ┗━━━━━━━━━━━━━━━━━━━━━━┛
 ┌2 done─────────────12m┐
 │repo-b · e2e-388      │
@@ -255,16 +262,13 @@ card が見える位置まで送り、上 (`↑N`) と下 (`↓N`) に隠れた 
 │repo-c · guard-token  │
 │token auth            │
 └──────────────────────┘
-┌4 working───────────2m┐
-│repo-a · main         │
-│-                     │
-└──────────────────────┘
-┌- stopped───────────6h┐
-│repo-d · renovate-2   │
-│renovate batching     │
-└──────────────────────┘
-+2 old
+↓2 more · +2 old
 
+
+
+to finish 2
+ repo-a·guard-egr… ↑1 ↓5
+ repo-c·guard… ↑3 ±2 [3]
 1-9 j/k d p r q
 ```
 

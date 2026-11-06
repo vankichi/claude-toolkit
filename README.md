@@ -243,18 +243,28 @@ The screen has four parts, plus a header and a key help line:
 `--tiny` draws the board for a narrow side pane (about 20-40 columns, such as
 a tmux pane at 10% of the window): one card per session with its number,
 status, time since the last event, `repo · worktree`, and project. The cursor's
-card has a thick border in its status colour and the next-up card is marked
-`▸`. The header shows only `N / L` and the next round, and today's numbers and
-the worktrees to finish are left to the full board. When not every card fits,
-the cursor's card stays on screen and a line counts the cards above (`↑N`) and
-below (`↓N`); `+N old` counts the sessions folded as on the full board. Keys are
-the same. The same example, 24 columns wide:
+card has a thick border in its status colour and one more line for the branch,
+the tmux window, and the start; the next-up card is marked `▸`. The header
+shows `N / L`, the next round with the minutes left, and today's numbers in
+short form (`done` · `sw` switches · `y` yesterday, then `par` avg/max and the
+week's bars). When not every card fits, the cursor's card stays on screen and
+one line counts the cards above (`↑N`) and below (`↓N`) and, after `·`, the
+sessions folded as on the full board (`+N old`). The worktrees to finish follow
+at the bottom, the first two only (`+N more` for the rest; `· PR?` after the
+count when PRs are unknown): `↓` is left out when not behind, the uncommitted count shows as `±N`
+and is left out when clean (`?` when unknown). In a short pane the worktrees
+to finish, then today's numbers, give way so the cursor's card stays on screen.
+Keys are the same. The same
+example, 24 columns wide:
 
 ```text
-5 / 4 · 14:30
+5 / 4 · 14:30 (6m)
+done 1 · sw 12 (y 56)
+par 2.4/5 ▄▇█▃▆█▂
 ┏▸1 waiting━━━━━━━━━━3m┓
 ┃repo-a · feat-tmux    ┃
 ┃tmux status line      ┃
+┃feat/tmux · dev… 01/02┃
 ┗━━━━━━━━━━━━━━━━━━━━━━┛
 ┌2 done─────────────12m┐
 │repo-b · e2e-388      │
@@ -264,16 +274,13 @@ the same. The same example, 24 columns wide:
 │repo-c · guard-token  │
 │token auth            │
 └──────────────────────┘
-┌4 working───────────2m┐
-│repo-a · main         │
-│-                     │
-└──────────────────────┘
-┌- stopped───────────6h┐
-│repo-d · renovate-2   │
-│renovate batching     │
-└──────────────────────┘
-+2 old
+↓2 more · +2 old
 
+
+
+to finish 2
+ repo-a·guard-egr… ↑1 ↓5
+ repo-c·guard… ↑3 ±2 [3]
 1-9 j/k d p r q
 ```
 
