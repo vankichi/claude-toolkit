@@ -43,6 +43,8 @@ const MIN_PROJECT_W: usize = 6;
 const CARD_H: u16 = 4;
 /// Worktrees to finish listed in the tiny view before "+N more".
 const MAX_TINY_CANDIDATES: usize = 2;
+/// Lines of the day's numbers in the tiny view.
+const TINY_TODAY_H: u16 = 2;
 
 pub const HELP: &str = "1-9 jump · j/k select · d diff (hunk) · p name window · r reload · q quit";
 pub const TINY_HELP: &str = "1-9 j/k d p r q";
@@ -541,13 +543,24 @@ pub fn draw_compact(f: &mut Frame<'_>, area: Rect, v: &View) {
 /// Narrow board for a side pane: `N / L · HH:MM (Nm)` and the day's numbers,
 /// one card per session (the cursor's card thick, in its status colour and
 /// one line taller for branch, tmux and start; the next-up card marked `▸`),
-/// the worktrees to finish, and a short help line.
+/// the worktrees to finish, and a short help line. In a short pane the
+/// worktrees to finish, then the day's numbers, give way to the cursor's card.
 pub fn draw_tiny(f: &mut Frame<'_>, area: Rect, v: &View) {
+    // The cursor's card and the hidden-count line, or the empty-board line.
+    let need = if v.board.rows.is_empty() {
+        1
+    } else {
+        CARD_H + 1 + u16::from(v.cursor.is_some())
+    };
+    let spare = area.height.saturating_sub(2 + need);
+    let today_h = TINY_TODAY_H.min(spare);
+    let finish_h =
+        candidates_height(v, MAX_TINY_CANDIDATES).min(spare.saturating_sub(TINY_TODAY_H));
     let [header, today, body, to_finish, footer] = Layout::vertical([
         Constraint::Length(1),
-        Constraint::Length(2),
+        Constraint::Length(today_h),
         Constraint::Min(0),
-        Constraint::Length(candidates_height(v, MAX_TINY_CANDIDATES)),
+        Constraint::Length(finish_h),
         Constraint::Length(1),
     ])
     .areas(area);
@@ -1017,6 +1030,29 @@ mod tests {
         let t = text(&render_with(&v, 24, 13, draw_tiny));
         assert!(t.contains("e2e 安定化"), "{t}");
         assert!(t.contains("↑1 ↓3 more"), "{t}");
+    }
+
+    #[test]
+    fn tiny_short_panes_keep_the_cursor_card() {
+        let mut v = sample();
+        v.cursor = Some(2);
+        // Header, help, the cursor's card (5) and the hidden-count line: 8.
+        let t = text(&render_with(&v, 24, 8, draw_tiny));
+        assert!(t.contains("┃token auth"), "{t}");
+        assert!(t.contains("↑2 ↓2 more · +2 old"), "{t}");
+        assert!(!t.contains("done 1"), "{t}");
+        assert!(!t.contains("to finish"), "{t}");
+
+        // The day's numbers come back before the worktrees to finish.
+        let t = text(&render_with(&v, 24, 10, draw_tiny));
+        assert!(t.contains("┃token auth"), "{t}");
+        assert!(t.contains("par 2.4/5"), "{t}");
+        assert!(!t.contains("to finish"), "{t}");
+
+        let t = text(&render_with(&v, 24, 11, draw_tiny));
+        assert!(t.contains("┃token auth"), "{t}");
+        assert!(t.contains("to finish 2"), "{t}");
+        assert!(!t.contains("repo-a·guard"), "{t}");
     }
 
     #[test]

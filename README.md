@@ -252,7 +252,9 @@ one line counts the cards above (`↑N`) and below (`↓N`) and, after `·`, the
 sessions folded as on the full board (`+N old`). The worktrees to finish follow
 at the bottom, the first two only (`+N more` for the rest; `· PR?` after the
 count when PRs are unknown): `↓` is left out when not behind, the uncommitted count shows as `±N`
-and is left out when clean (`?` when unknown). Keys are the same. The same
+and is left out when clean (`?` when unknown). In a short pane the worktrees
+to finish, then today's numbers, give way so the cursor's card stays on screen.
+Keys are the same. The same
 example, 24 columns wide:
 
 ```text
