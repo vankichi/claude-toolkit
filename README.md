@@ -178,6 +178,7 @@ blocks Claude; problems go to stderr as a single line.
 ```sh
 ccfocus                          # same as `ccfocus tui`
 ccfocus tui --state-dir DIR      # read DIR instead of the default
+ccfocus tui --tiny               # card view for a narrow side pane
 ```
 
 The state directory is `--state-dir`, else `$CCFOCUS_STATE_DIR`, else
@@ -238,6 +239,41 @@ The screen has four parts, plus a header and a key help line:
   bars (`week`) show switches per day for the last seven days, ending today.
   Below 110 columns the box becomes a single line above the list
   (`today  done 1 · switches …`).
+
+`--tiny` draws the board for a narrow side pane (about 20-40 columns, such as
+a tmux pane at 10% of the window): one card per session with its number,
+status, time since the last event, `repo · worktree`, and project. The cursor's
+card has a thick border in its status colour and the next-up card is marked
+`▸`. The header shows only `N / L` and the next round, and today's numbers and
+the worktrees to finish are left to the full board. Keys are the same. The
+same example, 24 columns wide:
+
+```text
+5 / 4 · 14:30
+┏▸1 waiting━━━━━━━━━━3m┓
+┃repo-a · feat-tmux    ┃
+┃tmux status line      ┃
+┗━━━━━━━━━━━━━━━━━━━━━━┛
+┌2 done─────────────12m┐
+│repo-b · e2e-388      │
+│e2e 安定化            │
+└──────────────────────┘
+┌3 working──────────40s┐
+│repo-c · guard-token  │
+│token auth            │
+└──────────────────────┘
+┌4 working───────────2m┐
+│repo-a · main         │
+│-                     │
+└──────────────────────┘
+┌- stopped───────────6h┐
+│repo-d · renovate-2   │
+│renovate batching     │
+└──────────────────────┘
++2 old
+
+1-9 j/k d p r q
+```
 
 Session status:
 
