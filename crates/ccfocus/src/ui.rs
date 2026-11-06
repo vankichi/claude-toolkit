@@ -801,6 +801,7 @@ mod tests {
             branch: branch.map(str::to_string),
             tmux: tmux.map(str::to_string),
             tmux_pane: tmux.map(|_| "%1".to_string()),
+            host_tmux_pane: None,
             repo_path: Some(PathBuf::from(format!("/work/{repo}"))),
             worktree_path: Some(PathBuf::from(format!("/work/{repo}/{worktree}"))),
             started_at: at(started),

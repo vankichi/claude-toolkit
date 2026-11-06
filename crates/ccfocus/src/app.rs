@@ -364,8 +364,13 @@ impl Focus {
             return;
         };
         let done = (row.shown == Shown::Done).then(|| row.seen_key());
-        match tmux::jump(row, &self.client, &self.config).and_then(|a| tmux::run(&a)) {
-            Ok(()) => {
+        match tmux::jump(row, &self.client, &self.config).and_then(|j| tmux::run_jump(&j)) {
+            Ok(warning) => {
+                // Arrived, but the container's tmux may still show another
+                // window: say why.
+                if let Some(w) = warning {
+                    self.say(w);
+                }
                 // A finished session counts as seen once visited: pick the
                 // next one without it.
                 if let Some(key) = done {
@@ -479,6 +484,7 @@ mod tests {
             hostname: Some("example-container".into()),
             tmux: None,
             tmux_pane: None,
+            host_tmux_pane: None,
             pid: Some(1),
             cwd: "/work/none".into(),
             repo: None,

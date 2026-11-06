@@ -21,7 +21,7 @@ pub mod tui;
 pub mod ui;
 
 use anyhow::{Context, Result, bail};
-use cctk::focus::{self, SCHEMA, SessionState, Status};
+use cctk::focus::{self, HostKind, SCHEMA, SessionState, Status};
 use chrono::{DateTime, FixedOffset, SecondsFormat};
 use probe::Probe;
 use serde::Deserialize;
@@ -215,13 +215,22 @@ pub fn handle(
         None => stamp.clone(),
     };
 
+    let host = probe.host();
+    // Only a container has a host pane to go back to; on the host the
+    // variable would be stray, so it is never recorded there.
+    let host_tmux_pane = match host {
+        HostKind::Container => probe.host_pane(),
+        HostKind::Host => None,
+    };
+
     let state = SessionState {
         schema: SCHEMA,
         session_id: input.session_id.clone(),
-        host: probe.host(),
+        host,
         hostname,
         tmux: tmux.location,
         tmux_pane: tmux.pane,
+        host_tmux_pane,
         pid: probe.pid(),
         cwd,
         repo: git.repo,

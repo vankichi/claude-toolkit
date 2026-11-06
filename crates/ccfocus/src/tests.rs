@@ -18,11 +18,19 @@ const URL: &str = include_str!("../tests/fixtures/notification_url.json");
 const BATCH: &str = include_str!("../tests/fixtures/post_tool_batch.json");
 const FAILURE: &str = include_str!("../tests/fixtures/stop_failure.json");
 
-struct FakeProbe;
+/// Reports `CCFOCUS_HOST_PANE` as set on either side, so a test can tell
+/// that the hook ignores it on the host.
+struct FakeProbe {
+    host: HostKind,
+}
+
+const IN_CONTAINER: FakeProbe = FakeProbe {
+    host: HostKind::Container,
+};
 
 impl Probe for FakeProbe {
     fn host(&self) -> HostKind {
-        HostKind::Container
+        self.host
     }
     fn hostname(&self) -> Option<String> {
         Some("example-host".into())
@@ -32,6 +40,9 @@ impl Probe for FakeProbe {
             location: Some("work:2.1".into()),
             pane: Some("%7".into()),
         }
+    }
+    fn host_pane(&self) -> Option<String> {
+        Some("%2".into())
     }
     fn pid(&self) -> Option<u32> {
         Some(4242)
@@ -54,7 +65,7 @@ const T1: &str = "2026-01-02T03:04:05.000+09:00";
 const T2: &str = "2026-01-02T03:10:00.000+09:00";
 
 fn run(event: &str, input: &str, dir: &Path, now: &str) -> Result<Outcome> {
-    handle(event, input.as_bytes(), dir, at(now), &FakeProbe)
+    handle(event, input.as_bytes(), dir, at(now), &IN_CONTAINER)
 }
 
 fn state(dir: &Path) -> SessionState {
@@ -89,6 +100,7 @@ fn session_start_writes_full_state_and_event() {
             hostname: Some("example-host".into()),
             tmux: Some("work:2.1".into()),
             tmux_pane: Some("%7".into()),
+            host_tmux_pane: Some("%2".into()),
             pid: Some(4242),
             cwd: "/work/example".into(),
             repo: Some("/work/example".into()),
@@ -101,6 +113,28 @@ fn session_start_writes_full_state_and_event() {
         }
     );
     assert_eq!(events(tmp.path()), format!("{T1}\t{SID}\tSessionStart\n"));
+}
+
+#[test]
+fn only_a_container_session_records_the_host_pane() {
+    let tmp = tempfile::tempdir().unwrap();
+    let on_host = FakeProbe {
+        host: HostKind::Host,
+    };
+    handle(
+        "SessionStart",
+        START.as_bytes(),
+        tmp.path(),
+        at(T1),
+        &on_host,
+    )
+    .unwrap();
+    let s = state(tmp.path());
+    assert_eq!(s.host, HostKind::Host);
+    assert_eq!(s.host_tmux_pane, None);
+    // The container's next event records it.
+    run("UserPromptSubmit", PROMPT, tmp.path(), T2).unwrap();
+    assert_eq!(state(tmp.path()).host_tmux_pane.as_deref(), Some("%2"));
 }
 
 #[test]

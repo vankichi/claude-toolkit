@@ -1,12 +1,13 @@
 //! Dashboard settings from `<state>/config.toml`.
 //!
-//! Only a flat subset of TOML is read (no new dependency for three keys):
+//! Only a flat subset of TOML is read (no new dependency for a few keys):
 //! `key = 123` and `key = "text"` lines, blank lines, and `#` comments.
 //!
 //! ```toml
 //! limit = 4               # parallel sessions before the header turns red
 //! round_minutes = 30      # check-in grid from local midnight; 0 hides it
-//! container_target = "dev" # tmux target for jumping to a container session
+//! container_target = "dev" # fallback tmux target for a container session
+//! container_tmux = "dev tmux" # command that runs tmux in the container
 //! ```
 
 use std::io::Read;
@@ -17,15 +18,21 @@ pub const FILE_NAME: &str = "config.toml";
 /// Larger config files are refused rather than read.
 const MAX_BYTES: u64 = 64 * 1024;
 
+/// Longest `container_tmux` value.
+const MAX_COMMAND_BYTES: usize = 256;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Config {
     /// Parallel sessions allowed before the header warns (warning only).
     pub limit: usize,
     /// Minutes between check-ins, aligned to local midnight; 0 hides them.
     pub round_minutes: u32,
-    /// `tmux switch-client -t` target for sessions running in the container
-    /// (whose panes live in the host tmux's window for the container).
+    /// `tmux switch-client -t` target for a container session that didn't
+    /// record its host pane (see `SessionState::host_tmux_pane`).
     pub container_target: String,
+    /// argv prefix that runs `tmux` inside the container (e.g. `dev tmux`),
+    /// used to select the session's window there. Empty: don't.
+    pub container_tmux: Vec<String>,
 }
 
 impl Default for Config {
@@ -34,6 +41,7 @@ impl Default for Config {
             limit: 4,
             round_minutes: 30,
             container_target: "dev".to_string(),
+            container_tmux: Vec::new(),
         }
     }
 }
@@ -101,7 +109,10 @@ pub fn parse(text: &str) -> Result<Config, String> {
             ("container_target", Value::Text(v)) if is_tmux_target(&v) => {
                 config.container_target = v;
             }
-            ("limit" | "round_minutes" | "container_target", _) => {
+            ("container_tmux", Value::Text(v)) if is_command(&v) => {
+                config.container_tmux = v.split_whitespace().map(str::to_string).collect();
+            }
+            ("limit" | "round_minutes" | "container_target" | "container_tmux", _) => {
                 return Err(format!("line {n}: invalid value for `{}`", key.trim()));
             }
             (other, _) => return Err(format!("line {n}: unknown key `{other}`")),
@@ -145,6 +156,14 @@ fn is_tmux_target(s: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || "_-.:%=@$".contains(c))
 }
 
+/// A command line split on whitespace into argv (never through a shell).
+/// Tokens may start with `-` (they are the command's own flags); control
+/// characters other than the separating spaces and tabs are refused. Empty
+/// means "not set".
+fn is_command(s: &str) -> bool {
+    s.len() <= MAX_COMMAND_BYTES && s.chars().all(|c| c == ' ' || c == '\t' || !c.is_control())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -164,6 +183,45 @@ mod tests {
         assert_eq!(c.limit, 3);
         assert_eq!(c.round_minutes, 60);
         assert_eq!(c.container_target, "main:dev");
+    }
+
+    #[test]
+    fn container_tmux_is_an_argv_prefix() {
+        assert!(parse("").unwrap().container_tmux.is_empty());
+        assert_eq!(
+            parse("container_tmux = \"  dev   tmux \" # in the container\n")
+                .unwrap()
+                .container_tmux,
+            ["dev", "tmux"]
+        );
+        // Flags are the command's own, and nothing goes through a shell.
+        assert_eq!(
+            parse("container_tmux = \"docker exec -u me box tmux\"")
+                .unwrap()
+                .container_tmux,
+            ["docker", "exec", "-u", "me", "box", "tmux"]
+        );
+        assert_eq!(
+            parse("container_tmux = \"a;b $(c)\"")
+                .unwrap()
+                .container_tmux,
+            ["a;b", "$(c)"]
+        );
+        assert!(
+            parse("container_tmux = \"\"")
+                .unwrap()
+                .container_tmux
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn container_tmux_refuses_control_characters_and_long_values() {
+        assert!(parse("container_tmux = \"dev\u{1b}[2J tmux\"").is_err());
+        assert!(parse("container_tmux = \"dev\u{0}tmux\"").is_err());
+        assert!(parse("container_tmux = \"dev\\ntmux\"").is_err());
+        assert!(parse(&format!("container_tmux = \"{}\"", "a".repeat(257))).is_err());
+        assert!(parse("container_tmux = 3").is_err());
     }
 
     #[test]

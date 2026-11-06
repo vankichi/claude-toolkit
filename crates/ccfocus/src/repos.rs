@@ -412,6 +412,7 @@ prunable gitdir file points to non-existent location
             branch: None,
             tmux: None,
             tmux_pane: None,
+            host_tmux_pane: None,
             repo_path: Some("/work/repo-a".into()),
             worktree_path: Some(worktree.into()),
             started_at: t,

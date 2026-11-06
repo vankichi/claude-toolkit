@@ -84,6 +84,9 @@ pub struct Row {
     pub tmux: Option<String>,
     /// `%N`, validated.
     pub tmux_pane: Option<String>,
+    /// Container sessions: the host tmux pane running the container (`%N`,
+    /// validated).
+    pub host_tmux_pane: Option<String>,
     /// Raw paths for git and `-c` (never printed).
     pub repo_path: Option<PathBuf>,
     pub worktree_path: Option<PathBuf>,
@@ -219,6 +222,7 @@ fn row(
         branch,
         tmux: s.tmux.as_deref().map(text::clean).filter(|t| !t.is_empty()),
         tmux_pane: s.tmux_pane.filter(|p| crate::probe::is_pane_id(p)),
+        host_tmux_pane: s.host_tmux_pane.filter(|p| crate::probe::is_pane_id(p)),
         repo_path: s.repo.map(PathBuf::from),
         worktree_path: s.worktree.map(PathBuf::from),
         session_id: s.session_id,
@@ -262,6 +266,7 @@ mod tests {
             hostname: Some("example-host".into()),
             tmux: Some("work:2.1".into()),
             tmux_pane: Some("%3".into()),
+            host_tmux_pane: None,
             pid: Some(100),
             cwd: "/work/repo-a".into(),
             repo: Some("/work/repo-a".into()),
@@ -444,12 +449,14 @@ mod tests {
         s.branch = Some("feat/\u{1b}[2Jx".into());
         s.tmux = Some("work\u{7}:2.1".into());
         s.tmux_pane = Some("%3; rm".into());
+        s.host_tmux_pane = Some("#(touch x)".into());
         s.project = Some("demo\u{200B}".into());
         let r = build_with(vec![s], &[]).rows.remove(0);
         assert_eq!(r.repo, "repo-a");
         assert_eq!(r.branch.as_deref(), Some("feat/[2Jx"));
         assert_eq!(r.tmux.as_deref(), Some("work:2.1"));
         assert_eq!(r.tmux_pane, None);
+        assert_eq!(r.host_tmux_pane, None);
         assert_eq!(r.project, "demo");
         assert_eq!(r.worktree, "feat-x");
 
