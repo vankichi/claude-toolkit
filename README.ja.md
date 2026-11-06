@@ -174,6 +174,7 @@ hook は常に exit 0 で終わり、stdout には何も出さないので、失
 ```sh
 ccfocus                          # `ccfocus tui` と同じ
 ccfocus tui --state-dir DIR      # 既定の代わりに DIR を読む
+ccfocus tui --tiny               # 細い pane 向けの card 表示
 ```
 
 state dir は `--state-dir`、無ければ `$CCFOCUS_STATE_DIR`、それも無ければ
@@ -230,6 +231,42 @@ to finish (ahead of base · no PR)
   session 数の平均と最大。棒グラフ (`week`) は今日までの 7 日間の 1 日ごとの
   切り替え数。幅が 110 桁未満だと、この枠は一覧の上の 1 行
   (`today  done 1 · switches …`) にまとめる。
+
+`--tiny` は、細い pane (20〜40 桁ほど。window の 10% 幅の tmux pane など) 向けの
+表示にする。session ごとに 1 枚の card を出し、番号・status・最後の event からの
+時間・`repo · worktree`・project を載せる。選んでいる card は status の色の太枠、
+next up の card には `▸` が付く。header は `N / L` と次の round だけで、today と
+to finish は出さない (通常の board で見る)。card が入りきらない時は、選んでいる
+card が見える位置まで送り、上 (`↑N`) と下 (`↓N`) に隠れた card の数を 1 行で出す。
+`+N old` は、通常の board と同じく 1 行にまとめた session の数。key は同じ。
+同じ例を幅 24 で出すと:
+
+```text
+5 / 4 · 14:30
+┏▸1 waiting━━━━━━━━━━3m┓
+┃repo-a · feat-tmux    ┃
+┃tmux status line      ┃
+┗━━━━━━━━━━━━━━━━━━━━━━┛
+┌2 done─────────────12m┐
+│repo-b · e2e-388      │
+│e2e 安定化            │
+└──────────────────────┘
+┌3 working──────────40s┐
+│repo-c · guard-token  │
+│token auth            │
+└──────────────────────┘
+┌4 working───────────2m┐
+│repo-a · main         │
+│-                     │
+└──────────────────────┘
+┌- stopped───────────6h┐
+│repo-d · renovate-2   │
+│renovate batching     │
+└──────────────────────┘
++2 old
+
+1-9 j/k d p r q
+```
 
 session の status:
 

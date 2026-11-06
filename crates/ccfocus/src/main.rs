@@ -56,6 +56,10 @@ enum Command {
         /// State directory (default: `$CCFOCUS_STATE_DIR`, else ~/.claude/focus)
         #[arg(long)]
         state_dir: Option<PathBuf>,
+
+        /// One card per session, for a narrow side pane (about 20-40 columns)
+        #[arg(long)]
+        tiny: bool,
     },
 }
 
@@ -79,18 +83,18 @@ fn main() -> ExitCode {
             }
             ExitCode::SUCCESS
         }
-        Some(Command::Tui { state_dir }) => tui(state_dir),
-        None => tui(None),
+        Some(Command::Tui { state_dir, tiny }) => tui(state_dir, tiny),
+        None => tui(None, false),
     }
 }
 
 /// Unlike the hook, the board reports failures through its exit status.
-fn tui(state_dir: Option<PathBuf>) -> ExitCode {
+fn tui(state_dir: Option<PathBuf>, tiny: bool) -> ExitCode {
     let Some(state_dir) = state_dir.or_else(cctk::focus::default_state_dir) else {
         warn("could not determine the state directory");
         return ExitCode::FAILURE;
     };
-    match ccfocus::tui::run(state_dir) {
+    match ccfocus::tui::run(state_dir, tiny) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             warn(&format!("{e:#}"));

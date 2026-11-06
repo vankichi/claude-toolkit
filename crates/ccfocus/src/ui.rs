@@ -1,7 +1,8 @@
 //! Rendering of the focus board from a [`View`] (plain data, so layouts are
 //! snapshot-tested with `TestBackend`). [`draw`] is the full screen (the
 //! `ccfocus` TUI and cctop's drill-down); [`draw_compact`] fills cctop's
-//! overview panel.
+//! overview panel; [`draw_tiny`] is the card view for a narrow side pane
+//! (`ccfocus tui --tiny`).
 //!
 //! ```text
 //! focus · main:0               parallel 4 / 4 · next round 14:30 (in 6 min)
@@ -20,7 +21,7 @@ use ratatui::{
     layout::{Alignment, Constraint, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph},
+    widgets::{Block, BorderType, Borders, Paragraph},
 };
 use std::fmt::Write as _;
 
@@ -38,8 +39,11 @@ const WORKTREE_W: usize = 14;
 const START_W: usize = 5;
 const UPDATED_W: usize = 7;
 const MIN_PROJECT_W: usize = 6;
+/// Rows of one card in the tiny view: border, repo, project, border.
+const CARD_H: u16 = 4;
 
 pub const HELP: &str = "1-9 jump · j/k select · d diff (hunk) · p name window · r reload · q quit";
+pub const TINY_HELP: &str = "1-9 j/k d p r q";
 
 /// Today's finished tasks, from gh.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -106,8 +110,14 @@ fn dim() -> Style {
 /// `parallel N / L` styled by how it compares with the limit: red over it,
 /// yellow at it.
 fn parallel_span(v: &View) -> Span<'static> {
-    let text = format!("parallel {} / {}", v.parallel, v.limit);
-    let style = match v.parallel.cmp(&v.limit) {
+    Span::styled(
+        format!("parallel {} / {}", v.parallel, v.limit),
+        parallel_style(v),
+    )
+}
+
+fn parallel_style(v: &View) -> Style {
+    match v.parallel.cmp(&v.limit) {
         std::cmp::Ordering::Greater => Style::default()
             .fg(Color::White)
             .bg(Color::Red)
@@ -116,8 +126,7 @@ fn parallel_span(v: &View) -> Span<'static> {
             .fg(Color::Yellow)
             .add_modifier(Modifier::BOLD),
         std::cmp::Ordering::Less => Style::default(),
-    };
-    Span::styled(text, style)
+    }
 }
 
 fn round_text(v: &View) -> Option<String> {
@@ -135,7 +144,7 @@ pub fn draw(f: &mut Frame<'_>, area: Rect, v: &View) {
     ])
     .areas(area);
     draw_header(f, header, v);
-    draw_footer(f, footer, v);
+    draw_footer(f, footer, v, HELP);
 
     let cand_h = candidates_height(v);
     if area.width >= WIDE {
@@ -189,14 +198,14 @@ fn draw_header(f: &mut Frame<'_>, area: Rect, v: &View) {
     );
 }
 
-fn draw_footer(f: &mut Frame<'_>, area: Rect, v: &View) {
+fn draw_footer(f: &mut Frame<'_>, area: Rect, v: &View, help: &str) {
     let w = usize::from(area.width);
     let line = if let Some(m) = &v.message {
         Span::styled(fit(m, w), Style::default().fg(Color::Yellow))
     } else if let Some(m) = &v.warning {
         Span::styled(fit(m, w), Style::default().fg(Color::Red))
     } else {
-        Span::styled(fit(HELP, w), dim())
+        Span::styled(fit(help, w), dim())
     };
     f.render_widget(Paragraph::new(Line::from(line)), area);
 }
@@ -526,6 +535,131 @@ pub fn draw_compact(f: &mut Frame<'_>, area: Rect, v: &View) {
     f.render_widget(Paragraph::new(lines), area);
 }
 
+/// Narrow board for a side pane: `N / L · HH:MM`, one card per session
+/// (the cursor's card thick and in its status colour, the next-up card marked
+/// `▸`), and a short help line. The today numbers and worktrees to finish are
+/// left to the full board.
+pub fn draw_tiny(f: &mut Frame<'_>, area: Rect, v: &View) {
+    let [header, body, footer] = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Min(0),
+        Constraint::Length(1),
+    ])
+    .areas(area);
+    let w = usize::from(area.width);
+    let limit = format!("{} / {}", v.parallel, v.limit);
+    let round = v
+        .round
+        .as_ref()
+        .map_or_else(String::new, |(at, _)| format!(" · {at}"));
+    f.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled(fit(&limit, w), parallel_style(v)),
+            Span::raw(fit(&round, w.saturating_sub(width(&limit)))),
+        ])),
+        header,
+    );
+    draw_footer(f, footer, v, TINY_HELP);
+
+    let rows = &v.board.rows;
+    if rows.is_empty() && v.board.folded == 0 {
+        f.render_widget(
+            Paragraph::new(Line::from(Span::styled(fit("no sessions yet", w), dim()))),
+            body,
+        );
+        return;
+    }
+    let room = body.height.saturating_sub(u16::from(v.board.folded > 0));
+    let cards = usize::from(room / CARD_H);
+    // Keep a line for the hidden count when not every card fits, unless that
+    // would leave no card at all.
+    let shown = if rows.len() <= cards {
+        rows.len()
+    } else {
+        usize::from(room.saturating_sub(1) / CARD_H).max(cards.min(1))
+    };
+    // Scroll so the cursor's card (the one d / p / Enter act on) is drawn.
+    let first = v
+        .cursor
+        .map_or(0, |c| (c + 1).saturating_sub(shown))
+        .min(rows.len() - shown);
+    let mut y = body.y;
+    for (i, r) in rows.iter().enumerate().skip(first).take(shown) {
+        let card = Rect::new(body.x, y, body.width, CARD_H);
+        draw_card(f, card, v, r, v.cursor == Some(i), v.board.next == Some(i));
+        y += CARD_H;
+    }
+    let mut tail = Vec::new();
+    // Hidden cards above (scrolled past) and below the drawn ones.
+    let hidden = match (first, rows.len() - first - shown) {
+        (0, 0) => None,
+        (up, 0) => Some(format!("↑{up} more")),
+        (0, down) => Some(format!("↓{down} more")),
+        (up, down) => Some(format!("↑{up} ↓{down} more")),
+    };
+    if let Some(h) = hidden {
+        tail.push(Line::from(Span::styled(fit(&h, w), dim())));
+    }
+    if v.board.folded > 0 {
+        tail.push(Line::from(Span::styled(
+            fit(&format!("+{} old", v.board.folded), w),
+            dim(),
+        )));
+    }
+    let tail_h = (body.y + body.height).saturating_sub(y);
+    f.render_widget(
+        Paragraph::new(tail),
+        Rect::new(body.x, y, body.width, tail_h),
+    );
+}
+
+/// `┌▸1 waiting ── 3m┐` over `repo · worktree` and the project.
+fn draw_card(f: &mut Frame<'_>, area: Rect, v: &View, r: &Row, selected: bool, next: bool) {
+    let style = status_style(r.shown);
+    let num = r.number.map_or_else(|| "-".to_string(), |n| n.to_string());
+    let mark = if next { "▸" } else { "" };
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(if selected {
+            BorderType::Thick
+        } else {
+            BorderType::Plain
+        })
+        .border_style(if selected {
+            style.remove_modifier(Modifier::BOLD)
+        } else {
+            dim()
+        })
+        .title(Line::from(vec![
+            Span::raw(format!("{mark}{num} ")),
+            Span::styled(r.shown.label(), style),
+        ]))
+        .title(Line::from(age(v.now - r.updated_at)).right_aligned());
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+    let w = usize::from(inner.width);
+    let place = if r.worktree.is_empty() || r.worktree == r.repo {
+        r.repo.clone()
+    } else {
+        format!("{} · {}", r.repo, r.worktree)
+    };
+    let project = if r.project.is_empty() {
+        Span::styled("-", dim())
+    } else {
+        Span::raw(fit(&r.project, w))
+    };
+    f.render_widget(
+        Paragraph::new(vec![
+            Line::from(Span::styled(
+                fit(&place, w),
+                Style::default().add_modifier(Modifier::BOLD),
+            )),
+            Line::from(project),
+        ]),
+        inner,
+    );
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -672,16 +806,12 @@ mod tests {
     }
 
     fn render(v: &View, w: u16, h: u16, compact: bool) -> Buffer {
+        render_with(v, w, h, if compact { draw_compact } else { draw })
+    }
+
+    fn render_with(v: &View, w: u16, h: u16, draw_fn: fn(&mut Frame<'_>, Rect, &View)) -> Buffer {
         let mut terminal = Terminal::new(TestBackend::new(w, h)).unwrap();
-        terminal
-            .draw(|f| {
-                if compact {
-                    draw_compact(f, f.area(), v);
-                } else {
-                    draw(f, f.area(), v);
-                }
-            })
-            .unwrap();
+        terminal.draw(|f| draw_fn(f, f.area(), v)).unwrap();
         terminal.backend().buffer().clone()
     }
 
@@ -753,6 +883,75 @@ mod tests {
         v.today.tasks = TaskCount::Unknown;
         v.warning = Some("config.toml: line 1: unknown key `colour`".into());
         snapshot("board_empty_80", &text(&render(&v, 80, 12, false)));
+    }
+
+    #[test]
+    fn snapshot_tiny() {
+        snapshot("tiny_24", &text(&render_with(&sample(), 24, 24, draw_tiny)));
+    }
+
+    #[test]
+    fn tiny_scrolls_to_the_cursor_card() {
+        let mut v = sample();
+        v.cursor = Some(4);
+        let t = text(&render_with(&v, 24, 12, draw_tiny));
+        assert!(t.contains("renovate batching"), "{t}");
+        assert!(t.contains("↑3 more"), "{t}");
+        assert!(t.contains("+2 old"), "{t}");
+        assert!(!t.contains("tmux status line"), "{t}");
+    }
+
+    #[test]
+    fn tiny_counts_hidden_cards_on_both_sides() {
+        let mut v = sample();
+        v.cursor = Some(2);
+        let t = text(&render_with(&v, 24, 12, draw_tiny));
+        assert!(t.contains("↑1 ↓2 more"), "{t}");
+
+        v.cursor = Some(0);
+        let t = text(&render_with(&v, 24, 12, draw_tiny));
+        assert!(t.contains("↓3 more"), "{t}");
+    }
+
+    #[test]
+    fn tiny_draws_one_card_when_only_one_fits() {
+        let mut v = sample();
+        v.board.folded = 0;
+        v.cursor = Some(1);
+        let t = text(&render_with(&v, 24, 6, draw_tiny));
+        assert!(t.contains("e2e 安定化"), "{t}");
+    }
+
+    #[test]
+    fn tiny_cursor_card_is_thick_in_its_status_colour() {
+        let buf = render_with(&sample(), 24, 24, draw_tiny);
+        let t = text(&buf);
+        assert!(t.lines().nth(1).unwrap().starts_with('┏'), "{t}");
+        assert!(t.lines().nth(5).unwrap().starts_with('┌'), "{t}");
+        assert_eq!(buf[(0, 1)].fg, Color::Yellow);
+
+        let mut v = sample();
+        v.cursor = Some(1);
+        let buf = render_with(&v, 24, 24, draw_tiny);
+        assert_eq!(buf[(0, 5)].fg, Color::Green);
+    }
+
+    #[test]
+    fn tiny_marks_next_up_not_the_cursor() {
+        let mut v = sample();
+        v.cursor = Some(1);
+        let t = text(&render_with(&v, 24, 24, draw_tiny));
+        assert!(t.lines().nth(1).unwrap().starts_with("┌▸1 "), "{t}");
+        assert!(t.lines().nth(5).unwrap().starts_with("┏2 "), "{t}");
+    }
+
+    #[test]
+    fn tiny_empty_board() {
+        let mut v = sample();
+        v.board = Board::default();
+        v.cursor = None;
+        let t = text(&render_with(&v, 24, 6, draw_tiny));
+        assert!(t.contains("no sessions yet"), "{t}");
     }
 
     fn find(buf: &Buffer, needle: &str) -> (u16, u16) {
