@@ -287,7 +287,7 @@ key:
 
 | キー | 動作 |
 |---|---|
-| `1`-`9` | その session の tmux pane に移る (`tmux switch-client`)。container の session は `container_target` の window に移る |
+| `1`-`9` | その session の tmux pane に移る (`tmux switch-client`)。container の session は、container の中でもその session の window と pane を選ぶ (「container の session に移る」を参照) |
 | `j` / `k` (`↓` / `↑`) | 選ぶ行を動かす |
 | `Enter` | 選んだ行に移る |
 | `d` | 選んだ行の worktree で `hunk diff <merge-base> --watch` を board の上の tmux の popup で開く (`<merge-base>` は `git merge-base HEAD origin/HEAD`)。hunk を終えると popup が閉じる。hunk が失敗した時は error を出したまま残り、`Esc` で閉じる。window の layout は変わらない |
@@ -300,7 +300,8 @@ tmux の外では、移動や名前変更の key (`1`-`9`・`Enter`・`d`・`p`)
 
 board が呼ぶ tool:
 
-- `tmux`: `1`-`9`・`Enter`・`d`・`p` の key。
+- `tmux`: `1`-`9`・`Enter`・`d`・`p` の key。container の session では、
+  `container_tmux` に書いた command も (host で、shell を通さずに) 実行する。
 - `hunk`: `d` の key。
 - `gh`: `tasks done` と、`to finish` の PR の判定。`gh` が無い・失敗した時は、
   `tasks done` が `n/a` になり、`to finish` は PR で絞らない。
@@ -314,10 +315,15 @@ board は `git fetch` をしない。local の ref だけを読む。session の
 dotfiles から link で配れる。壊れていたら既定の値で動き、理由を最下行に出す。
 
 ```toml
-limit = 4                # 並行の上限 (1-99)
-round_minutes = 30       # 次に回る時刻の間隔。0 で出さない (0-1440)
-container_target = "dev" # container の session に移る時の tmux target
+limit = 4                   # 並行の上限 (1-99)
+round_minutes = 30          # 次に回る時刻の間隔。0 で出さない (0-1440)
+container_target = "dev"    # container の session に移る時の fallback の tmux target
+container_tmux = "dev tmux" # container の中の tmux を動かす command。空なら使わない (既定)
 ```
+
+`container_tmux` は、空白で区切って argv にし、shell を通さずに実行する。制御文字
+を含む値や 256 byte を超える値は拒否する (config が壊れた扱いになり、board は既定
+の値で動いて、理由を最下行に出す)。
 
 掃除: board (`ccfocus` の TUI と cctop の Focus panel) が、起動時と 1 時間ごとに、
 90 日より古い event の log (`events/*.tsv`) と、10 分より古い hook の temp file
@@ -326,6 +332,34 @@ container_target = "dev" # container の session に移る時の tmux target
 外への送信: `gh` が GitHub に問い合わせるのは、自分 (`@me`) の PR の検索と、
 各 session の repo での `gh pr list --author @me` だけ。board は prompt や
 transcript を読まない。
+
+#### container の session に移る
+
+board を host の tmux で動かし、Claude の session が dev container の中にある時、
+その行で `1`-`9` か `Enter` を押すと、次の 2 段階で移る。
+
+1. `container_tmux` が設定されていて、session の `tmux_pane` (container の中の
+   pane、`%N`) が分かる時は、`<container_tmux> select-window -t <pane>` と
+   `<container_tmux> select-pane -t <pane>` を実行する。container の中の tmux で、
+   その session の window と pane を選ぶ。`container_tmux = "dev tmux"` と、
+   dotfiles の `dev tmux <args>` (`docker exec -u <user> <container> tmux <args>`
+   のこと) の組み合わせなら、container の中で tmux が動く。
+2. host の client を、`host_tmux_pane` (container を動かしている host の pane。
+   session の file から読む) へ `tmux switch-client -t` で移す。記録が無い・`%N`
+   の形でない・host にその pane が無い (`switch-client` が失敗する) 時は、代わりに
+   `container_target` へ移る。
+
+1 が失敗しても 2 は行い、1 の error は最下行に出る。`container_tmux` が無ければ 1
+はしない。
+
+`host_tmux_pane` を記録するには、container を起動する側が、host の pane を
+`CCFOCUS_HOST_PANE` の環境変数で渡す。例: `docker exec -e CCFOCUS_HOST_PANE="$TMUX_PANE" …`。
+container の中の hook がこれを読んで `host_tmux_pane` に記録する。記録するのは
+`%N` の形の値だけで、host の hook はこの変数を読まない。
+
+session の file は container が書くので、board は信用しない。pane id は `%N` の形を
+確かめてから tmux の target にだけ使い、実行する command は host の `config.toml`
+からだけ取る。desktop app の session (tmux の外) には、今までどおり移れない。
 
 ## Releasing
 

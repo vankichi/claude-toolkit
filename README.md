@@ -300,7 +300,7 @@ Keys:
 
 | Key | Action |
 |---|---|
-| `1`-`9` | Switch to that session's tmux pane (`tmux switch-client`). A container session goes to the `container_target` window. |
+| `1`-`9` | Switch to that session's tmux pane (`tmux switch-client`). A container session also selects its window and pane inside the container (see "Jumping to a container session"). |
 | `j` / `k` (`↓` / `↑`) | Move the selection |
 | `Enter` | Switch to the selected row |
 | `d` | Open `hunk diff <merge-base> --watch` in a tmux popup over the board, in the selected row's worktree (`<merge-base>` is `git merge-base HEAD origin/HEAD`). Quitting hunk closes the popup; if hunk fails, the popup stays with its error until `Esc`. The window's layout is left as it was |
@@ -313,7 +313,8 @@ print the reason on the bottom line.
 
 Tools the board calls:
 
-- `tmux`: the `1`-`9`, `Enter`, `d`, and `p` keys.
+- `tmux`: the `1`-`9`, `Enter`, `d`, and `p` keys. For a container session, also
+  the command set in `container_tmux` (run on the host, with no shell).
 - `hunk`: the `d` key.
 - `gh`: `tasks done` and the PR check for worktrees to finish. When `gh` is
   missing or fails, `tasks done` shows `n/a` and worktrees to finish are not
@@ -329,10 +330,16 @@ so you can distribute it from your dotfiles. If the file is broken, the board
 runs with the defaults and shows the reason on the bottom line.
 
 ```toml
-limit = 4                # parallel-session limit (1-99)
-round_minutes = 30       # check-in interval; 0 hides it (0-1440)
-container_target = "dev" # tmux target for jumping to a container session
+limit = 4                   # parallel-session limit (1-99)
+round_minutes = 30          # check-in interval; 0 hides it (0-1440)
+container_target = "dev"    # fallback tmux target for a container session
+container_tmux = "dev tmux" # runs tmux inside the container; empty = off (default)
 ```
+
+`container_tmux` is split on whitespace into an argv and run without a shell.
+A value with a control character or longer than 256 bytes is rejected (the
+config counts as broken: the board runs with the defaults and shows the reason
+on the bottom line).
 
 Housekeeping: the board (`ccfocus` and cctop's Focus panel) runs a cleanup at
 start-up and every hour. It deletes event logs (`events/*.tsv`) older than 90
@@ -341,6 +348,36 @@ days and hook temp files (`.<id>.json.<pid>.<nanos>.tmp`) older than 10 minutes.
 What leaves your machine: `gh` asks GitHub only for a search of your own
 (`@me`) PRs and, in each session's repo, `gh pr list --author @me`. The board
 never reads prompts or transcripts.
+
+#### Jumping to a container session
+
+When the board runs on the host's tmux and a Claude session runs in a dev
+container, `1`-`9` or `Enter` on that row does two steps:
+
+1. If `container_tmux` is set and the session's `tmux_pane` (its pane inside the
+   container, `%N`) is known, the board runs `<container_tmux> select-window -t
+   <pane>` and `<container_tmux> select-pane -t <pane>`. This selects the
+   session's window and pane in the container's tmux. With `container_tmux =
+   "dev tmux"` and dotfiles' `dev tmux <args>` (which is `docker exec -u <user>
+   <container> tmux <args>`), this runs tmux inside the container.
+2. The board runs `tmux switch-client -t` to move the host's client to
+   `host_tmux_pane`, the host pane that runs the container (read from the session
+   file). If it is not recorded, is not of the form `%N`, or the host has no such
+   pane (`switch-client` fails), it switches to `container_target` instead.
+
+Step 2 runs even when step 1 fails; the error from step 1 shows on the bottom
+line. Without `container_tmux`, step 1 is skipped.
+
+To record `host_tmux_pane`, the side that starts the container passes the
+host's pane through the `CCFOCUS_HOST_PANE` environment variable, for example
+`docker exec -e CCFOCUS_HOST_PANE="$TMUX_PANE" …`. The hook inside the container
+reads it and stores it as `host_tmux_pane`; it records only a value of the form
+`%N`, and the hook on the host does not read it.
+
+The session file is written by the container, so the board does not trust it: a
+pane id is checked to be of the form `%N` before it is used as a tmux target,
+and the command to run comes only from the host's `config.toml`. A desktop app
+session (outside tmux) still cannot be jumped to.
 
 ## Releasing
 
