@@ -571,11 +571,12 @@ pub fn draw_tiny(f: &mut Frame<'_>, area: Rect, v: &View) {
     }
     let room = body.height.saturating_sub(u16::from(v.board.folded > 0));
     let cards = usize::from(room / CARD_H);
-    // Keep a line for "… N more" when not every card fits.
+    // Keep a line for the hidden count when not every card fits, unless that
+    // would leave no card at all.
     let shown = if rows.len() <= cards {
         rows.len()
     } else {
-        usize::from(room.saturating_sub(1) / CARD_H)
+        usize::from(room.saturating_sub(1) / CARD_H).max(cards.min(1))
     };
     // Scroll so the cursor's card (the one d / p / Enter act on) is drawn.
     let first = v
@@ -589,11 +590,15 @@ pub fn draw_tiny(f: &mut Frame<'_>, area: Rect, v: &View) {
         y += CARD_H;
     }
     let mut tail = Vec::new();
-    if shown < rows.len() {
-        tail.push(Line::from(Span::styled(
-            fit(&format!("… {} more", rows.len() - shown), w),
-            dim(),
-        )));
+    // Hidden cards above (scrolled past) and below the drawn ones.
+    let hidden = match (first, rows.len() - first - shown) {
+        (0, 0) => None,
+        (up, 0) => Some(format!("↑{up} more")),
+        (0, down) => Some(format!("↓{down} more")),
+        (up, down) => Some(format!("↑{up} ↓{down} more")),
+    };
+    if let Some(h) = hidden {
+        tail.push(Line::from(Span::styled(fit(&h, w), dim())));
     }
     if v.board.folded > 0 {
         tail.push(Line::from(Span::styled(
@@ -891,17 +896,53 @@ mod tests {
         v.cursor = Some(4);
         let t = text(&render_with(&v, 24, 12, draw_tiny));
         assert!(t.contains("renovate batching"), "{t}");
-        assert!(t.contains("… 3 more"), "{t}");
+        assert!(t.contains("↑3 more"), "{t}");
         assert!(t.contains("+2 old"), "{t}");
         assert!(!t.contains("tmux status line"), "{t}");
     }
 
     #[test]
-    fn tiny_cursor_card_is_thick() {
+    fn tiny_counts_hidden_cards_on_both_sides() {
+        let mut v = sample();
+        v.cursor = Some(2);
+        let t = text(&render_with(&v, 24, 12, draw_tiny));
+        assert!(t.contains("↑1 ↓2 more"), "{t}");
+
+        v.cursor = Some(0);
+        let t = text(&render_with(&v, 24, 12, draw_tiny));
+        assert!(t.contains("↓3 more"), "{t}");
+    }
+
+    #[test]
+    fn tiny_draws_one_card_when_only_one_fits() {
+        let mut v = sample();
+        v.board.folded = 0;
+        v.cursor = Some(1);
+        let t = text(&render_with(&v, 24, 6, draw_tiny));
+        assert!(t.contains("e2e 安定化"), "{t}");
+    }
+
+    #[test]
+    fn tiny_cursor_card_is_thick_in_its_status_colour() {
         let buf = render_with(&sample(), 24, 24, draw_tiny);
         let t = text(&buf);
         assert!(t.lines().nth(1).unwrap().starts_with('┏'), "{t}");
         assert!(t.lines().nth(5).unwrap().starts_with('┌'), "{t}");
+        assert_eq!(buf[(0, 1)].fg, Color::Yellow);
+
+        let mut v = sample();
+        v.cursor = Some(1);
+        let buf = render_with(&v, 24, 24, draw_tiny);
+        assert_eq!(buf[(0, 5)].fg, Color::Green);
+    }
+
+    #[test]
+    fn tiny_marks_next_up_not_the_cursor() {
+        let mut v = sample();
+        v.cursor = Some(1);
+        let t = text(&render_with(&v, 24, 24, draw_tiny));
+        assert!(t.lines().nth(1).unwrap().starts_with("┌▸1 "), "{t}");
+        assert!(t.lines().nth(5).unwrap().starts_with("┏2 "), "{t}");
     }
 
     #[test]
