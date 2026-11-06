@@ -1,8 +1,8 @@
 //! The dashboard's key actions as tmux commands. Planning is pure (an
-//! argument list or the reason it can't be done); [`run`] executes one.
-//! Arguments go to tmux (or, for a container session's jump, to the
-//! configured `container_tmux` command) directly, never through a shell. tmux itself
-//! format-expands some of them (the `rename-window` name and the
+//! argument list, a [`Jump`], or the reason it can't be done); [`run`] and
+//! [`run_jump`] execute them. Arguments go to tmux (or, for a container
+//! session's jump, to the configured `container_tmux` command) directly,
+//! never through a shell. tmux itself format-expands some of them (the `rename-window` name and the
 //! `display-popup -d` directory), where `#(…)` would run a shell command, so
 //! values from the state files are passed through [`literal`] there.
 
@@ -122,25 +122,51 @@ pub fn jump(row: &Row, client: &Client, config: &Config) -> Result<Jump, String>
 
 /// Run a [`Jump`]: the container steps first (so the session's window is
 /// already showing on arrival; the first failure stops them), then each
-/// switch until one works. `Ok(Some(_))` when the switch worked but a
-/// container step failed, with that error to show.
+/// switch until one works. `Ok(Some(_))` when the client arrived but not as
+/// planned (a container step failed, or a fallback target was used), with
+/// the reason to show.
 pub fn run_jump(jump: &Jump) -> Result<Option<String>, String> {
+    run_jump_with(jump, |argv| run_argv(argv, CONTAINER_TIMEOUT), run)
+}
+
+fn run_jump_with(
+    jump: &Jump,
+    mut run_container: impl FnMut(&[String]) -> Result<(), String>,
+    mut run_switch: impl FnMut(&[String]) -> Result<(), String>,
+) -> Result<Option<String>, String> {
     let inner = jump
         .container
         .iter()
-        .find_map(|argv| run_argv(argv, CONTAINER_TIMEOUT).err())
+        .find_map(|argv| run_container(argv).err())
         .map(|e| format!("in the container: {e}"));
-    let mut switched = Err("nothing to switch to".to_string());
+    let mut first_failure: Option<String> = None;
+    let mut last_failure = "nothing to switch to".to_string();
+    let mut arrived = None;
     for target in &jump.switch {
-        switched = run(target);
-        if switched.is_ok() {
-            break;
+        match run_switch(target) {
+            Ok(()) => {
+                arrived = Some(target);
+                break;
+            }
+            Err(e) => {
+                first_failure.get_or_insert_with(|| e.clone());
+                last_failure = e;
+            }
         }
     }
-    match (switched, inner) {
-        (Ok(()), inner) => Ok(inner),
-        (Err(e), None) => Err(e),
-        (Err(e), Some(inner)) => Err(format!("{e} ({inner})")),
+    // Arrived on a fallback: say why the first target didn't work.
+    let fell_back = match (arrived, first_failure) {
+        (Some(target), Some(e)) => Some(format!(
+            "fell back to {}: {e}",
+            crate::text::clean(target.last().map_or("", String::as_str))
+        )),
+        _ => None,
+    };
+    let notes: Vec<String> = [inner, fell_back].into_iter().flatten().collect();
+    match arrived {
+        Some(_) => Ok((!notes.is_empty()).then(|| notes.join("; "))),
+        None if notes.is_empty() => Err(last_failure),
+        None => Err(format!("{last_failure} ({})", notes.join("; "))),
     }
 }
 
@@ -408,18 +434,78 @@ mod tests {
         }
     }
 
-    #[test]
-    fn run_jump_reports_a_failed_container_step_and_still_switches() {
-        let j = Jump {
-            container: vec![args(&["ccfocus-test-no-such-program", "x"])],
-            switch: vec![],
+    /// `run_jump_with` over fakes that log each call and fail the argv lists
+    /// whose last word is in `fail`.
+    fn fake_run(j: &Jump, fail: &[&str]) -> (Result<Option<String>, String>, Vec<String>) {
+        let log = std::cell::RefCell::new(Vec::new());
+        let step = |kind: &str, argv: &[String]| {
+            log.borrow_mut().push(format!("{kind} {}", argv.join(" ")));
+            let last = argv.last().map_or("", String::as_str);
+            if fail.contains(&last) {
+                Err(format!("no {last}"))
+            } else {
+                Ok(())
+            }
         };
-        let e = run_jump(&j).unwrap_err();
-        assert!(e.contains("nothing to switch to"), "{e}");
-        assert!(
-            e.contains("in the container: couldn't run ccfocus-test-no-such-program"),
-            "{e}"
+        let got = run_jump_with(j, |a| step("in", a), |a| step("out", a));
+        (got, log.into_inner())
+    }
+
+    fn planned() -> Jump {
+        jump(&container_row(), &inside(), &with_container_tmux()).unwrap()
+    }
+
+    #[test]
+    fn run_jump_selects_inside_before_switching() {
+        let (got, log) = fake_run(&planned(), &[]);
+        assert_eq!(got, Ok(None));
+        assert_eq!(
+            log,
+            [
+                "in dev tmux select-window -t %3",
+                "in dev tmux select-pane -t %3",
+                "out switch-client -t %12",
+            ]
         );
+    }
+
+    #[test]
+    fn run_jump_still_switches_after_a_failed_container_step() {
+        let mut j = planned();
+        j.container[0].push("broken".into());
+        let (got, log) = fake_run(&j, &["broken"]);
+        assert_eq!(
+            log,
+            [
+                "in dev tmux select-window -t %3 broken",
+                "out switch-client -t %12",
+            ],
+            "the second container step is skipped"
+        );
+        let warning = got.unwrap().unwrap();
+        assert!(warning.starts_with("in the container: "), "{warning}");
+    }
+
+    #[test]
+    fn run_jump_falls_back_and_says_so() {
+        let (got, log) = fake_run(&planned(), &["%12"]);
+        assert_eq!(
+            log[2..],
+            ["out switch-client -t %12", "out switch-client -t dev"]
+        );
+        assert_eq!(got, Ok(Some("fell back to dev: no %12".into())));
+
+        let (got, _) = fake_run(&planned(), &["%12", "dev", "%3"]);
+        let e = got.unwrap_err();
+        assert!(e.starts_with("no dev ("), "{e}");
+        assert!(e.contains("in the container: no %3"), "{e}");
+        assert!(!e.contains("fell back"), "{e}");
+    }
+
+    #[test]
+    fn run_argv_names_a_missing_program() {
+        let e = run_argv(&args(&["ccfocus-test-no-such-program"]), CONTAINER_TIMEOUT).unwrap_err();
+        assert_eq!(e, "couldn't run ccfocus-test-no-such-program");
     }
 
     #[test]

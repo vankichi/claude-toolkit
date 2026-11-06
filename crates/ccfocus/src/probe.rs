@@ -18,7 +18,7 @@ const COMMAND_TIMEOUT: Duration = Duration::from_millis(500);
 
 /// Set by the container's launcher (e.g. `docker exec -e`) to the host's
 /// `$TMUX_PANE`, so the host board can switch to the container's window.
-pub const HOST_PANE_ENV: &str = "CCFOCUS_HOST_PANE";
+pub(crate) const HOST_PANE_ENV: &str = "CCFOCUS_HOST_PANE";
 
 /// Where the session's working directory sits in git.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]

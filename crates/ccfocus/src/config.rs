@@ -110,7 +110,11 @@ pub fn parse(text: &str) -> Result<Config, String> {
                 config.container_target = v;
             }
             ("container_tmux", Value::Text(v)) if is_command(&v) => {
-                config.container_tmux = v.split_whitespace().map(str::to_string).collect();
+                config.container_tmux = v
+                    .split(COMMAND_SEPARATORS)
+                    .filter(|t| !t.is_empty())
+                    .map(str::to_string)
+                    .collect();
             }
             ("limit" | "round_minutes" | "container_target" | "container_tmux", _) => {
                 return Err(format!("line {n}: invalid value for `{}`", key.trim()));
@@ -156,12 +160,17 @@ fn is_tmux_target(s: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || "_-.:%=@$".contains(c))
 }
 
-/// A command line split on whitespace into argv (never through a shell).
-/// Tokens may start with `-` (they are the command's own flags); control
-/// characters other than the separating spaces and tabs are refused. Empty
-/// means "not set".
+/// What `container_tmux` is split on.
+const COMMAND_SEPARATORS: [char; 2] = [' ', '\t'];
+
+/// A command line split on spaces and tabs into argv (never through a
+/// shell). Tokens may start with `-` (they are the command's own flags).
+/// Any other whitespace (which would look like a separator but isn't one)
+/// and control characters are refused. Empty means "not set".
 fn is_command(s: &str) -> bool {
-    s.len() <= MAX_COMMAND_BYTES && s.chars().all(|c| c == ' ' || c == '\t' || !c.is_control())
+    s.len() <= MAX_COMMAND_BYTES
+        && s.chars()
+            .all(|c| COMMAND_SEPARATORS.contains(&c) || !(c.is_control() || c.is_whitespace()))
 }
 
 #[cfg(test)]
@@ -219,8 +228,19 @@ mod tests {
     fn container_tmux_refuses_control_characters_and_long_values() {
         assert!(parse("container_tmux = \"dev\u{1b}[2J tmux\"").is_err());
         assert!(parse("container_tmux = \"dev\u{0}tmux\"").is_err());
-        assert!(parse("container_tmux = \"dev\\ntmux\"").is_err());
-        assert!(parse(&format!("container_tmux = \"{}\"", "a".repeat(257))).is_err());
+        assert!(parse("container_tmux = \"dev\u{7f}tmux\"").is_err());
+        // Whitespace that is not a separator would split nowhere.
+        assert!(parse("container_tmux = \"dev\u{a0}tmux\"").is_err());
+        assert!(parse("container_tmux = \"dev\u{2028}tmux\"").is_err());
+        assert_eq!(
+            parse("container_tmux = \"dev\ttmux\"")
+                .unwrap()
+                .container_tmux,
+            ["dev", "tmux"]
+        );
+        let at = |n: usize| parse(&format!("container_tmux = \"{}\"", "a".repeat(n)));
+        assert!(at(256).is_ok());
+        assert!(at(257).is_err());
         assert!(parse("container_tmux = 3").is_err());
     }
 
