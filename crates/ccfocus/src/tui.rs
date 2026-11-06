@@ -1,7 +1,7 @@
 //! `ccfocus` / `ccfocus tui`: the focus board full screen (`--tiny`: the
-//! card view for a narrow side pane). A plain
-//! synchronous loop: poll the keyboard briefly, tick, draw. The worktree scan
-//! and gh run on [`crate::repos::Job`] threads; what stays on this thread is
+//! card view for a narrow side pane). A plain synchronous loop: poll the
+//! keyboard briefly, tick, draw. The worktree scan and gh run on
+//! [`crate::repos::Job`] threads; what stays on this thread is
 //! bounded by timeouts (a key action's tmux / merge-base call, the periodic
 //! `kill -0` checks).
 

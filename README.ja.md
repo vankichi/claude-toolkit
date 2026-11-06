@@ -236,7 +236,10 @@ to finish (ahead of base · no PR)
 表示にする。session ごとに 1 枚の card を出し、番号・status・最後の event からの
 時間・`repo · worktree`・project を載せる。選んでいる card は status の色の太枠、
 next up の card には `▸` が付く。header は `N / L` と次の round だけで、today と
-to finish は出さない (通常の board で見る)。key は同じ。同じ例を幅 24 で出すと:
+to finish は出さない (通常の board で見る)。card が入りきらない時は、選んでいる
+card が見える位置まで送り、上 (`↑N`) と下 (`↓N`) に隠れた card の数を 1 行で出す。
+`+N old` は、通常の board と同じく 1 行にまとめた session の数。key は同じ。
+同じ例を幅 24 で出すと:
 
 ```text
 5 / 4 · 14:30

@@ -245,8 +245,10 @@ a tmux pane at 10% of the window): one card per session with its number,
 status, time since the last event, `repo · worktree`, and project. The cursor's
 card has a thick border in its status colour and the next-up card is marked
 `▸`. The header shows only `N / L` and the next round, and today's numbers and
-the worktrees to finish are left to the full board. Keys are the same. The
-same example, 24 columns wide:
+the worktrees to finish are left to the full board. When not every card fits,
+the cursor's card stays on screen and a line counts the cards above (`↑N`) and
+below (`↓N`); `+N old` counts the sessions folded as on the full board. Keys are
+the same. The same example, 24 columns wide:
 
 ```text
 5 / 4 · 14:30
