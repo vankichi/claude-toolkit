@@ -260,26 +260,41 @@ fn spawn_entries(
     discovered
         .iter()
         .enumerate()
-        .map(|(idx, d)| {
-            let handle = tail::spawn(d.path.clone(), idx, tx.clone());
-            let (name, status) = match &d.agent_info {
-                Some(info) => (
-                    info.name.clone(),
-                    AgentStatus::from_kind(Some(info.status_kind)),
-                ),
-                None => (None, AgentStatus::Offline),
-            };
-            SessionEntry {
-                path: d.path.clone(),
-                short_id: d.short_id.clone(),
-                session_id: d.session_id.clone(),
-                name,
-                status,
-                stats: SessionStats::new(ctx_override),
-                handle,
-            }
-        })
+        .map(|(idx, d)| SessionEntry::spawn(d, idx, tx, ctx_override))
         .collect()
+}
+
+impl SessionEntry {
+    /// A fresh entry for `d`, its watcher tagged `idx`.
+    fn spawn(
+        d: &DiscoveredSession,
+        idx: usize,
+        tx: &mpsc::Sender<(usize, SessionLine)>,
+        ctx_override: Option<u64>,
+    ) -> Self {
+        let (name, status) = name_and_status(d);
+        SessionEntry {
+            path: d.path.clone(),
+            short_id: d.short_id.clone(),
+            session_id: d.session_id.clone(),
+            name,
+            status,
+            stats: SessionStats::new(ctx_override),
+            handle: tail::spawn(d.path.clone(), idx, tx.clone()),
+        }
+    }
+}
+
+/// The name and status `claude agents --json` reported for `d`; offline
+/// when it isn't listed.
+fn name_and_status(d: &DiscoveredSession) -> (Option<String>, AgentStatus) {
+    match &d.agent_info {
+        Some(info) => (
+            info.name.clone(),
+            AgentStatus::from_kind(Some(info.status_kind)),
+        ),
+        None => (None, AgentStatus::Offline),
+    }
 }
 
 /// Re-discover sessions and reconcile against the running watcher set:
@@ -309,38 +324,14 @@ async fn rescan(
     for (idx, d) in fresh.iter().enumerate() {
         if let Some(mut e) = existing.remove(&d.session_id) {
             // Refresh status/name from the latest `claude agents --json`.
-            let (name, status) = match &d.agent_info {
-                Some(info) => (
-                    info.name.clone(),
-                    AgentStatus::from_kind(Some(info.status_kind)),
-                ),
-                None => (None, AgentStatus::Offline),
-            };
-            e.name = name;
-            e.status = status;
+            (e.name, e.status) = name_and_status(d);
             // Watcher is still running with the OLD tag (the previous index).
             // Abort it and re-spawn with the new index so dispatch stays correct.
             e.handle.abort();
             e.handle = tail::spawn(d.path.clone(), idx, tx.clone());
             new_entries.push(e);
         } else {
-            let handle = tail::spawn(d.path.clone(), idx, tx.clone());
-            let (name, status) = match &d.agent_info {
-                Some(info) => (
-                    info.name.clone(),
-                    AgentStatus::from_kind(Some(info.status_kind)),
-                ),
-                None => (None, AgentStatus::Offline),
-            };
-            new_entries.push(SessionEntry {
-                path: d.path.clone(),
-                short_id: d.short_id.clone(),
-                session_id: d.session_id.clone(),
-                name,
-                status,
-                stats: SessionStats::new(cfg.context_window_override),
-                handle,
-            });
+            new_entries.push(SessionEntry::spawn(d, idx, tx, cfg.context_window_override));
         }
     }
 
@@ -757,6 +748,33 @@ fn tool_color(name: &str) -> Color {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn name_and_status_follow_the_agent_listing() {
+        let session = |agent_info| DiscoveredSession {
+            path: PathBuf::from("/p/s.jsonl"),
+            short_id: "s".into(),
+            session_id: "s".into(),
+            agent_info,
+        };
+        let busy = session(Some(session::AgentInfo {
+            name: Some("fix-login".into()),
+            status_kind: session::AgentStatusKind::Busy,
+        }));
+        assert_eq!(
+            name_and_status(&busy),
+            (Some("fix-login".into()), AgentStatus::Busy)
+        );
+        let idle = session(Some(session::AgentInfo {
+            name: None,
+            status_kind: session::AgentStatusKind::Idle,
+        }));
+        assert_eq!(name_and_status(&idle), (None, AgentStatus::Idle));
+        assert_eq!(
+            name_and_status(&session(None)),
+            (None, AgentStatus::Offline)
+        );
+    }
 
     #[test]
     fn classify_key_quit_always_works() {
