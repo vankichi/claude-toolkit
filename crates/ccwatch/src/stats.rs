@@ -136,8 +136,7 @@ impl SessionStats {
 
         if let Some(at) = line.timestamp_utc() {
             self.last_event_at = Some(at);
-            let tokens =
-                usage.input_tokens + usage.output_tokens + usage.cache_creation_input_tokens;
+            let tokens = usage.tokens_without_cache_reads();
             self.recent.push_back(RecentEntry {
                 at,
                 cost_usd: event_cost,
@@ -248,9 +247,7 @@ impl SessionStats {
     /// `cache_read / (cache_read + input + cache_creation)` — share of context that hit cache.
     #[must_use]
     pub(crate) fn cache_hit_ratio(&self) -> f64 {
-        let denom = self.total.input_tokens
-            + self.total.cache_creation_input_tokens
-            + self.total.cache_read_input_tokens;
+        let denom = self.total.context_size();
         if denom == 0 {
             return 0.0;
         }

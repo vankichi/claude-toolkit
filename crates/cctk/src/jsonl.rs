@@ -34,6 +34,19 @@ impl Usage {
         self.input_tokens + self.cache_creation_input_tokens + self.cache_read_input_tokens
     }
 
+    /// Every token on this turn: input, output, cache writes and cache reads.
+    #[must_use]
+    pub fn total_tokens(&self) -> u64 {
+        self.context_size() + self.output_tokens
+    }
+
+    /// Tokens on this turn other than cache reads (input + output + cache
+    /// writes): what the per-minute rates count.
+    #[must_use]
+    pub fn tokens_without_cache_reads(&self) -> u64 {
+        self.input_tokens + self.output_tokens + self.cache_creation_input_tokens
+    }
+
     /// (5min, 1hr) cache-write split. Falls back to (all 5min) when the
     /// per-TTL breakdown was absent in the JSONL.
     #[must_use]
@@ -522,6 +535,20 @@ mod tests {
         assert_eq!(u.cache_creation_input_tokens, 0);
         assert_eq!(u.cache_read_input_tokens, 0);
         assert_eq!(u.context_size(), 5);
+    }
+
+    #[test]
+    fn usage_sums_with_and_without_cache_reads() {
+        let u = Usage {
+            input_tokens: 1,
+            output_tokens: 20,
+            cache_creation_input_tokens: 300,
+            cache_read_input_tokens: 4000,
+            ..Usage::default()
+        };
+        assert_eq!(u.context_size(), 4301);
+        assert_eq!(u.total_tokens(), 4321);
+        assert_eq!(u.tokens_without_cache_reads(), 321);
     }
 
     #[test]

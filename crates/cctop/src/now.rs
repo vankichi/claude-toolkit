@@ -79,10 +79,7 @@ impl Slot {
     }
 
     fn tokens(&self) -> u64 {
-        self.total.input_tokens
-            + self.total.output_tokens
-            + self.total.cache_creation_input_tokens
-            + self.total.cache_read_input_tokens
+        self.total.total_tokens()
     }
 
     fn context_pct(&self) -> f64 {
@@ -142,9 +139,7 @@ impl NowStats {
             for ex in line.extracted() {
                 let (category, name) = Category::of(&ex);
                 let weight = match &ex {
-                    Extracted::Model { usage, .. } => {
-                        usage.input_tokens + usage.output_tokens + usage.cache_creation_input_tokens
-                    }
+                    Extracted::Model { usage, .. } => usage.tokens_without_cache_reads(),
                     _ => 1,
                 };
                 self.events
