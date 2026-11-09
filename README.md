@@ -314,7 +314,8 @@ print the reason on the bottom line.
 Tools the board calls:
 
 - `tmux`: the `1`-`9`, `Enter`, `d`, and `p` keys. For a container session, also
-  the command set in `container_tmux` (run on the host, with no shell).
+  the command set in the env `CCFOCUS_CONTAINER_TMUX` (run on the host, with no
+  shell).
 - `hunk`: the `d` key.
 - `gh`: `tasks done` and the PR check for worktrees to finish. When `gh` is
   missing or fails, `tasks done` shows `n/a` and worktrees to finish are not
@@ -333,14 +334,26 @@ runs with the defaults and shows the reason on the bottom line.
 limit = 4                   # parallel-session limit (1-99)
 round_minutes = 30          # check-in interval; 0 hides it (0-1440)
 container_target = "dev"    # fallback tmux target for a container session
-# container_tmux = "dev tmux" # runs tmux inside the container; unset (empty) by default
 ```
 
-`container_tmux` is split on spaces and tabs into an argv and run without a
-shell. Other whitespace (such as NBSP) does not separate words. A value with
-whitespace other than space and tab, a control character, or more than 256 bytes
-is rejected (the config counts as broken: the board runs with the defaults and
-shows the reason on the bottom line).
+The command that runs tmux inside the container is not read from `config.toml`.
+Set it in the host's environment variable `CCFOCUS_CONTAINER_TMUX`, in the shell
+or tmux environment that starts the board, for example
+`export CCFOCUS_CONTAINER_TMUX="dev tmux"`. If it is unset, the board does not
+operate the container's tmux.
+
+The reason: this setting decides which program the board runs on the host. A dev
+container may mount the state dir (`~/.claude`) writable, so reading it from
+`config.toml` would let the container choose a program that runs on the host. A
+`container_tmux` line in `config.toml` is rejected as a broken line (like any
+other broken line: the whole file counts as defaults, and the bottom line says to
+use `$CCFOCUS_CONTAINER_TMUX`).
+
+The value is split on spaces and tabs into an argv and run without a shell. Other
+whitespace (such as NBSP) does not separate words. A value with whitespace other
+than space and tab, a control character, or more than 256 bytes, or a value that
+is not UTF-8, is ignored, and the reason shows on the bottom line (joined into
+one line with any file warning).
 
 Housekeeping: the board (`ccfocus` and cctop's Focus panel) runs a cleanup at
 start-up and every hour. It deletes event logs (`events/*.tsv`) older than 90
@@ -355,14 +368,15 @@ never reads prompts or transcripts.
 When the board runs on the host's tmux and a Claude session runs in a dev
 container, `1`-`9` or `Enter` on that row does two steps:
 
-1. If `container_tmux` is set and the session's `tmux_pane` (its pane inside the
-   container, `%N`) is known, the board runs `<container_tmux> select-window -t
-   <pane>` and `<container_tmux> select-pane -t <pane>`. This selects the
-   session's window and pane in the container's tmux. With `container_tmux =
-   "dev tmux"` and dotfiles' `dev tmux <args>` (which is `docker exec -u <user>
-   <container> tmux <args>`), this runs tmux inside the container.
-   After that, the board runs `<container_tmux> show-environment -t <tmux_pane>
-   CCFOCUS_HOST_PANE` to ask the container's tmux which host pane shows the
+1. If `CCFOCUS_CONTAINER_TMUX` is set and the session's `tmux_pane` (its pane
+   inside the container, `%N`) is known, the board runs `<CCFOCUS_CONTAINER_TMUX>
+   select-window -t <pane>` and `<CCFOCUS_CONTAINER_TMUX> select-pane -t <pane>`.
+   This selects the session's window and pane in the container's tmux. With
+   `CCFOCUS_CONTAINER_TMUX="dev tmux"` and dotfiles' `dev tmux <args>` (which is
+   `docker exec -u <user> <container> tmux <args>`), this runs tmux inside the
+   container.
+   After that, the board runs `<CCFOCUS_CONTAINER_TMUX> show-environment -t
+   <tmux_pane> CCFOCUS_HOST_PANE` to ask the container's tmux which host pane shows the
    container now (see below for why).
 2. The board runs `tmux switch-client -t` to move the host's client to a host
    pane. It tries these candidates in order: the pane just asked in step 1, then
@@ -372,7 +386,7 @@ container, `1`-`9` or `Enter` on that row does two steps:
 
 Step 2 runs even when step 1 fails; the error from step 1 shows on the bottom
 line, and the question is skipped when the select step fails. Without
-`container_tmux`, step 1 is skipped, including the question (the recorded pane,
+`CCFOCUS_CONTAINER_TMUX`, step 1 is skipped, including the question (the recorded pane,
 then `container_target`). When a candidate fails and the board moves to a later one, the reason shows on the bottom line (`fell back to <target>: <reason>`).
 
 Why ask: when you re-enter the container with `dev in`, the container's tmux
@@ -392,7 +406,7 @@ reads it and stores it as `host_tmux_pane`; it records only a value of the form
 
 The session file is written by the container, so the board does not trust it: a
 pane id is checked to be of the form `%N` before it is used as a tmux target,
-and the command to run comes only from the host's `config.toml`. Any value of the
+and the command to run comes only from the host's env `CCFOCUS_CONTAINER_TMUX`. Any value of the
 form `%N` can point at any pane on the host, but all that happens is a move; no
 command is run. A desktop app
 session (outside tmux) still cannot be jumped to.
