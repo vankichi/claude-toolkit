@@ -280,9 +280,30 @@ impl SessionEntry {
             name,
             status,
             stats: SessionStats::new(ctx_override),
-            handle: tail::spawn(d.path.clone(), idx, tx.clone()),
+            handle: watch(d, idx, tx),
         }
     }
+
+    /// The watcher still runs with the old tag (the previous index): abort
+    /// it and watch again tagged `idx`, so its lines reach this entry.
+    fn retag(
+        &mut self,
+        d: &DiscoveredSession,
+        idx: usize,
+        tx: &mpsc::Sender<(usize, SessionLine)>,
+    ) {
+        self.handle.abort();
+        self.handle = watch(d, idx, tx);
+    }
+}
+
+/// Tail `d`'s log, tagging each line with `idx`.
+fn watch(
+    d: &DiscoveredSession,
+    idx: usize,
+    tx: &mpsc::Sender<(usize, SessionLine)>,
+) -> JoinHandle<Result<()>> {
+    tail::spawn(d.path.clone(), idx, tx.clone())
 }
 
 /// The name and status `claude agents --json` reported for `d`; offline
@@ -325,10 +346,7 @@ async fn rescan(
         if let Some(mut e) = existing.remove(&d.session_id) {
             // Refresh status/name from the latest `claude agents --json`.
             (e.name, e.status) = name_and_status(d);
-            // Watcher is still running with the OLD tag (the previous index).
-            // Abort it and re-spawn with the new index so dispatch stays correct.
-            e.handle.abort();
-            e.handle = tail::spawn(d.path.clone(), idx, tx.clone());
+            e.retag(d, idx, tx);
             new_entries.push(e);
         } else {
             new_entries.push(SessionEntry::spawn(d, idx, tx, cfg.context_window_override));
@@ -686,7 +704,7 @@ fn open_in_browser(url: &str) {
         .spawn();
 }
 
-// ---- style helpers ----
+// ---- span / color / number helpers (shared styles live in `style`) ----
 
 fn value_span<S: Into<String>>(s: S, color: Color) -> Span<'static> {
     Span::styled(s.into(), bold_fg(color))
