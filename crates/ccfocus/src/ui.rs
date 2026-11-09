@@ -50,16 +50,18 @@ pub const HELP: &str = "1-9 jump · j/k select · d diff (hunk) · p name window
 pub const TINY_HELP: &str = "1-9 j/k d p r q";
 
 /// Today's finished tasks, from gh.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum TaskCount {
     /// The first query hasn't returned yet.
+    #[default]
     Pending,
     /// gh is missing or failed.
     Unknown,
     Known(usize),
 }
 
-#[derive(Debug, Clone, PartialEq)]
+/// Today's numbers; the default is the board before anything was read.
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct Today {
     pub tasks: TaskCount,
     pub switches: u32,
