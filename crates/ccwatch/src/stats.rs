@@ -1,5 +1,5 @@
 use cctk::jsonl::{Kind, Line, Usage};
-use cctk::pricing::{ModelInfo, Pricing};
+use cctk::pricing::ModelInfo;
 use chrono::{DateTime, Utc};
 use ratatui::style::Color;
 use std::collections::{HashMap, VecDeque};
@@ -25,7 +25,6 @@ struct RecentEntry {
 pub(crate) struct SessionStats {
     model_raw: Option<String>,
     model_info: ModelInfo,
-    pricing: Pricing,
     started_at: Instant,
     total: Usage,
     session_cost_usd: f64,
@@ -55,11 +54,9 @@ impl SessionStats {
     /// window override (typically wired from the `--context-window` flag /
     /// `CCWATCH_CONTEXT_WINDOW` env var).
     pub(crate) fn new(override_context_window: Option<u64>) -> Self {
-        let info = ModelInfo::default();
         Self {
             model_raw: None,
-            model_info: info,
-            pricing: info.pricing(),
+            model_info: ModelInfo::default(),
             started_at: Instant::now(),
             total: Usage::default(),
             session_cost_usd: 0.0,
@@ -118,7 +115,6 @@ impl SessionStats {
         {
             self.model_raw = Some(model.clone());
             self.model_info = ModelInfo::parse(model);
-            self.pricing = self.model_info.pricing();
         }
 
         for name in line.tool_use_names() {
@@ -131,7 +127,7 @@ impl SessionStats {
         self.total += usage;
         self.last_context_size = usage.context_size();
         self.assistant_messages += 1;
-        let event_cost = self.pricing.cost_usd(&usage);
+        let event_cost = self.model_info.pricing().cost_usd(&usage);
         self.session_cost_usd += event_cost;
 
         if let Some(at) = line.timestamp_utc() {
