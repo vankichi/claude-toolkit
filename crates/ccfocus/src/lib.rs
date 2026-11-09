@@ -12,6 +12,7 @@ mod cmd;
 pub mod config;
 pub mod events;
 pub mod fsx;
+pub mod job;
 pub mod probe;
 pub mod prune;
 pub mod repos;

@@ -9,8 +9,9 @@
 use crate::board::{self, Board, Shown, Side};
 use crate::config::{self, Config};
 use crate::events::{self, EventLog};
+use crate::job::Job;
 use crate::probe::{Probe, SystemProbe};
-use crate::repos::{self, Job, Tasks, Worktree};
+use crate::repos::{self, Tasks, Worktree};
 use crate::tmux::{self, Client};
 use crate::ui::{TaskCount, Today, View};
 use cctk::focus;
