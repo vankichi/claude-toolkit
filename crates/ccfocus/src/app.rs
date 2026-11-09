@@ -401,6 +401,11 @@ impl Focus {
         let Some(row) = self.board.rows.get(i) else {
             return;
         };
+        // Refuse before planning, so a row that can't be planned doesn't
+        // replace the note of the jump still running.
+        if self.jump_job.is_pending() {
+            return self.say(STILL_SWITCHING.into());
+        }
         let done = (row.shown == Shown::Done).then(|| row.seen_key());
         let plan = match tmux::jump(row, &self.client, &self.config) {
             Ok(plan) => plan,
@@ -512,6 +517,8 @@ mod tests {
     static SWITCHED: AtomicBool = AtomicBool::new(false);
     /// Holds the fake jump in `the_jump_notes_outlast_the_message_timeout_while_it_runs`.
     static RELEASE: AtomicBool = AtomicBool::new(false);
+    /// Holds the fake jump in `a_key_during_a_jump_is_refused_before_planning`.
+    static HOLD_RELEASE: AtomicBool = AtomicBool::new(false);
 
     fn at(s: &str) -> DateTime<FixedOffset> {
         DateTime::parse_from_rfc3339(s).unwrap()
@@ -765,6 +772,37 @@ mod tests {
 
         // Landing as planned clears the refusal note too.
         RELEASE.store(true, Ordering::SeqCst);
+        tick_until_arrived(&mut f, now);
+        assert_eq!(f.view().message, None);
+    }
+
+    #[test]
+    fn a_key_during_a_jump_is_refused_before_planning() {
+        let tmp = tempfile::tempdir().unwrap();
+        let a = "00000000-0000-4000-8000-00000000000a";
+        write_session(tmp.path(), a, Status::Waiting, "2026-01-05T14:20:00+09:00");
+        let mut f = board_over(tmp.path());
+        f.client = Client {
+            inside: true,
+            pane: None,
+        };
+        f.run_jump = |_| {
+            while !HOLD_RELEASE.load(Ordering::SeqCst) {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            Ok(None)
+        };
+        let now = at("2026-01-05T14:24:00+09:00");
+        f.tick_at(now, Instant::now(), false);
+
+        f.on_key(KeyCode::Char('1'));
+        // A key that couldn't be planned now (outside tmux) still reads as
+        // a refusal, so the note keeps saying a jump is under way.
+        f.client.inside = false;
+        f.on_key(KeyCode::Char('1'));
+        assert_eq!(f.view().message.as_deref(), Some(STILL_SWITCHING));
+
+        HOLD_RELEASE.store(true, Ordering::SeqCst);
         tick_until_arrived(&mut f, now);
         assert_eq!(f.view().message, None);
     }
