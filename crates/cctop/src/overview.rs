@@ -409,17 +409,20 @@ fn draw_recent(f: &mut Frame<'_>, area: Rect, dash: &Dashboard, app: &App) {
     let inner = block.inner(area);
     f.render_widget(block, area);
 
-    let tools = dash.now.tools_by_count();
-    let text = if tools.is_empty() {
-        "—".to_string()
-    } else {
-        tools
-            .iter()
-            .map(|(name, count)| format!("{name} {count}"))
-            .collect::<Vec<_>>()
-            .join("   ")
-    };
+    let mut text = tools_text(&dash.now);
+    if text.is_empty() {
+        text = "—".to_string();
+    }
     f.render_widget(Paragraph::new(Line::from(text)), inner);
+}
+
+/// `name count` for each tool, most used first; empty when none ran.
+fn tools_text(now: &crate::now::NowStats) -> String {
+    now.tools_by_count()
+        .iter()
+        .map(|(name, count)| format!("{name} {count}"))
+        .collect::<Vec<_>>()
+        .join("   ")
 }
 
 /// Full-screen "Now" detail shown when the Now panel is drilled into.
@@ -467,14 +470,7 @@ pub fn draw_now_detail(f: &mut Frame<'_>, now: &crate::now::NowStats) {
     }
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
-        format!(
-            "tools: {}",
-            now.tools_by_count()
-                .iter()
-                .map(|(name, count)| format!("{name} {count}"))
-                .collect::<Vec<_>>()
-                .join("   ")
-        ),
+        format!("tools: {}", tools_text(now)),
         Style::default().fg(Color::DarkGray),
     )));
 

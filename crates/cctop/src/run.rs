@@ -8,6 +8,7 @@
 //! detail). The Now panel rolls up all active sessions (see [`crate::now`]).
 
 use crate::app::{Action, App, Mode, Panel};
+use crate::now::NowStats;
 use crate::overview;
 use crate::store::Dashboard;
 use anyhow::Result;
@@ -41,67 +42,66 @@ const TAIL_CHANNEL_CAPACITY: usize = 1024;
 /// tailed sessions always have data to plot.
 const ACTIVE_WINDOW: Duration = Duration::from_mins(15);
 
-/// A live tail: its channel tag and the abortable task handle.
-type Tail = (usize, JoinHandle<Result<()>>);
+impl RunConfig {
+    fn scan_cfg(&self) -> ScanConfig {
+        ScanConfig {
+            projects_dir: self.projects_dir.clone(),
+        }
+    }
+
+    fn ctx(&self) -> Context {
+        Context {
+            claude_dir: self.claude_dir.clone(),
+            project_dir: self.project_dir.clone(),
+        }
+    }
+}
+
+/// The live session tails feeding the Now rollup: each tail's channel tag
+/// and abortable task, keyed by log path.
+struct TailSet {
+    tx: mpsc::Sender<(usize, Line)>,
+    tails: HashMap<PathBuf, (usize, JoinHandle<Result<()>>)>,
+    next_tag: usize,
+}
 
 /// Entry point: build the store, init the terminal, run the loop, restore.
 pub async fn run(cfg: RunConfig) -> Result<()> {
-    let scan_cfg = ScanConfig {
-        projects_dir: cfg.projects_dir.clone(),
-    };
-    let ctx = Context {
-        claude_dir: cfg.claude_dir.clone(),
-        project_dir: cfg.project_dir.clone(),
-    };
     let today = Utc::now().date_naive();
 
-    let mut dash = Dashboard::load(&scan_cfg, &ctx, today, cfg.focus_dir.clone());
+    let mut dash = Dashboard::load(&cfg.scan_cfg(), &cfg.ctx(), today, cfg.focus_dir.clone());
     dash.focus.tick(true);
     let mut app = App::new();
 
     let (tx, rx) = mpsc::channel::<(usize, Line)>(TAIL_CHANNEL_CAPACITY);
-    let mut tails: HashMap<PathBuf, Tail> = HashMap::new();
-    let mut next_tag: usize = 0;
-    reconcile_tails(&cfg.projects_dir, &mut dash, &tx, &mut tails, &mut next_tag);
+    let mut tails = TailSet {
+        tx,
+        tails: HashMap::new(),
+        next_tag: 0,
+    };
+    tails.reconcile(&cfg.projects_dir, &mut dash.now);
     dash.now.apply_names(&crate::agents::names().await);
 
     let mut terminal = ratatui::try_init().inspect_err(|_| ratatui::restore())?;
-    let result = run_loop(
-        &mut terminal,
-        &scan_cfg,
-        &ctx,
-        &cfg,
-        &mut dash,
-        &mut app,
-        rx,
-        &tx,
-        &mut tails,
-        &mut next_tag,
-    )
-    .await;
+    let result = run_loop(&mut terminal, &cfg, &mut dash, &mut app, rx, &mut tails).await;
     // A jump started in the Focus panel: let the switch finish before exit,
     // then stop the Focus panel's git / gh still running.
     dash.focus.close();
     ratatui::restore();
-    for (_, (_, handle)) in tails {
-        handle.abort();
-    }
+    tails.abort_all();
     result
 }
 
-#[allow(clippy::too_many_arguments)] // wiring the single event loop; splitting would just shuffle state
 async fn run_loop(
     terminal: &mut DefaultTerminal,
-    scan_cfg: &ScanConfig,
-    ctx: &Context,
     cfg: &RunConfig,
     dash: &mut Dashboard,
     app: &mut App,
     mut rx: mpsc::Receiver<(usize, Line)>,
-    tx: &mpsc::Sender<(usize, Line)>,
-    tails: &mut HashMap<PathBuf, Tail>,
-    next_tag: &mut usize,
+    tails: &mut TailSet,
 ) -> Result<()> {
+    let scan_cfg = cfg.scan_cfg();
+    let ctx = cfg.ctx();
     let mut events = EventStream::new();
     let mut render_tick = tokio::time::interval(cfg.refresh);
     render_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -121,15 +121,15 @@ async fn run_loop(
             _ = render_tick.tick() => dash.focus.tick(false),
             _ = rescan_tick.tick() => {
                 let today = Utc::now().date_naive();
-                dash.rescan(scan_cfg, ctx, today);
-                reconcile_tails(&cfg.projects_dir, dash, tx, tails, next_tag);
+                dash.rescan(&scan_cfg, &ctx, today);
+                tails.reconcile(&cfg.projects_dir, &mut dash.now);
                 dash.now.apply_names(&crate::agents::names().await);
             }
             maybe_ev = events.next() => {
                 let Some(Ok(ev)) = maybe_ev else { continue };
                 if let CtEvent::Key(k) = ev
                     && k.kind == KeyEventKind::Press
-                    && handle_key(k.code, terminal, app, dash, scan_cfg, ctx)?
+                    && handle_key(k.code, terminal, app, dash, &scan_cfg, &ctx)?
                 {
                     return Ok(());
                 }
@@ -218,45 +218,78 @@ fn active_sessions(projects_dir: &Path) -> Vec<PathBuf> {
         .collect()
 }
 
-/// Reconcile the set of live tails against the currently-active sessions: spawn
-/// a tail for each newly-active session and abort (and forget) those that went
-/// idle, so the Now rollup tracks exactly the active set.
-fn reconcile_tails(
-    projects_dir: &Path,
-    dash: &mut Dashboard,
-    tx: &mpsc::Sender<(usize, Line)>,
-    tails: &mut HashMap<PathBuf, Tail>,
-    next_tag: &mut usize,
-) {
-    let desired: Vec<PathBuf> = active_sessions(projects_dir);
+impl TailSet {
+    /// Reconcile the live tails against the currently-active sessions: spawn
+    /// a tail for each newly-active session and abort (and forget) those that
+    /// went idle, so the Now rollup tracks exactly the active set.
+    fn reconcile(&mut self, projects_dir: &Path, now: &mut NowStats) {
+        let desired: Vec<PathBuf> = active_sessions(projects_dir);
 
-    // Drop tails whose session is no longer active.
-    let gone: Vec<PathBuf> = tails
-        .keys()
-        .filter(|p| !desired.contains(p))
-        .cloned()
-        .collect();
-    for path in gone {
-        if let Some((tag, handle)) = tails.remove(&path) {
-            handle.abort();
-            dash.now.drop_session(tag);
+        // Drop tails whose session is no longer active.
+        let gone: Vec<PathBuf> = self
+            .tails
+            .keys()
+            .filter(|p| !desired.contains(p))
+            .cloned()
+            .collect();
+        for path in gone {
+            if let Some((tag, handle)) = self.tails.remove(&path) {
+                handle.abort();
+                now.drop_session(tag);
+            }
+        }
+
+        // Spawn tails for newly-active sessions.
+        for path in desired {
+            if self.tails.contains_key(&path) {
+                continue;
+            }
+            let tag = self.next_tag;
+            self.next_tag += 1;
+            let id = path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or_default()
+                .to_string();
+            now.register_session(tag, id);
+            let handle = cctk::tail::spawn(path.clone(), tag, self.tx.clone());
+            self.tails.insert(path, (tag, handle));
         }
     }
 
-    // Spawn tails for newly-active sessions.
-    for path in desired {
-        if tails.contains_key(&path) {
-            continue;
+    fn abort_all(self) {
+        for (_, (_, handle)) in self.tails {
+            handle.abort();
         }
-        let tag = *next_tag;
-        *next_tag += 1;
-        let id = path
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or_default()
-            .to_string();
-        dash.now.register_session(tag, id);
-        let handle = cctk::tail::spawn(path.clone(), tag, tx.clone());
-        tails.insert(path, (tag, handle));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn reconcile_follows_the_active_sessions() {
+        let projects = tempfile::tempdir().unwrap();
+        let log = projects.path().join("proj").join("s1.jsonl");
+        std::fs::create_dir_all(log.parent().unwrap()).unwrap();
+        std::fs::write(&log, "").unwrap();
+        let (tx, _rx) = mpsc::channel(8);
+        let mut tails = TailSet {
+            tx,
+            tails: HashMap::new(),
+            next_tag: 0,
+        };
+        let mut now = NowStats::new();
+
+        tails.reconcile(projects.path(), &mut now);
+        assert_eq!(tails.tails.len(), 1);
+        tails.reconcile(projects.path(), &mut now);
+        assert_eq!(tails.next_tag, 1, "a live tail is kept, not respawned");
+
+        std::fs::remove_file(&log).unwrap();
+        tails.reconcile(projects.path(), &mut now);
+        assert!(tails.tails.is_empty(), "a gone session's tail is dropped");
+        tails.abort_all();
     }
 }

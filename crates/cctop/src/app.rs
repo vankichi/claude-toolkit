@@ -99,20 +99,8 @@ impl App {
 
         match code {
             KeyCode::Char('q') | KeyCode::Esc => Action::Quit,
-            KeyCode::Char('1') => {
-                self.selected = Panel::Now;
-                Action::None
-            }
-            KeyCode::Char('2') => {
-                self.selected = Panel::Stats;
-                Action::None
-            }
-            KeyCode::Char('3') => {
-                self.selected = Panel::Map;
-                Action::None
-            }
-            KeyCode::Char('4') => {
-                self.selected = Panel::Focus;
+            KeyCode::Char(c @ '1'..='4') => {
+                self.selected = Panel::ORDER[usize::from(c as u8 - b'1')];
                 Action::None
             }
             KeyCode::Char('j') | KeyCode::Down | KeyCode::Tab => {
