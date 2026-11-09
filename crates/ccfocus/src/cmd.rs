@@ -13,9 +13,11 @@ use std::time::{Duration, Instant};
 /// Bytes kept from each of stdout and stderr; the rest is read and dropped.
 const MAX_OUTPUT: u64 = 4 * 1024 * 1024;
 
-/// Least time left to finish reading after the child exits, so a child that
-/// exits right at the deadline doesn't lose output still in the pipes.
-const READ_GRACE: Duration = Duration::from_millis(100);
+/// How long to keep reading after the child exits. Output is drained while
+/// the child runs, so only what is left in the pipes remains; a grandchild
+/// holding a pipe open is given up on after this, however much of the
+/// timeout is left.
+const READ_WINDOW: Duration = Duration::from_millis(500);
 
 pub(crate) struct Output {
     pub success: bool,
@@ -25,9 +27,11 @@ pub(crate) struct Output {
 
 /// Run `cmd` with no stdin. `None` when it can't be spawned, outlives
 /// `timeout` (it is then killed), or exits but its output isn't fully read
-/// by then: a grandchild that keeps a pipe open (e.g. something a launcher
-/// script started in the background) would otherwise hang the caller. The
-/// reader threads are left to finish once the pipes close.
+/// within [`READ_WINDOW`]: a grandchild that keeps a pipe open (e.g.
+/// something a launcher script started in the background) would otherwise
+/// hang the caller. That case reads as a failure even if the command
+/// itself succeeded, rather than handing back partial output. The reader
+/// threads are left to finish once the pipes close.
 pub(crate) fn run(mut cmd: Command, timeout: Duration) -> Option<Output> {
     let mut child = cmd
         .stdin(Stdio::null())
@@ -51,19 +55,20 @@ pub(crate) fn run(mut cmd: Command, timeout: Duration) -> Option<Output> {
             }
         }
     };
-    let deadline = deadline.max(Instant::now() + READ_GRACE);
+    let (stdout, stderr) = read_after_exit(&out, &err);
     Some(Output {
         success: status.success(),
-        stdout: collect(&out, deadline)?,
-        stderr: collect(&err, deadline)?,
+        stdout: stdout?,
+        stderr: stderr?,
     })
 }
 
 /// Start `cmd` for a command that may keep running (a tmux popup returns
 /// only when it closes). `Ok(Some(output))` when it exits within `settle`,
 /// `Ok(None)` when it is still running (a thread is left to wait for it),
-/// `Err` when it can't be spawned or waited on. Output still unread by
-/// `settle` (a grandchild holding a pipe) comes back empty.
+/// `Err` when it can't be spawned or waited on. A stream still unread
+/// [`READ_WINDOW`] after the exit (a grandchild holding it) comes back
+/// empty.
 pub(crate) fn start(mut cmd: Command, settle: Duration) -> Result<Option<Output>, ()> {
     let mut child = cmd
         .stdin(Stdio::null())
@@ -80,11 +85,11 @@ pub(crate) fn start(mut cmd: Command, settle: Duration) -> Result<Option<Output>
     loop {
         match child.try_wait() {
             Ok(Some(status)) => {
-                let deadline = deadline.max(Instant::now() + READ_GRACE);
+                let (stdout, stderr) = read_after_exit(&out, &err);
                 return Ok(Some(Output {
                     success: status.success(),
-                    stdout: collect(&out, deadline).unwrap_or_default(),
-                    stderr: collect(&err, deadline).unwrap_or_default(),
+                    stdout: stdout.unwrap_or_default(),
+                    stderr: stderr.unwrap_or_default(),
                 }));
             }
             Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(5)),
@@ -112,6 +117,16 @@ fn reader(r: impl Read + Send + 'static) -> Receiver<String> {
         let _ = tx.send(drain(r));
     });
     rx
+}
+
+/// stdout and stderr of a child that has just exited, each `None` if its
+/// reader isn't done within [`READ_WINDOW`] (one window for both).
+fn read_after_exit(
+    out: &Receiver<String>,
+    err: &Receiver<String>,
+) -> (Option<String>, Option<String>) {
+    let deadline = Instant::now() + READ_WINDOW;
+    (collect(out, deadline), collect(err, deadline))
 }
 
 /// The text from a [`reader`], or `None` if it isn't done by `deadline`.
@@ -199,18 +214,23 @@ mod tests {
     }
 
     /// The child exits at once, but a background grandchild keeps stdout
-    /// open: reading must give up at the deadline, not wait for it.
+    /// open for 3 s. Waiting for the pipes would take those 3 s.
     fn exits_but_leaves_a_pipe_open() -> Command {
         let mut cmd = Command::new("sh");
-        cmd.args(["-c", "sleep 5 & echo started"]);
+        cmd.args(["-c", "sleep 3 & echo started"]);
         cmd
     }
 
+    /// Well under the grandchild's 3 s, and over [`READ_WINDOW`] plus slack.
+    const GIVES_UP_BY: Duration = Duration::from_secs(2);
+
     #[test]
     fn a_grandchild_holding_a_pipe_does_not_hang_run() {
+        // A long timeout: after the exit only READ_WINDOW is spent, not the
+        // rest of the timeout.
         let begin = Instant::now();
-        assert!(run(exits_but_leaves_a_pipe_open(), Duration::from_millis(300)).is_none());
-        assert!(begin.elapsed() < Duration::from_secs(3));
+        assert!(run(exits_but_leaves_a_pipe_open(), Duration::from_secs(10)).is_none());
+        assert!(begin.elapsed() < GIVES_UP_BY, "{:?}", begin.elapsed());
     }
 
     #[test]
@@ -220,16 +240,32 @@ mod tests {
             .unwrap()
             .unwrap();
         assert!(o.success);
-        assert!(begin.elapsed() < Duration::from_secs(3));
+        assert!(begin.elapsed() < GIVES_UP_BY, "{:?}", begin.elapsed());
     }
 
     #[test]
     fn collect_takes_finished_output_even_past_the_deadline() {
-        let rx = reader(&b"done"[..]);
+        let (tx, rx) = std::sync::mpsc::channel();
+        tx.send("done".to_string()).unwrap();
         let past = Instant::now();
-        std::thread::sleep(Duration::from_millis(50));
         assert_eq!(collect(&rx, past).as_deref(), Some("done"));
         let (_tx, never) = std::sync::mpsc::channel::<String>();
         assert_eq!(collect(&never, past), None);
+    }
+
+    #[test]
+    fn read_after_exit_waits_for_readers_still_finishing() {
+        // A reader that finishes a little after the exit still counts.
+        let (tx, out) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(50));
+            let _ = tx.send("late".to_string());
+        });
+        let (etx, err) = std::sync::mpsc::channel();
+        etx.send(String::new()).unwrap();
+        assert_eq!(
+            read_after_exit(&out, &err),
+            (Some("late".to_string()), Some(String::new()))
+        );
     }
 }
