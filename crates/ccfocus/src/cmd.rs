@@ -6,7 +6,7 @@
 
 use std::io::Read;
 use std::path::Path;
-use std::process::{Child, Command, ExitStatus, Stdio};
+use std::process::{Child, Command, Stdio};
 use std::sync::mpsc::Receiver;
 use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
@@ -62,19 +62,28 @@ fn run_in(running: &Running, mut cmd: Command, timeout: Duration) -> Option<Outp
         give_up(running, &mut child);
         return None;
     }
+    let output = wait_for(running, &mut child, timeout);
+    // Listed until here, through the read window after the exit, where a
+    // background process may still hold a pipe (see the kill below).
+    running.forget(child.id());
+    output
+}
+
+/// The rest of [`run_in`] once `child` is listed in `running`.
+fn wait_for(running: &Running, child: &mut Child, timeout: Duration) -> Option<Output> {
     let (Some(out), Some(err)) = (child.stdout.take(), child.stderr.take()) else {
-        give_up(running, &mut child);
+        give_up(running, child);
         return None;
     };
     let out = reader(out);
     let err = reader(err);
     let deadline = Instant::now() + timeout;
     let status = loop {
-        match running.try_wait(&mut child) {
+        match child.try_wait() {
             Ok(Some(status)) => break status,
             Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(5)),
             _ => {
-                give_up(running, &mut child);
+                give_up(running, child);
                 return None;
             }
         }
@@ -113,15 +122,19 @@ static RUNNING: Running = Running::new();
 /// Kill the process group of every command [`run`] is still waiting on,
 /// and make later calls kill what they start at once. For when the board
 /// closes: the threads running those commands end with the process, so
-/// their timeouts would never fire. Does nothing to the processes off unix.
+/// their timeouts would never fire. Off unix the close itself kills
+/// nothing (there are no groups to signal); a command started after it is
+/// still killed itself, as on a timeout.
 pub(crate) fn stop_running() {
     RUNNING.close();
 }
 
-/// Ids of the unreaped children of [`run_in`]; each leads its own group.
-/// A child is reaped and dropped from the list under the same lock that
-/// [`Running::close`] kills under, so an id here is never a group whose
-/// leader is reaped and whose id may have been reused.
+/// Ids of the children [`run_in`] is waiting on or reading after; each
+/// leads its own group. A child given up on ([`give_up`]) leaves the list
+/// before it is reaped. One that exited stays listed for up to
+/// [`READ_WINDOW`] after it was reaped, with the same reuse risk as the
+/// kill after that window in [`run_in`]: another group taking the id would
+/// need the pids to wrap around in that time.
 struct Running(Mutex<Groups>);
 
 struct Groups {
@@ -155,22 +168,12 @@ impl Running {
         self.lock().ids.retain(|&i| i != id);
     }
 
-    /// `child.try_wait()`, dropping the child from the list if it reaped it.
-    fn try_wait(&self, child: &mut Child) -> std::io::Result<Option<ExitStatus>> {
-        let mut g = self.lock();
-        let r = child.try_wait();
-        if matches!(r, Ok(Some(_))) {
-            g.ids.retain(|&i| i != child.id());
-        }
-        r
-    }
-
+    /// Kill every listed group with one `kill`, so closing waits for at
+    /// most one [`KILL_TIMEOUT`] however many commands are running.
     fn close(&self) {
         let mut g = self.lock();
         g.closed = true;
-        for id in std::mem::take(&mut g.ids) {
-            kill_group(id);
-        }
+        kill_groups(&std::mem::take(&mut g.ids));
     }
 }
 
@@ -193,11 +196,17 @@ const KILL_TIMEOUT: Duration = Duration::from_secs(1);
 /// can't signal a group and this workspace forbids `unsafe`). Best effort:
 /// failures are ignored. Does nothing off unix.
 fn kill_group(pgid: u32) {
-    let Some(target) = group_target(pgid) else {
+    kill_groups(&[pgid]);
+}
+
+/// [`kill_group`] for several groups with a single `kill`.
+fn kill_groups(pgids: &[u32]) {
+    let targets: Vec<String> = pgids.iter().filter_map(|&p| group_target(p)).collect();
+    if targets.is_empty() {
         return;
-    };
+    }
     let Ok(mut k) = Command::new("kill")
-        .args(sigkill_args(&target))
+        .args(sigkill_args(&targets))
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -213,12 +222,14 @@ fn kill_group(pgid: u32) {
     let _ = k.wait();
 }
 
-/// `kill` arguments that SIGKILL `target` (a pid, or `-<pgid>` for a
+/// `kill` arguments that SIGKILL `targets` (pids, or `-<pgid>` for a
 /// group). Keep the `--`: without it procps' kill reads `-<pgid>` as an
 /// option and signals minus its first digit only, so `-1234` would become
 /// -1, every process we may signal (procps 4.0.4 `src/kill.c`).
-fn sigkill_args(target: &str) -> [&str; 4] {
-    ["-s", "KILL", "--", target]
+fn sigkill_args<S: AsRef<str>>(targets: &[S]) -> Vec<&str> {
+    let mut args = vec!["-s", "KILL", "--"];
+    args.extend(targets.iter().map(AsRef::as_ref));
+    args
 }
 
 /// The `kill` operand for group `pgid` (`-<pgid>`). `None` off unix and
@@ -445,7 +456,7 @@ mod tests {
     impl Drop for KillOnDrop {
         fn drop(&mut self) {
             let mut k = Command::new("kill");
-            k.args(sigkill_args(&self.0.to_string()));
+            k.args(sigkill_args(&[self.0.to_string()]));
             let _ = run(k, Duration::from_secs(1));
         }
     }
@@ -511,6 +522,8 @@ mod tests {
             assert!(Instant::now() < deadline, "the script never started");
             std::thread::sleep(Duration::from_millis(10));
         }
+        // Listed already, so this closes a running command, not a late one.
+        assert_eq!(running.lock().ids.len(), 1);
         running.close();
         assert!(call.join().unwrap().is_none_or(|o| !o.success));
         assert!(
@@ -522,14 +535,50 @@ mod tests {
     }
 
     #[test]
+    fn a_command_stays_listed_while_its_output_is_awaited() {
+        // The command exits at once, but its background sleep holds stdout:
+        // the board closing in the read window must still reach the group.
+        let dir = tempfile::tempdir().unwrap();
+        let pidfile = dir.path().join("pid");
+        let running = std::sync::Arc::new(Running::new());
+        let cmd = sh_with_pidfile("sleep 30 & echo $! > \"$PIDFILE\"", &pidfile);
+        let r = std::sync::Arc::clone(&running);
+        let call = std::thread::spawn(move || run_in(&r, cmd, Duration::from_secs(30)));
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while std::fs::read_to_string(&pidfile).map_or(true, |s| !s.ends_with('\n')) {
+            assert!(Instant::now() < deadline, "the script never started");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        // Well inside READ_WINDOW of the exit.
+        std::thread::sleep(Duration::from_millis(100));
+        assert_eq!(running.lock().ids.len(), 1);
+        let _ = call.join();
+        assert!(running.lock().ids.is_empty());
+        assert!(background_is_gone(&pidfile));
+    }
+
+    #[test]
     fn a_closed_list_kills_what_starts_after() {
+        let dir = tempfile::tempdir().unwrap();
+        let mark = dir.path().join("mark");
         let running = Running::new();
         running.close();
-        let mut cmd = Command::new("sleep");
-        cmd.arg("30");
+        // Left alone, the background part writes the mark after 1 s.
+        let cmd = sh_with_pidfile("(sleep 1; : > \"$PIDFILE\") & wait", &mark);
         let begin = Instant::now();
         assert!(run_in(&running, cmd, Duration::from_secs(30)).is_none());
         assert!(begin.elapsed() < Duration::from_secs(10));
+        assert!(running.lock().ids.is_empty());
+        std::thread::sleep(Duration::from_secs(2));
+        assert!(!mark.exists(), "the command ran on after the close");
+    }
+
+    #[test]
+    fn a_timed_out_command_leaves_the_list() {
+        let running = Running::new();
+        let mut cmd = Command::new("sleep");
+        cmd.arg("5");
+        assert!(run_in(&running, cmd, Duration::from_millis(100)).is_none());
         assert!(running.lock().ids.is_empty());
     }
 
@@ -552,7 +601,10 @@ mod tests {
 
     #[test]
     fn the_kill_target_comes_after_double_dash() {
-        assert_eq!(sigkill_args("-4242"), ["-s", "KILL", "--", "-4242"]);
+        assert_eq!(
+            sigkill_args(&["-4242", "-4343"]),
+            ["-s", "KILL", "--", "-4242", "-4343"]
+        );
     }
 
     #[test]
