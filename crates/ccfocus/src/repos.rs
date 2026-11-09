@@ -328,6 +328,12 @@ impl<T: Send + 'static> Job<T> {
         true
     }
 
+    /// Work was started and its result hasn't been polled yet.
+    #[must_use]
+    pub fn is_running(&self) -> bool {
+        self.running.is_some()
+    }
+
     /// The finished result, if the running work is done.
     pub fn poll(&mut self) -> Option<T> {
         let rx = self.running.as_ref()?;
