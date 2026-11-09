@@ -118,15 +118,6 @@ impl Fold {
     }
 }
 
-/// Fold one day file's text. Also returns each session's last event time, for
-/// [`EventLog::active_since`].
-#[must_use]
-pub fn fold_day(text: &str) -> (DayStats, HashMap<String, DateTime<FixedOffset>>) {
-    let mut fold = Fold::default();
-    fold.feed(text);
-    (fold.stats(), fold.last_seen)
-}
-
 /// Read side of the event log with per-day caching.
 #[derive(Debug)]
 pub struct EventLog {
@@ -261,6 +252,13 @@ fn read_lines_from(path: &Path, from: u64) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Fold one day file's text: its stats and each session's last event.
+    fn fold_day(text: &str) -> (DayStats, HashMap<String, DateTime<FixedOffset>>) {
+        let mut fold = Fold::default();
+        fold.feed(text);
+        (fold.stats(), fold.last_seen)
+    }
 
     const A: &str = "00000000-0000-4000-8000-00000000000a";
     const B: &str = "00000000-0000-4000-8000-00000000000b";

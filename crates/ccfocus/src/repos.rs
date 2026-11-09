@@ -133,9 +133,9 @@ pub struct Candidate {
 /// Worktrees ahead of the base whose branch has no PR. With `heads` unknown
 /// for a repo (gh not run or failed), its ahead worktrees are all listed.
 #[must_use]
-pub fn candidates<S: std::hash::BuildHasher, T: std::hash::BuildHasher>(
+pub fn candidates(
     worktrees: &[Worktree],
-    heads: Option<&HashMap<PathBuf, HashSet<String, T>, S>>,
+    heads: Option<&HashMap<PathBuf, HashSet<String>>>,
     rows: &[Row],
 ) -> Vec<Candidate> {
     worktrees
@@ -377,10 +377,7 @@ prunable gitdir file points to non-existent location
         assert_eq!((got[0].ahead, got[0].behind), (1, 2));
 
         // Without gh, every ahead worktree is listed.
-        assert_eq!(
-            candidates::<std::hash::RandomState, std::hash::RandomState>(&trees, None, &rows).len(),
-            3
-        );
+        assert_eq!(candidates(&trees, None, &rows).len(), 3);
     }
 
     #[test]

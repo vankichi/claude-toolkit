@@ -7,17 +7,17 @@
 //! never stored. All writes live in this crate; `cctk` only reads.
 
 pub mod app;
-pub mod board;
+mod board;
 mod cmd;
-pub mod config;
-pub mod events;
-pub mod fsx;
-pub mod job;
+mod config;
+mod events;
+mod fsx;
+mod job;
 pub mod probe;
-pub mod prune;
-pub mod repos;
-pub mod text;
-pub mod tmux;
+mod prune;
+mod repos;
+mod text;
+mod tmux;
 pub mod tui;
 pub mod ui;
 

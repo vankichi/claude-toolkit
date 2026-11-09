@@ -116,12 +116,12 @@ pub struct Board {
 /// can't tell). `seen` holds [`Row::seen_key`]s of finished sessions already
 /// visited from the dashboard. The state files are consumed: folded sessions
 /// leave nothing behind but the count.
-pub fn build<S: std::hash::BuildHasher>(
+pub fn build(
     sessions: Vec<SessionState>,
     now: DateTime<FixedOffset>,
     side: &Side,
     alive: &mut dyn FnMut(u32) -> Option<bool>,
-    seen: &HashSet<String, S>,
+    seen: &HashSet<String>,
 ) -> Board {
     let mut board = Board::default();
     for s in sessions {
