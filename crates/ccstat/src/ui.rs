@@ -549,14 +549,8 @@ fn run_watch_inner(
     state: &mut AppState,
     rescan_interval: std::time::Duration,
 ) -> anyhow::Result<()> {
-    let window = Duration::seconds(ACTIVE_WINDOW_SECS);
     // Seed the running set so the very first frame reflects live activity.
-    state.set_active(scan::compute_active(
-        cfg,
-        chrono::Utc::now(),
-        window,
-        TAIL_BYTES,
-    ));
+    refresh_active(state, cfg);
     let mut last_active = std::time::Instant::now();
     let mut last_rescan = std::time::Instant::now();
 
@@ -577,21 +571,32 @@ fn run_watch_inner(
 
         let now = std::time::Instant::now();
         if now.duration_since(last_active) >= ACTIVE_POLL {
-            state.set_active(scan::compute_active(
-                cfg,
-                chrono::Utc::now(),
-                window,
-                TAIL_BYTES,
-            ));
+            refresh_active(state, cfg);
             last_active = now;
         }
         if now.duration_since(last_rescan) >= rescan_interval {
-            let today = chrono::Utc::now().date_naive();
-            let provenance = ProvenanceMap::build(&ccmap::discover::discover_extensions(ctx));
-            state.reload_at(today, scan::scan(cfg, today), provenance);
+            rescan(state, cfg, ctx);
             last_rescan = now;
         }
     }
+}
+
+/// Recompute what is running now from the live sessions' tails.
+fn refresh_active(state: &mut AppState, cfg: &ScanConfig) {
+    state.set_active(scan::compute_active(
+        cfg,
+        chrono::Utc::now(),
+        Duration::seconds(ACTIVE_WINDOW_SECS),
+        TAIL_BYTES,
+    ));
+}
+
+/// Re-aggregate the whole corpus and re-discover provenance (the `R` key,
+/// and every rescan interval in `--watch`).
+fn rescan(state: &mut AppState, cfg: &ScanConfig, ctx: &ccmap::discover::Context) {
+    let today = chrono::Utc::now().date_naive();
+    let provenance = ProvenanceMap::build(&ccmap::discover::discover_extensions(ctx));
+    state.reload_at(today, scan::scan(cfg, today), provenance);
 }
 
 fn run_inner(
@@ -654,11 +659,7 @@ pub fn handle_key(
         KeyAction::PickerPrev => state.picker_prev(),
         KeyAction::PickerApply => state.apply_picker(),
         KeyAction::PickerCancel => state.cancel_picker(),
-        KeyAction::Rescan => {
-            let today = chrono::Utc::now().date_naive();
-            let provenance = ProvenanceMap::build(&ccmap::discover::discover_extensions(ctx));
-            state.reload_at(today, scan::scan(cfg, today), provenance);
-        }
+        KeyAction::Rescan => rescan(state, cfg, ctx),
         KeyAction::ToggleGraph => state.toggle_graph(),
         KeyAction::CycleMetric => state.cycle_graph_metric(),
         KeyAction::Ignore => {}
@@ -790,23 +791,24 @@ fn draw_trends(f: &mut Frame<'_>, area: Rect, state: &AppState) {
         .fold(0.0_f64, f64::max)
         .max(1.0);
 
-    let today = state.today_for_rescan();
-    let span = state.graph_span();
+    let chart = cctk::chart::braille_multi_line(&series, y_max, metric_top_label(metric, y_max))
+        .x_axis(date_axis(state.today_for_rescan(), state.graph_span()));
+    f.render_widget(chart, parts[1]);
+}
+
+/// X axis for a `span`-day series ending `today`, labeled with its first and
+/// last dates.
+fn date_axis(today: NaiveDate, span: usize) -> Axis<'static> {
     #[allow(clippy::cast_possible_wrap)] // span is a small day count
     let oldest = (today - Duration::days(span as i64 - 1))
         .format("%m/%d")
         .to_string();
     let newest = today.format("%m/%d").to_string();
     let last_x = (span.saturating_sub(1)).max(1) as f64;
-
-    let chart = cctk::chart::braille_multi_line(&series, y_max, metric_top_label(metric, y_max))
-        .x_axis(
-            Axis::default()
-                .bounds([0.0, last_x])
-                .labels([Line::from(oldest), Line::from(newest)])
-                .style(Style::default().fg(Color::DarkGray)),
-        );
-    f.render_widget(chart, parts[1]);
+    Axis::default()
+        .bounds([0.0, last_x])
+        .labels([Line::from(oldest), Line::from(newest)])
+        .style(Style::default().fg(Color::DarkGray))
 }
 
 /// Y-axis top label for the trends graph, formatted for the metric.
@@ -894,12 +896,6 @@ fn draw_graph(f: &mut Frame<'_>, area: Rect, state: &AppState) {
     let today = state.today_for_rescan();
     let span = state.graph_span();
 
-    #[allow(clippy::cast_possible_wrap)] // span is a small day count
-    let oldest = (today - Duration::days(span as i64 - 1))
-        .format("%m/%d")
-        .to_string();
-    let newest = today.format("%m/%d").to_string();
-
     let values = state.graph_series(&row.name, span);
     let points: Vec<(f64, f64)> = values
         .iter()
@@ -907,7 +903,6 @@ fn draw_graph(f: &mut Frame<'_>, area: Rect, state: &AppState) {
         .map(|(i, &v)| (i as f64, v))
         .collect();
     let peak = values.iter().copied().fold(0.0_f64, f64::max).max(1.0);
-    let last_x = (span.saturating_sub(1)).max(1) as f64;
 
     let title = format!(
         " {}: {} · {} in {} · {} trend · last {} (g/Esc close) ",
@@ -926,12 +921,7 @@ fn draw_graph(f: &mut Frame<'_>, area: Rect, state: &AppState) {
         Color::Green,
     )
     .block(Block::default().borders(Borders::ALL).title(title))
-    .x_axis(
-        Axis::default()
-            .bounds([0.0, last_x])
-            .labels([Line::from(oldest), Line::from(newest)])
-            .style(Style::default().fg(Color::DarkGray)),
-    );
+    .x_axis(date_axis(today, span));
     f.render_widget(chart, area);
 }
 
@@ -1108,6 +1098,20 @@ mod tests {
 
     fn day(y: i32, m: u32, d: u32) -> NaiveDate {
         NaiveDate::from_ymd_opt(y, m, d).unwrap()
+    }
+
+    /// `draw(st)` on an 80×12 test terminal, as one string of cell symbols.
+    fn render(st: &AppState) -> String {
+        use ratatui::{Terminal, backend::TestBackend};
+        let mut terminal = Terminal::new(TestBackend::new(80, 12)).unwrap();
+        terminal.draw(|f| draw(f, st)).unwrap();
+        terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(ratatui::buffer::Cell::symbol)
+            .collect()
     }
 
     fn db_with(items: &[(Category, &str, &str)]) -> UsageDb {
@@ -1688,8 +1692,6 @@ mod tests {
 
     #[test]
     fn watch_mode_renders_running_line_and_active_spinner() {
-        use ratatui::{Terminal, backend::TestBackend};
-
         let db = db_with(&[
             (Category::Skill, "brainstorm", "p"),
             (Category::Skill, "idle-one", "p"),
@@ -1703,15 +1705,7 @@ mod tests {
         active.record_session();
         st.set_active(active);
 
-        let mut terminal = Terminal::new(TestBackend::new(80, 12)).unwrap();
-        terminal.draw(|f| draw(f, &st)).unwrap();
-        let grid: String = terminal
-            .backend()
-            .buffer()
-            .content
-            .iter()
-            .map(ratatui::buffer::Cell::symbol)
-            .collect();
+        let grid = render(&st);
 
         // The running-summary line is present.
         assert!(
@@ -1725,23 +1719,13 @@ mod tests {
 
     #[test]
     fn snapshot_mode_has_no_running_line() {
-        use ratatui::{Terminal, backend::TestBackend};
-
         let db = db_with(&[(Category::Skill, "brainstorm", "p")]);
         let mut st = AppState::new(db, ProvenanceMap::default(), day(2026, 7, 16));
         st.tab = Category::Skill;
         st.window = Window::All;
         // watch stays false.
 
-        let mut terminal = Terminal::new(TestBackend::new(80, 12)).unwrap();
-        terminal.draw(|f| draw(f, &st)).unwrap();
-        let grid: String = terminal
-            .backend()
-            .buffer()
-            .content
-            .iter()
-            .map(ratatui::buffer::Cell::symbol)
-            .collect();
+        let grid = render(&st);
 
         assert!(!grid.contains("running:"));
         assert!(!grid.contains("· watch"));
