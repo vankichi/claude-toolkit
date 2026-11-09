@@ -16,17 +16,7 @@ use ratatui::{
     widgets::{Axis, Block, Borders, Paragraph},
 };
 
-/// Human-readable token count: `1.2M`, `900k`, or the bare number.
-#[must_use]
-fn fmt_tokens(n: u64) -> String {
-    if n >= 1_000_000 {
-        format!("{:.1}M", n as f64 / 1_000_000.0)
-    } else if n >= 1_000 {
-        format!("{:.0}k", n as f64 / 1_000.0)
-    } else {
-        n.to_string()
-    }
-}
+use cctk::fmt::tokens as fmt_tokens;
 
 /// Dollar cost with cents.
 #[must_use]
@@ -530,15 +520,6 @@ mod tests {
         let points = [(0.0, 0.0), (1.0, 0.0), (2.0, 0.0)];
         let out = render_to_string(48, 4, &points);
         assert!(out.contains("waiting"));
-    }
-
-    #[test]
-    fn fmt_tokens_scales() {
-        assert_eq!(fmt_tokens(0), "0");
-        assert_eq!(fmt_tokens(999), "999");
-        assert_eq!(fmt_tokens(1_000), "1k");
-        assert_eq!(fmt_tokens(12_800), "13k");
-        assert_eq!(fmt_tokens(1_200_000), "1.2M");
     }
 
     #[test]

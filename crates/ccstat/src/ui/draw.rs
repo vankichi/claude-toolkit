@@ -176,14 +176,7 @@ fn metric_top_label(metric: GraphMetric, y_max: f64) -> String {
         return format!("${y_max:.2}");
     }
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    let v = y_max.round() as u64;
-    if v >= 1_000_000 {
-        format!("{:.1}M", v as f64 / 1_000_000.0)
-    } else if v >= 1_000 {
-        format!("{:.0}k", v as f64 / 1_000.0)
-    } else {
-        v.to_string()
-    }
+    cctk::fmt::tokens(y_max.round() as u64)
 }
 
 /// One-line running summary shown in watch mode: an animated spinner (or a dim
