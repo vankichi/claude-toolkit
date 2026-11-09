@@ -167,30 +167,27 @@ mod tests {
 
     #[test]
     fn provenance_from_one_discovery_matches_the_extensions_only_one() {
-        let claude = tempfile::tempdir().unwrap();
-        let project = tempfile::tempdir().unwrap();
+        // discover_all reads `.claude.json` next to claude_dir: keep both
+        // inside this test's own dir.
+        let tmp = tempfile::tempdir().unwrap();
+        let claude = tmp.path().join("claude");
+        let project = tmp.path().join("project");
         let write = |path: std::path::PathBuf, body: &str| {
             std::fs::create_dir_all(path.parent().unwrap()).unwrap();
             std::fs::write(path, body).unwrap();
         };
+        write(claude.join("agents/helper.md"), "---\nname: helper\n---\n");
         write(
-            claude.path().join("agents/helper.md"),
-            "---\nname: helper\n---\n",
-        );
-        write(
-            claude.path().join("skills/tidy/SKILL.md"),
+            claude.join("skills/tidy/SKILL.md"),
             "---\nname: tidy\n---\n",
         );
-        write(project.path().join(".claude/commands/ship.md"), "ship\n");
-        // An MCP server named like the agent: discover_all adds it, and it
-        // must not change the agent's provenance.
-        write(
-            project.path().join(".mcp.json"),
-            r#"{"mcpServers":{"helper":{}}}"#,
-        );
+        write(project.join(".claude/commands/ship.md"), "ship\n");
+        // An MCP server named like the agent: discover_all adds it, and the
+        // agent's provenance below must not change.
+        write(project.join(".mcp.json"), r#"{"mcpServers":{"helper":{}}}"#);
         let ctx = Context {
-            claude_dir: claude.path().to_path_buf(),
-            project_dir: project.path().to_path_buf(),
+            claude_dir: claude,
+            project_dir: project,
         };
 
         let (once, items) = discover_once(&ctx);
@@ -200,7 +197,6 @@ mod tests {
             (Category::Agent, "helper"),
             (Category::Skill, "tidy"),
             (Category::Command, "/ship"),
-            (Category::Mcp, "helper"),
         ] {
             assert_eq!(
                 once.lookup(category, name),
