@@ -62,20 +62,28 @@ impl Default for Config {
 /// followed, so a config managed elsewhere (e.g. a dotfiles link) works.
 #[must_use]
 pub fn load(state_dir: &Path) -> (Config, Option<String>) {
-    let env = match std::env::var(CONTAINER_TMUX_ENV) {
+    load_with(state_dir, &env())
+}
+
+/// The value of [`CONTAINER_TMUX_ENV`]: `Ok(None)` when unset, `Err` when
+/// it is not UTF-8. Read once and kept, so a reload (and a test) doesn't
+/// depend on the process environment.
+pub(crate) type Env = Result<Option<String>, ()>;
+
+pub(crate) fn env() -> Env {
+    match std::env::var(CONTAINER_TMUX_ENV) {
         Ok(v) => Ok(Some(v)),
         Err(std::env::VarError::NotPresent) => Ok(None),
         Err(std::env::VarError::NotUnicode(_)) => Err(()),
-    };
-    load_with(state_dir, env)
+    }
 }
 
-/// [`load`] with the variable's value given: `Err` when it is not UTF-8.
-fn load_with(state_dir: &Path, env: Result<Option<String>, ()>) -> (Config, Option<String>) {
+/// [`load`] with the variable's value given.
+pub(crate) fn load_with(state_dir: &Path, env: &Env) -> (Config, Option<String>) {
     let (mut config, file_warning) = load_raw(state_dir);
     let env_warning = match env {
         Ok(None) => None,
-        Ok(Some(v)) => match parse_command(&v) {
+        Ok(Some(v)) => match parse_command(v) {
             Some(argv) => {
                 config.container_tmux = argv;
                 None
@@ -275,7 +283,7 @@ mod tests {
             "limit = 2\ncontainer_tmux = \"sh -c evil\"\n",
         )
         .unwrap();
-        let (c, warning) = load_with(tmp.path(), Ok(Some("dev tmux".into())));
+        let (c, warning) = load_with(tmp.path(), &Ok(Some("dev tmux".into())));
         assert_eq!(c.container_tmux, ["dev", "tmux"]);
         assert_eq!(
             c.limit,
@@ -288,20 +296,20 @@ mod tests {
     #[test]
     fn load_takes_container_tmux_from_the_host_env() {
         let tmp = tempfile::tempdir().unwrap();
-        assert_eq!(load_with(tmp.path(), Ok(None)), (Config::default(), None));
-        let (c, warning) = load_with(tmp.path(), Ok(Some("dev tmux".into())));
+        assert_eq!(load_with(tmp.path(), &Ok(None)), (Config::default(), None));
+        let (c, warning) = load_with(tmp.path(), &Ok(Some("dev tmux".into())));
         assert_eq!((c.container_tmux, warning), (args(&["dev", "tmux"]), None));
-        let (c, warning) = load_with(tmp.path(), Ok(Some("dev\u{1b}tmux".into())));
+        let (c, warning) = load_with(tmp.path(), &Ok(Some("dev\u{1b}tmux".into())));
         assert!(c.container_tmux.is_empty());
         let warning = warning.unwrap();
         assert!(warning.contains(CONTAINER_TMUX_ENV), "{warning}");
         assert!(!warning.contains('\u{1b}'));
-        let (c, warning) = load_with(tmp.path(), Err(()));
+        let (c, warning) = load_with(tmp.path(), &Err(()));
         assert!(c.container_tmux.is_empty());
         assert!(warning.unwrap().contains("not UTF-8"));
         // Both broken: both reasons, on one line.
         std::fs::write(tmp.path().join(FILE_NAME), "limit = nope\n").unwrap();
-        let warning = load_with(tmp.path(), Err(())).1.unwrap();
+        let warning = load_with(tmp.path(), &Err(())).1.unwrap();
         assert!(
             warning.contains("line 1") && warning.contains("not UTF-8"),
             "{warning}"
@@ -327,7 +335,7 @@ mod tests {
 
     #[test]
     fn load_warns_on_a_broken_file_and_keeps_defaults() {
-        let load = |p: &Path| load_with(p, Ok(None));
+        let load = |p: &Path| load_with(p, &Ok(None));
         let tmp = tempfile::tempdir().unwrap();
         assert_eq!(load(tmp.path()), (Config::default(), None));
         std::fs::write(tmp.path().join(FILE_NAME), "limit = nope\n").unwrap();
@@ -348,7 +356,7 @@ mod tests {
         std::fs::write(&elsewhere, "limit = 3\n").unwrap();
         std::os::unix::fs::symlink(&elsewhere, tmp.path().join(FILE_NAME)).unwrap();
         assert_eq!(
-            load_with(tmp.path(), Ok(None)),
+            load_with(tmp.path(), &Ok(None)),
             (
                 Config {
                     limit: 3,

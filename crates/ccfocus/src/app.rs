@@ -40,6 +40,9 @@ enum TaskState {
 
 pub struct Focus {
     state_dir: PathBuf,
+    /// `$CCFOCUS_CONTAINER_TMUX` as read at start-up, reused on reload; unset
+    /// in tests so they never depend on the environment.
+    container_tmux_env: config::Env,
     config: Config,
     warning: Option<String>,
     side: Side,
@@ -70,7 +73,8 @@ impl Focus {
     /// container, hostname). Nothing is read until the first [`tick`](Self::tick).
     #[must_use]
     pub fn open(state_dir: PathBuf) -> Self {
-        let (config, warning) = config::load(&state_dir);
+        let env = config::env();
+        let (config, warning) = config::load_with(&state_dir, &env);
         let probe = SystemProbe::new(Duration::from_secs(1));
         let side = Side {
             host: probe.host(),
@@ -79,7 +83,9 @@ impl Focus {
         let client = Client::from_env();
         let title = tmux::own_window(&client)
             .map_or_else(|| "focus".to_string(), |w| format!("focus · {w}"));
-        Self::with(state_dir, config, warning, side, client, title)
+        let mut focus = Self::with(state_dir, config, warning, side, client, title);
+        focus.container_tmux_env = env;
+        focus
     }
 
     fn with(
@@ -115,6 +121,7 @@ impl Focus {
         Self {
             events: EventLog::new(&state_dir),
             state_dir,
+            container_tmux_env: Ok(None),
             config,
             warning,
             side,
@@ -181,7 +188,8 @@ impl Focus {
         if due {
             self.last_read = Some(clock);
             if force {
-                (self.config, self.warning) = config::load(&self.state_dir);
+                (self.config, self.warning) =
+                    config::load_with(&self.state_dir, &self.container_tmux_env);
             }
             if self
                 .last_prune
@@ -568,7 +576,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(tmp.path()).unwrap();
         std::fs::write(tmp.path().join(config::FILE_NAME), "limit = x\n").unwrap();
-        let (config, warning) = config::load(tmp.path());
+        let (config, warning) = config::load_with(tmp.path(), &Ok(None));
         let mut f = Focus::with(
             tmp.path().to_path_buf(),
             config,
