@@ -19,6 +19,9 @@ const MAX_OUTPUT: u64 = 4 * 1024 * 1024;
 /// timeout is left.
 const READ_WINDOW: Duration = Duration::from_millis(500);
 
+/// What [`start`] gives as stderr when it couldn't read it in time.
+const STDERR_UNREAD: &str = "stderr not read in time after it exited";
+
 pub(crate) struct Output {
     pub success: bool,
     pub stdout: String,
@@ -68,7 +71,8 @@ pub(crate) fn run(mut cmd: Command, timeout: Duration) -> Option<Output> {
 /// `Ok(None)` when it is still running (a thread is left to wait for it),
 /// `Err` when it can't be spawned or waited on. A stream still unread
 /// [`READ_WINDOW`] after the exit (a grandchild holding it) comes back
-/// empty.
+/// empty for stdout and as [`STDERR_UNREAD`] for stderr, so a failure
+/// still says why it has no message.
 pub(crate) fn start(mut cmd: Command, settle: Duration) -> Result<Option<Output>, ()> {
     let mut child = cmd
         .stdin(Stdio::null())
@@ -89,7 +93,7 @@ pub(crate) fn start(mut cmd: Command, settle: Duration) -> Result<Option<Output>
                 return Ok(Some(Output {
                     success: status.success(),
                     stdout: stdout.unwrap_or_default(),
-                    stderr: stderr.unwrap_or_default(),
+                    stderr: stderr.unwrap_or_else(|| STDERR_UNREAD.to_string()),
                 }));
             }
             Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(5)),
@@ -240,6 +244,7 @@ mod tests {
             .unwrap()
             .unwrap();
         assert!(o.success);
+        assert_eq!(o.stderr, STDERR_UNREAD);
         assert!(begin.elapsed() < GIVES_UP_BY, "{:?}", begin.elapsed());
     }
 
