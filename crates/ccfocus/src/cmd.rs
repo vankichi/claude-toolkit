@@ -7,10 +7,15 @@
 use std::io::Read;
 use std::path::Path;
 use std::process::{Command, Stdio};
+use std::sync::mpsc::Receiver;
 use std::time::{Duration, Instant};
 
 /// Bytes kept from each of stdout and stderr; the rest is read and dropped.
 const MAX_OUTPUT: u64 = 4 * 1024 * 1024;
+
+/// Least time left to finish reading after the child exits, so a child that
+/// exits right at the deadline doesn't lose output still in the pipes.
+const READ_GRACE: Duration = Duration::from_millis(100);
 
 pub(crate) struct Output {
     pub success: bool,
@@ -18,10 +23,11 @@ pub(crate) struct Output {
     pub stderr: String,
 }
 
-/// Run `cmd` with no stdin. `None` when it can't be spawned or outlives
-/// `timeout` (the child is then killed and its reader threads are left to
-/// finish once the pipes close, so a grandchild holding a pipe can't hang
-/// the caller).
+/// Run `cmd` with no stdin. `None` when it can't be spawned, outlives
+/// `timeout` (it is then killed), or exits but its output isn't fully read
+/// by then: a grandchild that keeps a pipe open (e.g. something a launcher
+/// script started in the background) would otherwise hang the caller. The
+/// reader threads are left to finish once the pipes close.
 pub(crate) fn run(mut cmd: Command, timeout: Duration) -> Option<Output> {
     let mut child = cmd
         .stdin(Stdio::null())
@@ -31,8 +37,8 @@ pub(crate) fn run(mut cmd: Command, timeout: Duration) -> Option<Output> {
         .ok()?;
     let out = child.stdout.take()?;
     let err = child.stderr.take()?;
-    let out = std::thread::spawn(move || drain(out));
-    let err = std::thread::spawn(move || drain(err));
+    let out = reader(out);
+    let err = reader(err);
     let deadline = Instant::now() + timeout;
     let status = loop {
         match child.try_wait() {
@@ -45,17 +51,19 @@ pub(crate) fn run(mut cmd: Command, timeout: Duration) -> Option<Output> {
             }
         }
     };
+    let deadline = deadline.max(Instant::now() + READ_GRACE);
     Some(Output {
         success: status.success(),
-        stdout: out.join().unwrap_or_default(),
-        stderr: err.join().unwrap_or_default(),
+        stdout: collect(&out, deadline)?,
+        stderr: collect(&err, deadline)?,
     })
 }
 
 /// Start `cmd` for a command that may keep running (a tmux popup returns
 /// only when it closes). `Ok(Some(output))` when it exits within `settle`,
 /// `Ok(None)` when it is still running (a thread is left to wait for it),
-/// `Err` when it can't be spawned or waited on.
+/// `Err` when it can't be spawned or waited on. Output still unread by
+/// `settle` (a grandchild holding a pipe) comes back empty.
 pub(crate) fn start(mut cmd: Command, settle: Duration) -> Result<Option<Output>, ()> {
     let mut child = cmd
         .stdin(Stdio::null())
@@ -66,16 +74,17 @@ pub(crate) fn start(mut cmd: Command, settle: Duration) -> Result<Option<Output>
     let (Some(out), Some(err)) = (child.stdout.take(), child.stderr.take()) else {
         return Err(());
     };
-    let out = std::thread::spawn(move || drain(out));
-    let err = std::thread::spawn(move || drain(err));
+    let out = reader(out);
+    let err = reader(err);
     let deadline = Instant::now() + settle;
     loop {
         match child.try_wait() {
             Ok(Some(status)) => {
+                let deadline = deadline.max(Instant::now() + READ_GRACE);
                 return Ok(Some(Output {
                     success: status.success(),
-                    stdout: out.join().unwrap_or_default(),
-                    stderr: err.join().unwrap_or_default(),
+                    stdout: collect(&out, deadline).unwrap_or_default(),
+                    stderr: collect(&err, deadline).unwrap_or_default(),
                 }));
             }
             Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(5)),
@@ -92,6 +101,23 @@ pub(crate) fn start(mut cmd: Command, settle: Duration) -> Result<Option<Output>
             }
         }
     }
+}
+
+/// Drain `r` on its own thread; the text arrives on the returned channel
+/// when the pipe closes.
+fn reader(r: impl Read + Send + 'static) -> Receiver<String> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        // The caller may have stopped waiting; then nobody receives this.
+        let _ = tx.send(drain(r));
+    });
+    rx
+}
+
+/// The text from a [`reader`], or `None` if it isn't done by `deadline`.
+fn collect(rx: &Receiver<String>, deadline: Instant) -> Option<String> {
+    rx.recv_timeout(deadline.saturating_duration_since(Instant::now()))
+        .ok()
 }
 
 fn drain(mut r: impl Read) -> String {
@@ -170,5 +196,40 @@ mod tests {
         let start = Instant::now();
         assert!(run(cmd, Duration::from_millis(100)).is_none());
         assert!(start.elapsed() < Duration::from_secs(3));
+    }
+
+    /// The child exits at once, but a background grandchild keeps stdout
+    /// open: reading must give up at the deadline, not wait for it.
+    fn exits_but_leaves_a_pipe_open() -> Command {
+        let mut cmd = Command::new("sh");
+        cmd.args(["-c", "sleep 5 & echo started"]);
+        cmd
+    }
+
+    #[test]
+    fn a_grandchild_holding_a_pipe_does_not_hang_run() {
+        let begin = Instant::now();
+        assert!(run(exits_but_leaves_a_pipe_open(), Duration::from_millis(300)).is_none());
+        assert!(begin.elapsed() < Duration::from_secs(3));
+    }
+
+    #[test]
+    fn a_grandchild_holding_a_pipe_does_not_hang_start() {
+        let begin = Instant::now();
+        let o = start(exits_but_leaves_a_pipe_open(), Duration::from_millis(300))
+            .unwrap()
+            .unwrap();
+        assert!(o.success);
+        assert!(begin.elapsed() < Duration::from_secs(3));
+    }
+
+    #[test]
+    fn collect_takes_finished_output_even_past_the_deadline() {
+        let rx = reader(&b"done"[..]);
+        let past = Instant::now();
+        std::thread::sleep(Duration::from_millis(50));
+        assert_eq!(collect(&rx, past).as_deref(), Some("done"));
+        let (_tx, never) = std::sync::mpsc::channel::<String>();
+        assert_eq!(collect(&never, past), None);
     }
 }
