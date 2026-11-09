@@ -1,6 +1,6 @@
 //! TUI rendering and event loop.
 //!
-//! Owns the terminal lifecycle (`ratatui::init` / `restore`), drives a
+//! Owns the terminal lifecycle (`ratatui::try_init` / `restore`), drives a
 //! `tokio::select!` loop over render-tick / watcher-events / keyboard input,
 //! and dispatches per-session events to the matching [`SessionEntry`].
 //!
@@ -127,7 +127,7 @@ fn classify_key(code: KeyCode, mode: ViewMode, pinned: bool) -> KeyAction {
 /// Public entry point. Owns terminal init/restore around `run_inner`. Any
 /// error that escapes propagates after the terminal has been restored.
 pub async fn run(cfg: Config) -> Result<()> {
-    let mut terminal = ratatui::init();
+    let mut terminal = ratatui::try_init().inspect_err(|_| ratatui::restore())?;
     let res = run_inner(&mut terminal, cfg).await;
     ratatui::restore();
     res
