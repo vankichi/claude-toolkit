@@ -79,10 +79,7 @@ struct McpJson {
 /// Reads and parses `path` as JSON into `T`, returning `T::default()` if the
 /// file is missing or fails to parse. Never panics on external input.
 fn read_or_default<T: DeserializeOwned + Default>(path: &Path) -> T {
-    fs::read_to_string(path)
-        .ok()
-        .and_then(|content| serde_json::from_str(&content).ok())
-        .unwrap_or_default()
+    super::read_json(path).unwrap_or_default()
 }
 
 /// Builds a name-only `Kind::Mcp` item, recording enable/disable lifecycle
