@@ -126,6 +126,7 @@ impl Dashboard {
 mod tests {
     use super::*;
     use ccmap::model::Source;
+    use ccstat::model::Category;
 
     fn item(kind: Kind) -> Item {
         Item {
@@ -196,10 +197,10 @@ mod tests {
         assert!(items.iter().any(|i| i.kind == Kind::Mcp), "MCP is included");
         let extensions_only = ProvenanceMap::build(&discover::discover_extensions(&ctx));
         for (category, name) in [
-            (ccstat::model::Category::Agent, "helper"),
-            (ccstat::model::Category::Skill, "tidy"),
-            (ccstat::model::Category::Command, "/ship"),
-            (ccstat::model::Category::Mcp, "helper"),
+            (Category::Agent, "helper"),
+            (Category::Skill, "tidy"),
+            (Category::Command, "/ship"),
+            (Category::Mcp, "helper"),
         ] {
             assert_eq!(
                 once.lookup(category, name),
@@ -207,8 +208,8 @@ mod tests {
                 "{category:?} {name}"
             );
         }
-        assert!(once.lookup(ccstat::model::Category::Agent, "helper").is_some());
-        assert!(once.lookup(ccstat::model::Category::Command, "/ship").is_some());
+        assert!(once.lookup(Category::Agent, "helper").is_some());
+        assert!(once.lookup(Category::Command, "/ship").is_some());
     }
 
     #[test]
