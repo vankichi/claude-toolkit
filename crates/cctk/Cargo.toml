@@ -13,8 +13,8 @@ categories.workspace = true
 publish.workspace = true
 
 [features]
-# `tail` enables the tokio poll-tail. Pure consumers (fuzzy/viz in later
-# phases) depend on cctk with default features and never pull in tokio.
+# `tail` enables the tokio poll-tail. Pure consumers (ccstat, ccmap, ccfocus)
+# depend on cctk with default features and never pull in tokio.
 default = []
 tail = ["dep:tokio", "dep:futures"]
 

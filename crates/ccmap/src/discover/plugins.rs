@@ -1,7 +1,8 @@
 //! Plugin discovery: cross-references marketplace catalogs, install
 //! records, and enabled-plugin settings to produce one [`Item`] per known
-//! plugin plus the list of currently enabled plugins. Scanning an enabled
-//! plugin's own agents/skills/commands markdown is wired in a later task.
+//! plugin plus the list of currently enabled plugins. The enabled plugins'
+//! own agents/skills/commands markdown is scanned by
+//! [`super::discover_extensions`].
 
 use crate::model::{Item, Kind, PluginState, Source};
 use serde_json::Value;
@@ -9,8 +10,8 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-/// An enabled plugin, ready to have its agents/skills/commands markdown
-/// scanned by a later discovery pass.
+/// An enabled plugin, whose agents/skills/commands markdown
+/// [`super::discover_extensions`] scans.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EnabledPlugin {
     pub plugin: String,
