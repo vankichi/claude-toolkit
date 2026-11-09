@@ -66,15 +66,7 @@ mod tests {
     use ccmap::model::Source;
 
     fn item(kind: Kind, name: &str, source: Source) -> Item {
-        Item {
-            kind,
-            name: name.to_string(),
-            description: String::new(),
-            source,
-            path: None,
-            extra: vec![],
-            plugin_state: None,
-        }
+        Item::new(kind, name, source)
     }
 
     #[test]

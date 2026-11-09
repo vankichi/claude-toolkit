@@ -129,15 +129,7 @@ mod tests {
     use ccstat::model::Category;
 
     fn item(kind: Kind) -> Item {
-        Item {
-            kind,
-            name: "x".into(),
-            description: String::new(),
-            source: Source::User,
-            path: None,
-            extra: Vec::new(),
-            plugin_state: None,
-        }
+        Item::new(kind, "x", Source::User)
     }
 
     #[test]
