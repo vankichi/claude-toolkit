@@ -321,13 +321,16 @@ Tools the board calls:
   missing or fails, `tasks done` shows `n/a` and worktrees to finish are not
   narrowed by PR.
 
-On unix, the board starts each external command (`git`, `gh`, `tmux`, `kill`,
-and the command in `CCFOCUS_CONTAINER_TMUX`) in its own new process group. When
-a command times out (`git` 3 seconds, `gh` 20 seconds, host `tmux` 2 seconds,
+On unix, the board starts each external command it runs while it is up (`git`,
+`gh`, `tmux`, `kill`, and the command in `CCFOCUS_CONTAINER_TMUX`) in its own new
+process group. The one `hostname` run at startup is the exception. When a
+command times out (`git` 3 seconds, `gh` 20 seconds, host `tmux` 2 seconds,
 container `tmux` 3 seconds, `kill` 1 second), the board stops every process in
 that group with SIGKILL, whether or not the process closed its pipes. It also
 stops the group when someone still holds the output pipe open 0.5 seconds after
-the command has exited. A process that closed its stdout and stderr
+the command has exited. Stopping the group is best effort: when the `kill`
+command is missing or fails, the group is not stopped, and on a timeout only the
+command itself is stopped. A process that closed its stdout and stderr
 (`>/dev/null 2>&1`) survives only when the command finishes within its timeout.
 To keep a process alive even after a timeout, start it outside the group (for
 example with `setsid`). Only processes on the host are stopped: a process that
