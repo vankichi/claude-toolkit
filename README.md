@@ -321,6 +321,18 @@ Tools the board calls:
   missing or fails, `tasks done` shows `n/a` and worktrees to finish are not
   narrowed by PR.
 
+On unix, the board starts each external command (`git`, `gh`, `tmux`, `kill`,
+and the command in `CCFOCUS_CONTAINER_TMUX`) in its own new process group. When
+a command times out (`git` 3 seconds, `gh` 20 seconds, host `tmux` 2 seconds,
+container `tmux` 3 seconds), or when someone still holds the output pipe open
+0.5 seconds after the command has exited, the board stops every process in that
+group with SIGKILL. So a process that a launcher such as the
+`CCFOCUS_CONTAINER_TMUX` command leaves running in the background with its
+stdout / stderr still attached is stopped too. To keep a background process
+alive, close its stdout and stderr (`>/dev/null 2>&1`) or start it outside the
+group (for example with `setsid`). The tmux popup (the `d` key) and Windows are
+not covered.
+
 The board never runs `git fetch`; it reads local refs only. Session files and
 events are re-read every 2 seconds, worktrees every 30 seconds, and `gh` results
 are cached for 10 minutes (`r` does not refresh `gh`).
