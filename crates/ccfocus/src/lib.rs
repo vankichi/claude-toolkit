@@ -193,7 +193,7 @@ pub fn handle(
         .or_else(|| probe.hostname());
     let started_at = match existing {
         Some(prev) => prev.started_at,
-        None => first_start(event, &input, transcript, now),
+        None => first_start(event, &input, transcript, now, &stamp),
     };
 
     let host = probe.host();
@@ -246,21 +246,23 @@ fn sessions_dir_ready(state_dir: &Path) -> Result<bool> {
     Ok(fsx::is_real_dir(state_dir)? && fsx::is_real_dir(&focus::sessions_dir(state_dir))?)
 }
 
-/// `started_at` for a session with no file yet. The file is kept while the
-/// session lives; `SessionEnd` deletes it, so a resumed session recovers its
-/// original start from the transcript's first timestamp.
+/// `started_at` for a session with no file yet: `stamp` (now), unless it
+/// is a resume. The file is kept while the session lives; `SessionEnd`
+/// deletes it, so a resumed session recovers its original start from the
+/// transcript's first timestamp.
 fn first_start(
     event: Event,
     input: &HookInput,
     transcript: Option<&Path>,
     now: DateTime<FixedOffset>,
+    stamp: &str,
 ) -> String {
     let resumed = event == Event::SessionStart && input.source.as_deref() == Some("resume");
     resumed
         .then(|| transcript.and_then(first_timestamp))
         .flatten()
         .map_or_else(
-            || rfc3339(&now),
+            || stamp.to_string(),
             |t| rfc3339(&t.with_timezone(&now.timezone())),
         )
 }
