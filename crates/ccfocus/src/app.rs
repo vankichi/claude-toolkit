@@ -76,6 +76,9 @@ pub struct Focus {
     jump_job: Job<JumpDone>,
     /// `tmux::run_jump`; replaced in tests so they never call tmux.
     run_jump: fn(&tmux::Jump) -> Result<Option<String>, String>,
+    /// `cmd::stop_running`; replaced in tests, where it would stop every
+    /// other test's commands.
+    stop_commands: fn(),
     last_read: Option<Instant>,
     last_prune: Option<Instant>,
     board: Board,
@@ -154,6 +157,7 @@ impl Focus {
             tasks_day: None,
             jump_job: Job::new(Duration::ZERO),
             run_jump: tmux::run_jump,
+            stop_commands: crate::cmd::stop_running,
             last_read: None,
             last_prune: None,
             board: Board::default(),
@@ -424,12 +428,16 @@ impl Focus {
         }
     }
 
-    /// Wait for a jump still running, so a board closed right after a jump
-    /// key doesn't drop the switch (the process exiting would end its
-    /// thread mid-way). Bounded by the jump's own timeouts. Call it before
-    /// tearing the screen down.
-    pub fn finish_jump(&mut self) {
+    /// Call once when the board closes, before tearing the screen down.
+    ///
+    /// First wait for a jump still running, so a board closed right after a
+    /// jump key doesn't drop the switch (the process exiting would end its
+    /// thread mid-way); bounded by the jump's own timeouts. Then kill what
+    /// the background jobs still run (git, gh): their timeouts live on
+    /// threads that end with the process, so nothing else would stop them.
+    pub fn close(&mut self) {
         let _ = self.jump_job.wait();
+        (self.stop_commands)();
     }
 
     /// A jump's thread finished.
@@ -513,8 +521,9 @@ mod tests {
     use std::path::Path;
     use std::sync::atomic::{AtomicBool, Ordering};
 
-    /// Set by the fake jump in `closing_the_board_waits_for_a_jump_in_flight`.
+    /// Set by the fakes in `closing_the_board_waits_for_a_jump_then_stops_commands`.
     static SWITCHED: AtomicBool = AtomicBool::new(false);
+    static STOPPED_AFTER_SWITCH: AtomicBool = AtomicBool::new(false);
     /// Holds the fake jump in `the_jump_notes_outlast_the_message_timeout_while_it_runs`.
     static RELEASE: AtomicBool = AtomicBool::new(false);
     /// Holds the fake jump in `a_key_during_a_jump_is_refused_before_planning`.
@@ -603,6 +612,7 @@ mod tests {
         );
         f.fetch_tasks = |_, _| None;
         f.run_jump = |_| Err("tests never run tmux".into());
+        f.stop_commands = || {};
         f
     }
 
@@ -722,7 +732,7 @@ mod tests {
     }
 
     #[test]
-    fn closing_the_board_waits_for_a_jump_in_flight() {
+    fn closing_the_board_waits_for_a_jump_then_stops_commands() {
         let tmp = tempfile::tempdir().unwrap();
         let a = "00000000-0000-4000-8000-00000000000a";
         write_session(tmp.path(), a, Status::Waiting, "2026-01-05T14:20:00+09:00");
@@ -736,12 +746,19 @@ mod tests {
             SWITCHED.store(true, Ordering::SeqCst);
             Ok(None)
         };
+        // Stopping commands first would kill the jump's own tmux.
+        f.stop_commands =
+            || STOPPED_AFTER_SWITCH.store(SWITCHED.load(Ordering::SeqCst), Ordering::SeqCst);
         f.tick_at(at("2026-01-05T14:24:00+09:00"), Instant::now(), false);
 
         f.on_key(KeyCode::Char('1'));
         assert!(f.on_key(KeyCode::Char('q')));
-        f.finish_jump();
+        f.close();
         assert!(SWITCHED.load(Ordering::SeqCst), "the switch ran to the end");
+        assert!(
+            STOPPED_AFTER_SWITCH.load(Ordering::SeqCst),
+            "commands stopped after it"
+        );
     }
 
     #[test]

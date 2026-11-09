@@ -6,8 +6,9 @@
 
 use std::io::Read;
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::mpsc::Receiver;
+use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
 /// Bytes kept from each of stdout and stderr; the rest is read and dropped.
@@ -40,7 +41,15 @@ pub(crate) struct Output {
 /// the reader threads end once the pipes close. A process that left the
 /// group (`setsid`, as daemons do) is out of reach and keeps its reader
 /// alive while it holds the pipe.
-pub(crate) fn run(mut cmd: Command, timeout: Duration) -> Option<Output> {
+///
+/// The group is also killed by [`stop_running`] if it is still running
+/// when the board closes.
+pub(crate) fn run(cmd: Command, timeout: Duration) -> Option<Output> {
+    run_in(&RUNNING, cmd, timeout)
+}
+
+/// [`run`], tracked in `running`.
+fn run_in(running: &Running, mut cmd: Command, timeout: Duration) -> Option<Output> {
     own_group(&mut cmd);
     let mut child = cmd
         .stdin(Stdio::null())
@@ -48,21 +57,24 @@ pub(crate) fn run(mut cmd: Command, timeout: Duration) -> Option<Output> {
         .stderr(Stdio::piped())
         .spawn()
         .ok()?;
-    let out = child.stdout.take()?;
-    let err = child.stderr.take()?;
+    if !running.add(child.id()) {
+        // The board is closing: nothing new may outlive it.
+        give_up(running, &mut child);
+        return None;
+    }
+    let (Some(out), Some(err)) = (child.stdout.take(), child.stderr.take()) else {
+        give_up(running, &mut child);
+        return None;
+    };
     let out = reader(out);
     let err = reader(err);
     let deadline = Instant::now() + timeout;
     let status = loop {
-        match child.try_wait() {
+        match running.try_wait(&mut child) {
             Ok(Some(status)) => break status,
             Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(5)),
             _ => {
-                // Before reaping: the unreaped child keeps its pid, so the
-                // group id can't have been handed to anyone else.
-                kill_group(child.id());
-                let _ = child.kill();
-                let _ = child.wait();
+                give_up(running, &mut child);
                 return None;
             }
         }
@@ -82,6 +94,84 @@ pub(crate) fn run(mut cmd: Command, timeout: Duration) -> Option<Output> {
         stdout: stdout?,
         stderr: stderr?,
     })
+}
+
+/// Kill a child that [`run_in`] stopped waiting for, with its group, and
+/// reap it.
+fn give_up(running: &Running, child: &mut Child) {
+    // Before reaping: the unreaped child keeps its pid, so the group id
+    // can't have been handed to anyone else.
+    kill_group(child.id());
+    let _ = child.kill();
+    running.forget(child.id());
+    let _ = child.wait();
+}
+
+/// Process groups of the commands [`run`] is waiting on.
+static RUNNING: Running = Running::new();
+
+/// Kill the process group of every command [`run`] is still waiting on,
+/// and make later calls kill what they start at once. For when the board
+/// closes: the threads running those commands end with the process, so
+/// their timeouts would never fire. Does nothing to the processes off unix.
+pub(crate) fn stop_running() {
+    RUNNING.close();
+}
+
+/// Ids of the unreaped children of [`run_in`]; each leads its own group.
+/// A child is reaped and dropped from the list under the same lock that
+/// [`Running::close`] kills under, so an id here is never a group whose
+/// leader is reaped and whose id may have been reused.
+struct Running(Mutex<Groups>);
+
+struct Groups {
+    closed: bool,
+    ids: Vec<u32>,
+}
+
+impl Running {
+    const fn new() -> Self {
+        Self(Mutex::new(Groups {
+            closed: false,
+            ids: Vec::new(),
+        }))
+    }
+
+    fn lock(&self) -> MutexGuard<'_, Groups> {
+        self.0.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Track `id`; `false` once closed.
+    fn add(&self, id: u32) -> bool {
+        let mut g = self.lock();
+        if g.closed {
+            return false;
+        }
+        g.ids.push(id);
+        true
+    }
+
+    fn forget(&self, id: u32) {
+        self.lock().ids.retain(|&i| i != id);
+    }
+
+    /// `child.try_wait()`, dropping the child from the list if it reaped it.
+    fn try_wait(&self, child: &mut Child) -> std::io::Result<Option<ExitStatus>> {
+        let mut g = self.lock();
+        let r = child.try_wait();
+        if matches!(r, Ok(Some(_))) {
+            g.ids.retain(|&i| i != child.id());
+        }
+        r
+    }
+
+    fn close(&self) {
+        let mut g = self.lock();
+        g.closed = true;
+        for id in std::mem::take(&mut g.ids) {
+            kill_group(id);
+        }
+    }
 }
 
 /// Start `cmd` as the leader of a new process group (unix), so that
@@ -404,6 +494,53 @@ mod tests {
         assert_eq!(crate::app::pid_alive(pid), Some(true));
         drop(guard);
         assert!(background_is_gone(&pidfile));
+    }
+
+    #[test]
+    fn closing_kills_the_commands_still_running() {
+        let dir = tempfile::tempdir().unwrap();
+        let pidfile = dir.path().join("pid");
+        let running = std::sync::Arc::new(Running::new());
+        let cmd = sh_with_pidfile("sleep 30 & echo $! > \"$PIDFILE\"; wait", &pidfile);
+        let r = std::sync::Arc::clone(&running);
+        let begin = Instant::now();
+        let call = std::thread::spawn(move || run_in(&r, cmd, Duration::from_secs(30)));
+        // Close once the background sleep has started.
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while std::fs::read_to_string(&pidfile).map_or(true, |s| !s.ends_with('\n')) {
+            assert!(Instant::now() < deadline, "the script never started");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        running.close();
+        assert!(call.join().unwrap().is_none_or(|o| !o.success));
+        assert!(
+            begin.elapsed() < Duration::from_secs(10),
+            "not left to its timeout"
+        );
+        assert!(background_is_gone(&pidfile));
+        assert!(running.lock().ids.is_empty());
+    }
+
+    #[test]
+    fn a_closed_list_kills_what_starts_after() {
+        let running = Running::new();
+        running.close();
+        let mut cmd = Command::new("sleep");
+        cmd.arg("30");
+        let begin = Instant::now();
+        assert!(run_in(&running, cmd, Duration::from_secs(30)).is_none());
+        assert!(begin.elapsed() < Duration::from_secs(10));
+        assert!(running.lock().ids.is_empty());
+    }
+
+    #[test]
+    fn a_finished_command_leaves_the_list() {
+        let running = Running::new();
+        let mut cmd = Command::new("sh");
+        cmd.args(["-c", "echo ok"]);
+        let o = run_in(&running, cmd, Duration::from_secs(5)).unwrap();
+        assert_eq!(o.stdout, "ok\n");
+        assert!(running.lock().ids.is_empty());
     }
 
     #[test]
