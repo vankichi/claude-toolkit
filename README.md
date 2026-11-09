@@ -381,8 +381,10 @@ container, `1`-`9` or `Enter` on that row does two steps:
 2. The board runs `tmux switch-client -t` to move the host's client to a host
    pane. It tries these candidates in order: the pane just asked in step 1, then
    `host_tmux_pane` in the session file (the value when Claude started), then
-   `container_target`. A candidate is skipped if it is missing, is not of the form
-   `%N`, or the host has no such pane (`switch-client` fails).
+   `container_target`. A candidate is skipped if it is missing. The pane asked in
+   step 1 and `host_tmux_pane` must be of the form `%N`; `container_target` can be a
+   name such as `dev` or `main:dev` (its value in `config.toml`). When a candidate's
+   `switch-client` fails, the board moves on to the next one.
 
 Step 2 runs even when step 1 fails; the error from step 1 shows on the bottom
 line, and the question is skipped when the select step fails. Without
@@ -417,6 +419,9 @@ Limits:
   to the pane that attached last.
 - After you detach from the container (leave `dev in`), that host pane is back at
   the host's shell. The switch succeeds, but the container is not shown.
+- `CCFOCUS_CONTAINER_TMUX` takes one value, so the jump assumes one container. If the
+  sessions of several containers share the same state dir, the jump can select a pane
+  with the same number in another container.
 
 ## Releasing
 

@@ -359,8 +359,9 @@ board を host の tmux で動かし、Claude の session が dev container の�
    (理由は下に書く)。
 2. host の client を、host の pane へ `tmux switch-client -t` で移す。候補は次の順
    に試す: 1 で今聞いた pane、session の file の `host_tmux_pane` (Claude の起動時
-   の値)、`container_target`。値が無い・`%N` の形でない・host にその pane が無い
-   (`switch-client` が失敗する) 候補は飛ばす。
+   の値)、`container_target`。値が無い候補は飛ばす。1 で今聞いた pane と `host_tmux_pane`
+   は `%N` の形でなければ飛ばす。`container_target` は `dev` や `main:dev` のような名前の
+   target でよい (config.toml の値)。どの候補も、`switch-client` が失敗したら次へ進む。
 
 1 が失敗しても 2 は行い、1 の error は最下行に出る。select が失敗した時は問い合わせ
 を省く。`CCFOCUS_CONTAINER_TMUX` が無ければ、問い合わせも含めて 1 をしない (記録の pane、
@@ -390,6 +391,9 @@ session の file は container が書くので、board は信用しない。pane
   した pane に移る。
 - container から detach した (`dev in` を抜けた) 後は、その host pane は host の
   shell に戻っている。switch は成功するが、container は映っていない。
+- `CCFOCUS_CONTAINER_TMUX` は 1 つの値なので、container は 1 つだと前提にしている。
+  複数の container の session が同じ state dir にあると、別の container の同じ番号の
+  pane を選ぶことがある。
 
 ## Releasing
 
