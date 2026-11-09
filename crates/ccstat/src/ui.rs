@@ -791,23 +791,24 @@ fn draw_trends(f: &mut Frame<'_>, area: Rect, state: &AppState) {
         .fold(0.0_f64, f64::max)
         .max(1.0);
 
-    let today = state.today_for_rescan();
-    let span = state.graph_span();
+    let chart = cctk::chart::braille_multi_line(&series, y_max, metric_top_label(metric, y_max))
+        .x_axis(date_axis(state.today_for_rescan(), state.graph_span()));
+    f.render_widget(chart, parts[1]);
+}
+
+/// X axis for a `span`-day series ending `today`, labeled with its first and
+/// last dates.
+fn date_axis(today: NaiveDate, span: usize) -> Axis<'static> {
     #[allow(clippy::cast_possible_wrap)] // span is a small day count
     let oldest = (today - Duration::days(span as i64 - 1))
         .format("%m/%d")
         .to_string();
     let newest = today.format("%m/%d").to_string();
     let last_x = (span.saturating_sub(1)).max(1) as f64;
-
-    let chart = cctk::chart::braille_multi_line(&series, y_max, metric_top_label(metric, y_max))
-        .x_axis(
-            Axis::default()
-                .bounds([0.0, last_x])
-                .labels([Line::from(oldest), Line::from(newest)])
-                .style(Style::default().fg(Color::DarkGray)),
-        );
-    f.render_widget(chart, parts[1]);
+    Axis::default()
+        .bounds([0.0, last_x])
+        .labels([Line::from(oldest), Line::from(newest)])
+        .style(Style::default().fg(Color::DarkGray))
 }
 
 /// Y-axis top label for the trends graph, formatted for the metric.
@@ -895,12 +896,6 @@ fn draw_graph(f: &mut Frame<'_>, area: Rect, state: &AppState) {
     let today = state.today_for_rescan();
     let span = state.graph_span();
 
-    #[allow(clippy::cast_possible_wrap)] // span is a small day count
-    let oldest = (today - Duration::days(span as i64 - 1))
-        .format("%m/%d")
-        .to_string();
-    let newest = today.format("%m/%d").to_string();
-
     let values = state.graph_series(&row.name, span);
     let points: Vec<(f64, f64)> = values
         .iter()
@@ -908,7 +903,6 @@ fn draw_graph(f: &mut Frame<'_>, area: Rect, state: &AppState) {
         .map(|(i, &v)| (i as f64, v))
         .collect();
     let peak = values.iter().copied().fold(0.0_f64, f64::max).max(1.0);
-    let last_x = (span.saturating_sub(1)).max(1) as f64;
 
     let title = format!(
         " {}: {} · {} in {} · {} trend · last {} (g/Esc close) ",
@@ -927,12 +921,7 @@ fn draw_graph(f: &mut Frame<'_>, area: Rect, state: &AppState) {
         Color::Green,
     )
     .block(Block::default().borders(Borders::ALL).title(title))
-    .x_axis(
-        Axis::default()
-            .bounds([0.0, last_x])
-            .labels([Line::from(oldest), Line::from(newest)])
-            .style(Style::default().fg(Color::DarkGray)),
-    );
+    .x_axis(date_axis(today, span));
     f.render_widget(chart, area);
 }
 
