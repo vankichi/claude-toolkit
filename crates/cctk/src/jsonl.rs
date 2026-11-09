@@ -207,20 +207,26 @@ impl Line {
     /// when the line is not an assistant turn or carries no tool calls.
     #[must_use]
     pub fn tool_use_names(&self) -> Vec<&str> {
-        let mut out = Vec::new();
-        if let Some(serde_json::Value::Array(blocks)) = &self.content {
-            for block in blocks {
-                if block.get("type").and_then(serde_json::Value::as_str) == Some("tool_use") {
-                    out.push(
-                        block
-                            .get("name")
-                            .and_then(serde_json::Value::as_str)
-                            .unwrap_or(""),
-                    );
-                }
-            }
-        }
-        out
+        self.tool_uses().map(|(name, _)| name).collect()
+    }
+
+    /// `(name, input)` of every `tool_use` block in the message content, in
+    /// order; a missing name reads as `""`.
+    fn tool_uses(&self) -> impl Iterator<Item = (&str, Option<&serde_json::Value>)> {
+        let blocks = match &self.content {
+            Some(serde_json::Value::Array(blocks)) => blocks.as_slice(),
+            _ => &[],
+        };
+        blocks
+            .iter()
+            .filter(|b| b.get("type").and_then(serde_json::Value::as_str) == Some("tool_use"))
+            .map(|b| {
+                let name = b
+                    .get("name")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("");
+                (name, b.get("input"))
+            })
     }
 
     /// The usage records this line contributes: `Model` (+ its `Usage`) plus
@@ -236,13 +242,10 @@ impl Line {
                         usage: self.usage.unwrap_or_default(),
                     });
                 }
-                if let Some(serde_json::Value::Array(blocks)) = &self.content {
-                    for block in blocks {
-                        if let Some(item) = classify_tool_use(block) {
-                            items.push(item);
-                        }
-                    }
-                }
+                items.extend(
+                    self.tool_uses()
+                        .filter_map(|(name, input)| classify_tool_use(name, input)),
+                );
             }
             Kind::User => {
                 let text = collect_text(self.content.as_ref());
@@ -270,18 +273,9 @@ fn to_usage(u: &RawUsage) -> Usage {
     }
 }
 
-/// Classify one `content` block. Returns a usage record for the tool kinds we
-/// track (Skill / Agent / MCP), or `None` for text/thinking/other tools.
-fn classify_tool_use(block: &serde_json::Value) -> Option<Extracted> {
-    if block.get("type").and_then(serde_json::Value::as_str) != Some("tool_use") {
-        return None;
-    }
-    let name = block
-        .get("name")
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or("");
-    let input = block.get("input");
-
+/// Classify one `tool_use` block. Returns a usage record for the tool kinds
+/// we track (Skill / Agent / MCP), or `None` for other tools.
+fn classify_tool_use(name: &str, input: Option<&serde_json::Value>) -> Option<Extracted> {
     if name == "Skill" {
         let skill = input
             .and_then(|i| i.get("skill"))
