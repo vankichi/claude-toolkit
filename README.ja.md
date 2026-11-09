@@ -309,12 +309,14 @@ board が呼ぶ tool:
 unix では、board は外部の command (`git`・`gh`・`tmux`・`kill`、env
 `CCFOCUS_CONTAINER_TMUX` の command) を、それぞれ新しい process group で起動する。
 command が timeout した時 (`git` 3 秒・`gh` 20 秒・host の `tmux` 2 秒・container の
-`tmux` 3 秒) と、command が終わった後 0.5 秒たっても出力の pipe を誰かが開けたままの
-時は、その group の process をまとめて SIGKILL で止める。そのため、
-`CCFOCUS_CONTAINER_TMUX` の launcher などが stdout / stderr をつないだまま裏で動かした
-process も止まる。裏で動かし続けたい process は、stdout と stderr を閉じる
-(`>/dev/null 2>&1`) か、`setsid` などで group から外して起動する。tmux の popup
-(`d` の key) と Windows は対象外。
+`tmux` 3 秒・`kill` 1 秒) は、pipe を閉じたかどうかに関係なく、その group の process を
+すべて SIGKILL で止める。command が終わった後 0.5 秒たっても出力の pipe を誰かが
+開けたままの時も、group を止める。stdout と stderr を閉じた (`>/dev/null 2>&1`)
+process が残るのは、command が timeout の内に終わった時だけ。timeout しても残したい
+process は、`setsid` などで group から外して起動する。止まるのは host の上の process
+だけで、`CCFOCUS_CONTAINER_TMUX` が `docker exec` などで container の中に起動した
+process には届かない (host の docker の client は止まる)。tmux の popup (`d` の key) と
+Windows は対象外。
 
 board は `git fetch` をしない。local の ref だけを読む。session の file と events は
 2 秒ごと、worktree は 30 秒ごとに読み直し、`gh` の結果は 10 分 cache する (`r` でも

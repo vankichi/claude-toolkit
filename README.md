@@ -324,14 +324,16 @@ Tools the board calls:
 On unix, the board starts each external command (`git`, `gh`, `tmux`, `kill`,
 and the command in `CCFOCUS_CONTAINER_TMUX`) in its own new process group. When
 a command times out (`git` 3 seconds, `gh` 20 seconds, host `tmux` 2 seconds,
-container `tmux` 3 seconds), or when someone still holds the output pipe open
-0.5 seconds after the command has exited, the board stops every process in that
-group with SIGKILL. So a process that a launcher such as the
-`CCFOCUS_CONTAINER_TMUX` command leaves running in the background with its
-stdout / stderr still attached is stopped too. To keep a background process
-alive, close its stdout and stderr (`>/dev/null 2>&1`) or start it outside the
-group (for example with `setsid`). The tmux popup (the `d` key) and Windows are
-not covered.
+container `tmux` 3 seconds, `kill` 1 second), the board stops every process in
+that group with SIGKILL, whether or not the process closed its pipes. It also
+stops the group when someone still holds the output pipe open 0.5 seconds after
+the command has exited. A process that closed its stdout and stderr
+(`>/dev/null 2>&1`) survives only when the command finishes within its timeout.
+To keep a process alive even after a timeout, start it outside the group (for
+example with `setsid`). Only processes on the host are stopped: a process that
+`CCFOCUS_CONTAINER_TMUX` starts inside a container (for example with
+`docker exec`) is out of reach, though the docker client on the host is stopped.
+The tmux popup (the `d` key) and Windows are not covered.
 
 The board never runs `git fetch`; it reads local refs only. Session files and
 events are re-read every 2 seconds, worktrees every 30 seconds, and `gh` results
