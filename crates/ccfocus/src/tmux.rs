@@ -300,13 +300,10 @@ fn args(a: &[&str]) -> Vec<String> {
 
 /// Run `tmux <args>`. `Err` carries tmux's first stderr line.
 pub fn run(args: &[String]) -> Result<(), String> {
-    let mut cmd = Command::new("tmux");
-    cmd.args(args);
-    match crate::cmd::run(cmd, TMUX_TIMEOUT) {
-        Some(o) if o.success => Ok(()),
-        Some(o) => Err(format!("tmux: {}", crate::cmd::first_line(&o.stderr))),
-        None => Err("couldn't run tmux".into()),
-    }
+    let command: Vec<String> = std::iter::once("tmux".to_string())
+        .chain(args.iter().cloned())
+        .collect();
+    run_argv(&command, TMUX_TIMEOUT).map(drop)
 }
 
 /// Run `tmux <args>` for a command that stays until it is closed
