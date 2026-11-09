@@ -515,9 +515,9 @@ fn provenance_icon(provenance: Provenance) -> &'static str {
 }
 
 /// Foreground color for a `Provenance`, used for both the list row and the
-/// provenance panel's label line.
+/// provenance panel's label line, and by ccstat for its usage rows.
 #[must_use]
-fn provenance_color(provenance: Provenance) -> Color {
+pub fn provenance_color(provenance: Provenance) -> Color {
     match provenance {
         Provenance::Local => Color::White,
         Provenance::Project => Color::Cyan,
