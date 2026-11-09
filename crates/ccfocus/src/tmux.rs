@@ -63,8 +63,17 @@ pub struct Jump {
     /// container's own tmux server. The program and its flags come from
     /// `config.container_tmux` only, never from a state file.
     pub container: Vec<Vec<String>>,
+    /// Full argv that prints the container session's current
+    /// `CCFOCUS_HOST_PANE`: its tmux updates that on every attach, while the
+    /// session file keeps what Claude was started with.
+    pub host_pane_query: Option<Vec<String>>,
     /// `tmux switch-client` arguments to try in turn until one works.
     pub switch: Vec<Vec<String>>,
+}
+
+/// `%N`, or `None`.
+fn pane_id(p: Option<&str>) -> Option<&str> {
+    p.filter(|p| crate::probe::is_pane_id(p))
 }
 
 /// Switch to the session's pane.
@@ -73,56 +82,75 @@ pub struct Jump {
 /// shown on the host through the window that runs the container. Its row
 /// gets two steps: select the pane in the container's tmux (when
 /// `config.container_tmux` is set and the pane is known), then switch the
-/// host client to the recorded host pane, falling back to
-/// `config.container_target`. Pane ids come from a state file the container
-/// wrote, so each is checked to be `%N` again before it becomes a target.
+/// host client to the host pane now attached to the container (asked from
+/// the container's tmux), else the one recorded in the session file, else
+/// `config.container_target`. Pane ids come from the container, so each is
+/// checked to be `%N` before it becomes a target.
 pub fn jump(row: &Row, client: &Client, config: &Config) -> Result<Jump, String> {
     need_tmux(client)?;
     if row.shown == Shown::Stopped {
         return Err("that session has stopped".into());
     }
-    let pane = row
-        .tmux_pane
-        .as_deref()
-        .filter(|p| crate::probe::is_pane_id(p));
+    let pane = pane_id(row.tmux_pane.as_deref());
     if !row.local {
         if row.host != HostKind::Container {
             return Err("that session runs on the other side (host / container)".into());
         }
-        let container = match pane {
-            Some(p) if !config.container_tmux.is_empty() => ["select-window", "select-pane"]
-                .iter()
-                .map(|verb| {
-                    let mut argv = config.container_tmux.clone();
-                    argv.extend(args(&[verb, "-t", p]));
-                    argv
-                })
-                .collect(),
-            _ => Vec::new(),
+        let inside = |tail: &[&str]| {
+            let mut argv = config.container_tmux.clone();
+            argv.extend(args(tail));
+            argv
+        };
+        let (container, host_pane_query) = match pane {
+            Some(p) if !config.container_tmux.is_empty() => (
+                vec![
+                    inside(&["select-window", "-t", p]),
+                    inside(&["select-pane", "-t", p]),
+                ],
+                Some(inside(&[
+                    "show-environment",
+                    "-t",
+                    p,
+                    crate::probe::HOST_PANE_ENV,
+                ])),
+            ),
+            _ => (Vec::new(), None),
         };
         let mut switch = Vec::new();
-        if let Some(host) = row
-            .host_tmux_pane
-            .as_deref()
-            .filter(|p| crate::probe::is_pane_id(p))
-        {
+        if let Some(host) = pane_id(row.host_tmux_pane.as_deref()) {
             switch.push(args(&["switch-client", "-t", host]));
         }
         switch.push(args(&["switch-client", "-t", &config.container_target]));
-        return Ok(Jump { container, switch });
+        return Ok(Jump {
+            container,
+            host_pane_query,
+            switch,
+        });
     }
     match pane {
         Some(p) => Ok(Jump {
             container: Vec::new(),
+            host_pane_query: None,
             switch: vec![args(&["switch-client", "-t", p])],
         }),
         None => Err("that session is not in tmux".into()),
     }
 }
 
+/// The pane in `show-environment` output (`NAME=%N`); `None` for anything
+/// else, including `-NAME` (unset by the last attach).
+fn parse_host_pane(out: &str) -> Option<String> {
+    let value = out.lines().find_map(|l| {
+        l.strip_prefix(crate::probe::HOST_PANE_ENV)?
+            .strip_prefix('=')
+    })?;
+    pane_id(Some(value.trim())).map(str::to_string)
+}
+
 /// Run a [`Jump`]: the container steps first (so the session's window is
-/// already showing on arrival; the first failure stops them), then each
-/// switch until one works. `Ok(Some(_))` when the client arrived but not as
+/// already showing on arrival; the first failure stops them and skips the
+/// host-pane query), then each switch until one works, starting with the
+/// queried host pane. `Ok(Some(_))` when the client arrived but not as
 /// planned (a container step failed, or a fallback target was used), with
 /// the reason to show.
 pub fn run_jump(jump: &Jump) -> Result<Option<String>, String> {
@@ -131,7 +159,7 @@ pub fn run_jump(jump: &Jump) -> Result<Option<String>, String> {
 
 fn run_jump_with(
     jump: &Jump,
-    mut run_container: impl FnMut(&[String]) -> Result<(), String>,
+    mut run_container: impl FnMut(&[String]) -> Result<String, String>,
     mut run_switch: impl FnMut(&[String]) -> Result<(), String>,
 ) -> Result<Option<String>, String> {
     let inner = jump
@@ -139,10 +167,23 @@ fn run_jump_with(
         .iter()
         .find_map(|argv| run_container(argv).err())
         .map(|e| format!("in the container: {e}"));
+    let mut switch = jump.switch.clone();
+    let queried = match (&inner, &jump.host_pane_query) {
+        (None, Some(query)) => run_container(query)
+            .ok()
+            .as_deref()
+            .and_then(parse_host_pane),
+        _ => None,
+    };
+    if let Some(now) = queried {
+        let target = args(&["switch-client", "-t", &now]);
+        switch.retain(|s| *s != target);
+        switch.insert(0, target);
+    }
     let mut first_failure: Option<String> = None;
     let mut last_failure = "nothing to switch to".to_string();
     let mut arrived = None;
-    for target in &jump.switch {
+    for target in &switch {
         match run_switch(target) {
             Ok(()) => {
                 arrived = Some(target);
@@ -170,9 +211,9 @@ fn run_jump_with(
     }
 }
 
-/// Run `argv` (program first) without a shell. `Err` names the program and
-/// carries its first stderr line.
-fn run_argv(argv: &[String], timeout: Duration) -> Result<(), String> {
+/// Run `argv` (program first) without a shell; `Ok` carries its stdout.
+/// `Err` names the program and carries its first stderr line.
+fn run_argv(argv: &[String], timeout: Duration) -> Result<String, String> {
     let Some((program, rest)) = argv.split_first() else {
         return Err("empty command".into());
     };
@@ -180,7 +221,7 @@ fn run_argv(argv: &[String], timeout: Duration) -> Result<(), String> {
     let mut cmd = Command::new(program);
     cmd.args(rest);
     match crate::cmd::run(cmd, timeout) {
-        Some(o) if o.success => Ok(()),
+        Some(o) if o.success => Ok(o.stdout),
         Some(o) => Err(format!("{name}: {}", crate::cmd::first_line(&o.stderr))),
         None => Err(format!("couldn't run {name}")),
     }
@@ -350,6 +391,7 @@ mod tests {
             jump(&row(), &inside(), &c).unwrap(),
             Jump {
                 container: vec![],
+                host_pane_query: None,
                 switch: vec![switch("%3")],
             }
         );
@@ -360,6 +402,7 @@ mod tests {
             jump(&r, &inside(), &c).unwrap(),
             Jump {
                 container: vec![],
+                host_pane_query: None,
                 switch: vec![switch("dev")],
             }
         );
@@ -383,6 +426,14 @@ mod tests {
                     args(&["dev", "tmux", "select-window", "-t", "%3"]),
                     args(&["dev", "tmux", "select-pane", "-t", "%3"]),
                 ],
+                host_pane_query: Some(args(&[
+                    "dev",
+                    "tmux",
+                    "show-environment",
+                    "-t",
+                    "%3",
+                    "CCFOCUS_HOST_PANE"
+                ])),
                 switch: vec![switch("%12"), switch("dev")],
             }
         );
@@ -414,6 +465,7 @@ mod tests {
             jump(&container_row(), &inside(), &Config::default()).unwrap(),
             Jump {
                 container: vec![],
+                host_pane_query: None,
                 switch: vec![switch("%12"), switch("dev")],
             }
         );
@@ -427,6 +479,7 @@ mod tests {
             r.tmux_pane = Some(bad.into());
             let j = jump(&r, &inside(), &c).unwrap();
             assert!(j.container.is_empty(), "{bad:?}");
+            assert_eq!(j.host_pane_query, None, "{bad:?}");
             assert_eq!(j.switch, [switch("%12"), switch("dev")]);
             let mut r = row();
             r.tmux_pane = Some(bad.into());
@@ -434,20 +487,27 @@ mod tests {
         }
     }
 
-    /// `run_jump_with` over fakes that log each call and fail the argv lists
-    /// whose last word is in `fail`.
-    fn fake_run(j: &Jump, fail: &[&str]) -> (Result<Option<String>, String>, Vec<String>) {
+    /// `run_jump_with` over fakes that log each call, fail the argv lists
+    /// whose last word is in `fail`, and answer the host-pane query with
+    /// `env`.
+    fn fake_run(
+        j: &Jump,
+        fail: &[&str],
+        env: &str,
+    ) -> (Result<Option<String>, String>, Vec<String>) {
         let log = std::cell::RefCell::new(Vec::new());
         let step = |kind: &str, argv: &[String]| {
             log.borrow_mut().push(format!("{kind} {}", argv.join(" ")));
             let last = argv.last().map_or("", String::as_str);
             if fail.contains(&last) {
                 Err(format!("no {last}"))
+            } else if argv.iter().any(|a| a == "show-environment") {
+                Ok(env.to_string())
             } else {
-                Ok(())
+                Ok(String::new())
             }
         };
-        let got = run_jump_with(j, |a| step("in", a), |a| step("out", a));
+        let got = run_jump_with(j, |a| step("in", a), |a| step("out", a).map(drop));
         (got, log.into_inner())
     }
 
@@ -455,32 +515,69 @@ mod tests {
         jump(&container_row(), &inside(), &with_container_tmux()).unwrap()
     }
 
+    const QUERY: &str = "in dev tmux show-environment -t %3 CCFOCUS_HOST_PANE";
+
     #[test]
-    fn run_jump_selects_inside_before_switching() {
-        let (got, log) = fake_run(&planned(), &[]);
+    fn run_jump_selects_inside_then_switches_to_the_attached_host_pane() {
+        let (got, log) = fake_run(&planned(), &[], "CCFOCUS_HOST_PANE=%20\n");
         assert_eq!(got, Ok(None));
         assert_eq!(
             log,
             [
                 "in dev tmux select-window -t %3",
                 "in dev tmux select-pane -t %3",
-                "out switch-client -t %12",
+                QUERY,
+                "out switch-client -t %20",
             ]
         );
+    }
+
+    #[test]
+    fn run_jump_uses_the_recorded_pane_when_the_query_has_none() {
+        for env in [
+            "",
+            "-CCFOCUS_HOST_PANE\n",
+            "CCFOCUS_HOST_PANE=\n",
+            "CCFOCUS_HOST_PANE=#(touch x)\n",
+            "CCFOCUS_HOST_PANE=-t %1\n",
+            "OTHER=%20\n",
+        ] {
+            let (got, log) = fake_run(&planned(), &[], env);
+            assert_eq!(got, Ok(None), "{env:?}");
+            assert_eq!(log[3..], ["out switch-client -t %12"], "{env:?}");
+        }
+        let (_, log) = fake_run(&planned(), &["CCFOCUS_HOST_PANE"], "");
+        assert_eq!(log[3..], ["out switch-client -t %12"]);
+    }
+
+    #[test]
+    fn run_jump_tries_the_queried_pane_once() {
+        let (got, log) = fake_run(&planned(), &["%12"], "CCFOCUS_HOST_PANE=%12\n");
+        assert_eq!(
+            log[3..],
+            ["out switch-client -t %12", "out switch-client -t dev"]
+        );
+        assert_eq!(got, Ok(Some("fell back to dev: no %12".into())));
+        let (got, log) = fake_run(&planned(), &["%20"], "CCFOCUS_HOST_PANE=%20\n");
+        assert_eq!(
+            log[3..],
+            ["out switch-client -t %20", "out switch-client -t %12"]
+        );
+        assert_eq!(got, Ok(Some("fell back to %12: no %20".into())));
     }
 
     #[test]
     fn run_jump_still_switches_after_a_failed_container_step() {
         let mut j = planned();
         j.container[0].push("broken".into());
-        let (got, log) = fake_run(&j, &["broken"]);
+        let (got, log) = fake_run(&j, &["broken"], "CCFOCUS_HOST_PANE=%20\n");
         assert_eq!(
             log,
             [
                 "in dev tmux select-window -t %3 broken",
                 "out switch-client -t %12",
             ],
-            "the second container step is skipped"
+            "the second container step and the query are skipped"
         );
         let warning = got.unwrap().unwrap();
         assert!(warning.starts_with("in the container: "), "{warning}");
@@ -488,14 +585,14 @@ mod tests {
 
     #[test]
     fn run_jump_falls_back_and_says_so() {
-        let (got, log) = fake_run(&planned(), &["%12"]);
+        let (got, log) = fake_run(&planned(), &["%12"], "");
         assert_eq!(
-            log[2..],
+            log[3..],
             ["out switch-client -t %12", "out switch-client -t dev"]
         );
         assert_eq!(got, Ok(Some("fell back to dev: no %12".into())));
 
-        let (got, _) = fake_run(&planned(), &["%12", "dev", "%3"]);
+        let (got, _) = fake_run(&planned(), &["%12", "dev", "%3"], "");
         let e = got.unwrap_err();
         assert!(e.starts_with("no dev ("), "{e}");
         assert!(e.contains("in the container: no %3"), "{e}");
