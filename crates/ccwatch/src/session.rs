@@ -106,6 +106,8 @@ pub(crate) async fn live_agent_info_map() -> Result<HashMap<String, AgentInfo>> 
     let fut = tokio::process::Command::new("claude")
         .args(["agents", "--json"])
         .stdin(std::process::Stdio::null())
+        // On a timeout the future is dropped; without this the CLI runs on.
+        .kill_on_drop(true)
         .output();
 
     let output = match tokio::time::timeout(LIVE_AGENTS_TIMEOUT, fut).await {
