@@ -38,7 +38,7 @@ pub fn braille_line(
 #[must_use]
 pub fn x_axis<'a>(last_x: f64, left: impl Into<Line<'a>>, right: impl Into<Line<'a>>) -> Axis<'a> {
     Axis::default()
-        .bounds([0.0, last_x])
+        .bounds([0.0, last_x.max(1.0)])
         .labels([left.into(), right.into()])
         .style(Style::default().fg(Color::DarkGray))
 }
@@ -131,6 +131,28 @@ mod tests {
         // The custom top label and the "0" baseline should render.
         assert!(out.contains("max"));
         assert!(out.contains('0'));
+    }
+
+    #[test]
+    fn x_axis_shows_both_end_labels() {
+        let points = [(0.0, 0.0), (1.0, 1.0)];
+        let mut terminal = Terminal::new(TestBackend::new(30, 6)).unwrap();
+        terminal
+            .draw(|f| {
+                let chart = braille_line(&points, 1.0, "max", Color::Cyan)
+                    .x_axis(x_axis(1.0, "start", "now"));
+                f.render_widget(chart, f.area());
+            })
+            .unwrap();
+        let buf = terminal.backend().buffer();
+        let out: String = buf
+            .content
+            .iter()
+            .map(ratatui::buffer::Cell::symbol)
+            .collect();
+        assert!(out.contains("start"));
+        assert!(out.contains("now"));
+        assert!(out.find("start") < out.find("now"), "left label first");
     }
 
     #[test]
