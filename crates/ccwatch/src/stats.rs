@@ -186,9 +186,7 @@ impl SessionStats {
     /// Last path component of `cwd` — typically the project / repo name.
     #[must_use]
     pub(crate) fn project_basename(&self) -> Option<&str> {
-        self.cwd
-            .as_deref()
-            .and_then(|c| c.rsplit(['/', '\\']).find(|s| !s.is_empty()))
+        self.cwd.as_deref().and_then(cctk::paths::cwd_basename)
     }
 
     #[must_use]
