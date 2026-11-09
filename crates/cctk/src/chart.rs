@@ -3,7 +3,7 @@
 //! Returns a configured [`ratatui::widgets::Chart`] plotting `points` as a
 //! connected braille line with a `0..y_max` y-axis. The caller owns `points`
 //! (the chart borrows them) and may further customize the returned chart —
-//! e.g. `.block(..)` for a border/title or `.x_axis(..)` to add time labels.
+//! e.g. `.block(..)` for a border/title or `.x_axis(x_axis(..))` to add end labels.
 
 use ratatui::style::{Color, Style};
 use ratatui::symbols::Marker;
@@ -29,12 +29,26 @@ pub fn braille_line(
         .data(points);
     Chart::new(vec![dataset])
         .x_axis(Axis::default().bounds([0.0, last_x]))
-        .y_axis(
-            Axis::default()
-                .bounds([0.0, y_max.max(1.0)])
-                .labels([Line::from("0"), Line::from(y_top_label.into())])
-                .style(Style::default().fg(Color::DarkGray)),
-        )
+        .y_axis(y_axis(y_max, y_top_label.into()))
+}
+
+/// An x-axis over `[0, last_x]` labeled `left` and `right` at its ends, in
+/// the same dim style as the y-axis: what callers pass to `.x_axis(..)` on
+/// a chart from this module.
+#[must_use]
+pub fn x_axis<'a>(last_x: f64, left: impl Into<Line<'a>>, right: impl Into<Line<'a>>) -> Axis<'a> {
+    Axis::default()
+        .bounds([0.0, last_x])
+        .labels([left.into(), right.into()])
+        .style(Style::default().fg(Color::DarkGray))
+}
+
+/// The `[0, y_max]` y-axis labeled `0` and `top`.
+fn y_axis(y_max: f64, top: String) -> Axis<'static> {
+    Axis::default()
+        .bounds([0.0, y_max.max(1.0)])
+        .labels([Line::from("0"), Line::from(top)])
+        .style(Style::default().fg(Color::DarkGray))
 }
 
 /// One colored series for [`braille_multi_line`]. Owns its points so the
@@ -72,12 +86,7 @@ pub fn braille_multi_line(
         .collect();
     Chart::new(datasets)
         .x_axis(Axis::default().bounds([0.0, last_x]))
-        .y_axis(
-            Axis::default()
-                .bounds([0.0, y_max.max(1.0)])
-                .labels([Line::from("0"), Line::from(y_top_label.into())])
-                .style(Style::default().fg(Color::DarkGray)),
-        )
+        .y_axis(y_axis(y_max, y_top_label.into()))
 }
 
 #[cfg(test)]

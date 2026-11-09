@@ -164,10 +164,7 @@ fn date_axis(today: NaiveDate, span: usize) -> Axis<'static> {
         .to_string();
     let newest = today.format("%m/%d").to_string();
     let last_x = (span.saturating_sub(1)).max(1) as f64;
-    Axis::default()
-        .bounds([0.0, last_x])
-        .labels([Line::from(oldest), Line::from(newest)])
-        .style(Style::default().fg(Color::DarkGray))
+    cctk::chart::x_axis(last_x, oldest, newest)
 }
 
 /// Y-axis top label for the trends graph, formatted for the metric.
