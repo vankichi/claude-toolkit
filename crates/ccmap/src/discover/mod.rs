@@ -187,6 +187,22 @@ pub fn discover_all(ctx: &Context) -> Discovered {
     Discovered { items }
 }
 
+/// Reads and parses `path` as JSON, returning `None` if it is missing or
+/// fails to parse. Callers must tolerate `None` rather than panicking:
+/// these files are user-editable and may have drifted schema (unknown
+/// `version`, missing keys, and so on).
+fn read_json<T: serde::de::DeserializeOwned>(path: &Path) -> Option<T> {
+    let content = fs::read_to_string(path).ok()?;
+    serde_json::from_str(&content).ok()
+}
+
+/// Writes `value` as pretty JSON to `path`, creating its parent dirs.
+#[cfg(test)]
+fn write_json(path: &Path, value: &serde_json::Value) {
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(path, serde_json::to_string_pretty(value).unwrap()).unwrap();
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -260,11 +276,6 @@ mod tests {
         assert_eq!(items[0].name, "c");
         assert_eq!(items[0].description, "(no description)");
         assert!(items[0].extra.is_empty());
-    }
-
-    fn write_json(path: &Path, value: &serde_json::Value) {
-        fs::create_dir_all(path.parent().unwrap()).unwrap();
-        fs::write(path, serde_json::to_string_pretty(value).unwrap()).unwrap();
     }
 
     /// Builds a `claude_dir` fixture with one marketplace declaring two

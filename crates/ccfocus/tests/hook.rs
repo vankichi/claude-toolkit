@@ -46,6 +46,17 @@ fn hook(event: &str, dir: &Path, stdin: &str) -> Output {
     )
 }
 
+/// The session file the fixtures' session writes under `dir`.
+fn session_path(dir: &Path) -> std::path::PathBuf {
+    dir.join("sessions")
+        .join("00000000-0000-4000-8000-000000000001.json")
+}
+
+/// That session file, parsed.
+fn session_json(dir: &Path) -> serde_json::Value {
+    serde_json::from_slice(&std::fs::read(session_path(dir)).unwrap()).unwrap()
+}
+
 fn assert_quiet_success(out: &Output, expect_stderr: bool) {
     assert_eq!(out.status.code(), Some(0));
     assert!(out.stdout.is_empty(), "stdout must stay empty");
@@ -62,15 +73,12 @@ fn records_and_removes_a_session() {
     let tmp = tempfile::tempdir().unwrap();
     let dir = tmp.path().join("focus");
     assert_quiet_success(&hook("SessionStart", &dir, START), false);
-    let path = dir
-        .join("sessions")
-        .join("00000000-0000-4000-8000-000000000001.json");
-    let state: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    let state = session_json(&dir);
     assert_eq!(state["status"], "idle");
     assert_eq!(state["project"], "demo-focus");
 
     assert_quiet_success(&hook("SessionEnd", &dir, END), false);
-    assert!(!path.exists());
+    assert!(!session_path(&dir).exists());
 }
 
 #[test]
@@ -84,12 +92,7 @@ fn only_a_container_hook_records_a_valid_host_pane() {
             env,
         );
         assert_quiet_success(&out, false);
-        let path = dir
-            .join("sessions")
-            .join("00000000-0000-4000-8000-000000000001.json");
-        serde_json::from_slice::<serde_json::Value>(&std::fs::read(path).unwrap()).unwrap()
-            ["host_tmux_pane"]
-            .clone()
+        session_json(&dir)["host_tmux_pane"].clone()
     };
     assert_eq!(
         host_pane(&[("DEV_CONTAINER", "1"), ("CCFOCUS_HOST_PANE", "%5")]),
@@ -108,14 +111,7 @@ fn only_a_container_hook_records_a_valid_host_pane() {
 fn waits_end_on_a_tool_batch_and_api_errors_mark_failed() {
     let tmp = tempfile::tempdir().unwrap();
     let dir = tmp.path().join("focus");
-    let status = || -> serde_json::Value {
-        let path = dir
-            .join("sessions")
-            .join("00000000-0000-4000-8000-000000000001.json");
-        serde_json::from_slice::<serde_json::Value>(&std::fs::read(path).unwrap()).unwrap()
-            ["status"]
-            .clone()
-    };
+    let status = || session_json(&dir)["status"].clone();
     assert_quiet_success(&hook("SessionStart", &dir, START), false);
     assert_quiet_success(&hook("Notification", &dir, PERMISSION), false);
     assert_eq!(status(), "waiting");
@@ -143,21 +139,16 @@ fn unknown_event_and_bad_args_exit_zero() {
 #[test]
 fn empty_state_dir_env_falls_back_to_default() {
     let tmp = tempfile::tempdir().unwrap();
-    let out = Command::new(env!("CARGO_BIN_EXE_ccfocus"))
-        .args(["hook", "SessionStart"])
-        .env("CCFOCUS_STATE_DIR", "")
-        .env("HOME", tmp.path())
-        .env("USERPROFILE", tmp.path())
-        .env_remove("TMUX_PANE")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .and_then(|mut child| {
-            child.stdin.take().unwrap().write_all(START.as_bytes())?;
-            child.wait_with_output()
-        })
-        .unwrap();
+    let home = tmp.path().to_str().unwrap();
+    let out = ccfocus_with(
+        &["hook", "SessionStart"],
+        START,
+        &[
+            ("CCFOCUS_STATE_DIR", ""),
+            ("HOME", home),
+            ("USERPROFILE", home),
+        ],
+    );
     assert_quiet_success(&out, false);
     assert!(tmp.path().join(".claude/focus/sessions").is_dir());
 }

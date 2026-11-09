@@ -532,21 +532,34 @@ mod tests {
         assert!(background_is_gone(&pidfile));
     }
 
+    /// Run `cmd` through `run_in` on its own thread with a 30 s timeout.
+    fn spawn_run_in(
+        running: &std::sync::Arc<Running>,
+        cmd: Command,
+    ) -> std::thread::JoinHandle<Option<Output>> {
+        let r = std::sync::Arc::clone(running);
+        std::thread::spawn(move || run_in(&r, cmd, Duration::from_secs(30)))
+    }
+
+    /// Wait (up to 5 s) until the script has written a whole line to `pidfile`.
+    fn wait_for_pidfile(pidfile: &Path) {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while std::fs::read_to_string(pidfile).map_or(true, |s| !s.ends_with('\n')) {
+            assert!(Instant::now() < deadline, "the script never started");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
     #[test]
     fn closing_kills_the_commands_still_running() {
         let dir = tempfile::tempdir().unwrap();
         let pidfile = dir.path().join("pid");
         let running = std::sync::Arc::new(Running::new());
         let cmd = sh_with_pidfile("sleep 30 & echo $! > \"$PIDFILE\"; wait", &pidfile);
-        let r = std::sync::Arc::clone(&running);
         let begin = Instant::now();
-        let call = std::thread::spawn(move || run_in(&r, cmd, Duration::from_secs(30)));
+        let call = spawn_run_in(&running, cmd);
         // Close once the background sleep has started.
-        let deadline = Instant::now() + Duration::from_secs(5);
-        while std::fs::read_to_string(&pidfile).map_or(true, |s| !s.ends_with('\n')) {
-            assert!(Instant::now() < deadline, "the script never started");
-            std::thread::sleep(Duration::from_millis(10));
-        }
+        wait_for_pidfile(&pidfile);
         // Listed already, so this closes a running command, not a late one.
         assert_eq!(running.lock().ids.len(), 1);
         running.close();
@@ -567,13 +580,8 @@ mod tests {
         let pidfile = dir.path().join("pid");
         let running = std::sync::Arc::new(Running::new());
         let cmd = sh_with_pidfile("sleep 30 & echo $! > \"$PIDFILE\"", &pidfile);
-        let r = std::sync::Arc::clone(&running);
-        let call = std::thread::spawn(move || run_in(&r, cmd, Duration::from_secs(30)));
-        let deadline = Instant::now() + Duration::from_secs(5);
-        while std::fs::read_to_string(&pidfile).map_or(true, |s| !s.ends_with('\n')) {
-            assert!(Instant::now() < deadline, "the script never started");
-            std::thread::sleep(Duration::from_millis(10));
-        }
+        let call = spawn_run_in(&running, cmd);
+        wait_for_pidfile(&pidfile);
         // Well inside READ_WINDOW of the exit.
         std::thread::sleep(Duration::from_millis(100));
         assert_eq!(running.lock().ids.len(), 1);

@@ -7,7 +7,6 @@
 use crate::model::{Item, Kind, PluginState, Source};
 use serde_json::Value;
 use std::collections::BTreeMap;
-use std::fs;
 use std::path::{Path, PathBuf};
 
 /// An enabled plugin, whose agents/skills/commands markdown
@@ -39,13 +38,9 @@ struct Entry {
     install_path: Option<PathBuf>,
 }
 
-/// Reads and parses `path` as JSON, returning `None` if it is missing or
-/// fails to parse. Callers must tolerate `None` rather than panicking:
-/// these files are user-editable and may have drifted schema (unknown
-/// `version`, missing keys, and so on).
+/// [`super::read_json`] as a loose `Value` (these files' schemas drift).
 fn read_json(path: &Path) -> Option<Value> {
-    let content = fs::read_to_string(path).ok()?;
-    serde_json::from_str(&content).ok()
+    super::read_json(path)
 }
 
 /// Returns `(marketplace_name, install_location)` for every marketplace
@@ -292,12 +287,9 @@ pub fn discover(claude_dir: &Path) -> PluginDiscovery {
 
 #[cfg(test)]
 mod tests {
+    use super::super::write_json;
     use super::*;
-
-    fn write_json(path: &Path, value: &serde_json::Value) {
-        fs::create_dir_all(path.parent().unwrap()).unwrap();
-        fs::write(path, serde_json::to_string_pretty(value).unwrap()).unwrap();
-    }
+    use std::fs;
 
     /// Builds a `claude_dir` fixture under `root` with two marketplaces
     /// (one via `known_marketplaces.json`, one via `extraKnownMarketplaces`)
