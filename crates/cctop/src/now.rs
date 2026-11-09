@@ -294,27 +294,19 @@ impl NowStats {
         window: i64,
         bins: usize,
     ) -> Vec<(f64, f64)> {
-        if bins == 0 || window <= 0 {
+        let Some(w) = RateWindow::new(now, window, bins) else {
             return Vec::new();
-        }
-        let start = now - Duration::seconds(window);
-        let bucket_secs = window as f64 / bins as f64;
-        let per_minute = 60.0 / bucket_secs;
-
+        };
         let mut buckets = vec![0u64; bins];
         for (ts, cat, _name, weight) in &self.events {
             if *cat != category {
                 continue;
             }
-            if let Some(idx) = bucket_index(*ts, start, now, bucket_secs, bins) {
+            if let Some(idx) = w.index(*ts) {
                 buckets[idx] += weight;
             }
         }
-        buckets
-            .iter()
-            .enumerate()
-            .map(|(i, &t)| (i as f64, t as f64 * per_minute))
-            .collect()
+        w.points(&buckets)
     }
 
     /// Per-name real-time usage/minute within `category` over the last `window`
@@ -327,20 +319,16 @@ impl NowStats {
         window: i64,
         bins: usize,
     ) -> Vec<(String, Vec<(f64, f64)>)> {
-        if bins == 0 || window <= 0 {
+        let Some(w) = RateWindow::new(now, window, bins) else {
             return Vec::new();
-        }
-        let start = now - Duration::seconds(window);
-        let bucket_secs = window as f64 / bins as f64;
-        let per_minute = 60.0 / bucket_secs;
-
+        };
         // name -> (per-bin weight, windowed total)
         let mut by_name: HashMap<&str, (Vec<u64>, u64)> = HashMap::new();
         for (ts, cat, name, weight) in &self.events {
             if *cat != category {
                 continue;
             }
-            let Some(idx) = bucket_index(*ts, start, now, bucket_secs, bins) else {
+            let Some(idx) = w.index(*ts) else {
                 continue;
             };
             let entry = by_name
@@ -354,14 +342,48 @@ impl NowStats {
         names.sort_by(|a, b| b.1.1.cmp(&a.1.1).then_with(|| a.0.cmp(b.0)));
         names
             .into_iter()
-            .map(|(name, (buckets, _))| {
-                let pts = buckets
-                    .iter()
-                    .enumerate()
-                    .map(|(i, &t)| (i as f64, t as f64 * per_minute))
-                    .collect();
-                (name.to_string(), pts)
-            })
+            .map(|(name, (buckets, _))| (name.to_string(), w.points(&buckets)))
+            .collect()
+    }
+}
+
+/// `[now - window, now]` split into `bins` equal buckets.
+struct RateWindow {
+    start: DateTime<Utc>,
+    now: DateTime<Utc>,
+    bucket_secs: f64,
+    bins: usize,
+}
+
+impl RateWindow {
+    /// `None` for an empty window or no bins.
+    fn new(now: DateTime<Utc>, window: i64, bins: usize) -> Option<Self> {
+        (bins > 0 && window > 0).then(|| Self {
+            start: now - Duration::seconds(window),
+            now,
+            bucket_secs: window as f64 / bins as f64,
+            bins,
+        })
+    }
+
+    /// The bucket `ts` falls in, or `None` if it is outside the window.
+    fn index(&self, ts: DateTime<Utc>) -> Option<usize> {
+        if ts < self.start || ts > self.now {
+            return None;
+        }
+        let secs = (ts - self.start).num_seconds() as f64;
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let idx = ((secs / self.bucket_secs) as usize).min(self.bins - 1);
+        Some(idx)
+    }
+
+    /// Per-bucket totals as `(bin_index, per_minute)` chart points.
+    fn points(&self, buckets: &[u64]) -> Vec<(f64, f64)> {
+        let per_minute = 60.0 / self.bucket_secs;
+        buckets
+            .iter()
+            .enumerate()
+            .map(|(i, &t)| (i as f64, t as f64 * per_minute))
             .collect()
     }
 }
@@ -374,24 +396,6 @@ fn short_id(id: &str) -> String {
         return format!("⤷ {}", cctk::paths::subagent_label_from_stem(id));
     }
     id.split('-').next().unwrap_or(id).to_string()
-}
-
-/// The bucket index for `ts` within `[start, now]` split into `bins`, or `None`
-/// if `ts` is outside the window.
-fn bucket_index(
-    ts: DateTime<Utc>,
-    start: DateTime<Utc>,
-    now: DateTime<Utc>,
-    bucket_secs: f64,
-    bins: usize,
-) -> Option<usize> {
-    if ts < start || ts > now {
-        return None;
-    }
-    let secs = (ts - start).num_seconds() as f64;
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    let idx = ((secs / bucket_secs) as usize).min(bins - 1);
-    Some(idx)
 }
 
 #[cfg(test)]
