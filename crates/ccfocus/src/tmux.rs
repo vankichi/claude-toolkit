@@ -2,9 +2,10 @@
 //! argument list, a [`Jump`], or the reason it can't be done); [`run`] and
 //! [`run_jump`] execute them. Arguments go to tmux (or, for a container
 //! session's jump, to the configured `container_tmux` command) directly,
-//! never through a shell. tmux itself format-expands some of them (the `rename-window` name and the
-//! `display-popup -d` directory), where `#(…)` would run a shell command, so
-//! values from the state files are passed through [`literal`] there.
+//! never through a shell. tmux itself format-expands some of them (the
+//! `rename-window` name and the `display-popup -d` directory), where `#(…)`
+//! would run a shell command, so values from the state files are passed
+//! through [`literal`] there.
 
 use crate::board::{Row, Shown};
 use crate::config::Config;
@@ -64,8 +65,9 @@ pub struct Jump {
     /// `config.container_tmux` only, never from a state file.
     pub container: Vec<Vec<String>>,
     /// Full argv that prints the container session's current
-    /// `CCFOCUS_HOST_PANE`: its tmux updates that on every attach, while the
-    /// session file keeps what Claude was started with.
+    /// `CCFOCUS_HOST_PANE`: its tmux updates that on every attach (when its
+    /// tmux.conf lists it in `update-environment`), while the session file
+    /// keeps what Claude was started with.
     pub host_pane_query: Option<Vec<String>>,
     /// `tmux switch-client` arguments to try in turn until one works.
     pub switch: Vec<Vec<String>>,
@@ -592,11 +594,19 @@ mod tests {
         );
         assert_eq!(got, Ok(Some("fell back to dev: no %12".into())));
 
+        // Two failures: the message gives the first reason.
+        let (got, _) = fake_run(&planned(), &["%20", "%12"], "CCFOCUS_HOST_PANE=%20\r\n");
+        assert_eq!(got, Ok(Some("fell back to dev: no %20".into())));
+
         let (got, _) = fake_run(&planned(), &["%12", "dev", "%3"], "");
         let e = got.unwrap_err();
         assert!(e.starts_with("no dev ("), "{e}");
         assert!(e.contains("in the container: no %3"), "{e}");
         assert!(!e.contains("fell back"), "{e}");
+
+        // Every switch fails and nothing else went wrong: the last reason.
+        let (got, _) = fake_run(&planned(), &["%12", "dev"], "");
+        assert_eq!(got, Err("no dev".into()));
     }
 
     #[test]

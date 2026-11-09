@@ -366,8 +366,8 @@ impl Focus {
         let done = (row.shown == Shown::Done).then(|| row.seen_key());
         match tmux::jump(row, &self.client, &self.config).and_then(|j| tmux::run_jump(&j)) {
             Ok(warning) => {
-                // Arrived, but the container's tmux may still show another
-                // window: say why.
+                // Arrived, but not as planned (a container step failed, or
+                // a fallback target was used): say why.
                 if let Some(w) = warning {
                     self.say(w);
                 }
