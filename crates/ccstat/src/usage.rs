@@ -15,12 +15,11 @@ pub const MAX_SPAN_DAYS: usize = 120;
 
 /// One session-log line's contribution to the store: its timestamp (for day
 /// bucketing) and the usage records it carries. Built from a parsed
-/// [`cctk::jsonl::Line`] via [`LineData::from_line`]; `cwd` is retained so the
-/// scanner can resolve a project label from any line in the file.
+/// [`cctk::jsonl::Line`] via [`LineData::from_line`]. The scanner reads the
+/// project label from the parsed line's `cwd` itself.
 #[derive(Debug, Default)]
 pub struct LineData {
     pub timestamp: Option<DateTime<Utc>>,
-    pub cwd: Option<String>,
     pub items: Vec<Extracted>,
 }
 
@@ -30,7 +29,6 @@ impl LineData {
     pub fn from_line(line: &Line) -> Self {
         LineData {
             timestamp: line.timestamp_utc(),
-            cwd: line.cwd.clone(),
             items: line.extracted(),
         }
     }
@@ -447,7 +445,6 @@ mod tests {
         let ts = chrono::Utc.with_ymd_and_hms(y, m, d, 12, 0, 0).unwrap();
         LineData {
             timestamp: Some(ts),
-            cwd: None,
             items,
         }
     }
@@ -714,7 +711,6 @@ mod tests {
         let today = day(2026, 7, 16);
         let line = LineData {
             timestamp: None,
-            cwd: None,
             items: vec![Extracted::Skill { name: "a".into() }],
         };
         db.absorb(&line, "p", day(2026, 7, 16));
