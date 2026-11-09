@@ -549,14 +549,8 @@ fn run_watch_inner(
     state: &mut AppState,
     rescan_interval: std::time::Duration,
 ) -> anyhow::Result<()> {
-    let window = Duration::seconds(ACTIVE_WINDOW_SECS);
     // Seed the running set so the very first frame reflects live activity.
-    state.set_active(scan::compute_active(
-        cfg,
-        chrono::Utc::now(),
-        window,
-        TAIL_BYTES,
-    ));
+    refresh_active(state, cfg);
     let mut last_active = std::time::Instant::now();
     let mut last_rescan = std::time::Instant::now();
 
@@ -577,21 +571,32 @@ fn run_watch_inner(
 
         let now = std::time::Instant::now();
         if now.duration_since(last_active) >= ACTIVE_POLL {
-            state.set_active(scan::compute_active(
-                cfg,
-                chrono::Utc::now(),
-                window,
-                TAIL_BYTES,
-            ));
+            refresh_active(state, cfg);
             last_active = now;
         }
         if now.duration_since(last_rescan) >= rescan_interval {
-            let today = chrono::Utc::now().date_naive();
-            let provenance = ProvenanceMap::build(&ccmap::discover::discover_extensions(ctx));
-            state.reload_at(today, scan::scan(cfg, today), provenance);
+            rescan(state, cfg, ctx);
             last_rescan = now;
         }
     }
+}
+
+/// Recompute what is running now from the live sessions' tails.
+fn refresh_active(state: &mut AppState, cfg: &ScanConfig) {
+    state.set_active(scan::compute_active(
+        cfg,
+        chrono::Utc::now(),
+        Duration::seconds(ACTIVE_WINDOW_SECS),
+        TAIL_BYTES,
+    ));
+}
+
+/// Re-aggregate the whole corpus and re-discover provenance (the `R` key,
+/// and every rescan interval in `--watch`).
+fn rescan(state: &mut AppState, cfg: &ScanConfig, ctx: &ccmap::discover::Context) {
+    let today = chrono::Utc::now().date_naive();
+    let provenance = ProvenanceMap::build(&ccmap::discover::discover_extensions(ctx));
+    state.reload_at(today, scan::scan(cfg, today), provenance);
 }
 
 fn run_inner(
@@ -654,11 +659,7 @@ pub fn handle_key(
         KeyAction::PickerPrev => state.picker_prev(),
         KeyAction::PickerApply => state.apply_picker(),
         KeyAction::PickerCancel => state.cancel_picker(),
-        KeyAction::Rescan => {
-            let today = chrono::Utc::now().date_naive();
-            let provenance = ProvenanceMap::build(&ccmap::discover::discover_extensions(ctx));
-            state.reload_at(today, scan::scan(cfg, today), provenance);
-        }
+        KeyAction::Rescan => rescan(state, cfg, ctx),
         KeyAction::ToggleGraph => state.toggle_graph(),
         KeyAction::CycleMetric => state.cycle_graph_metric(),
         KeyAction::Ignore => {}
