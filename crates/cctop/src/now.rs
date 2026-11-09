@@ -79,10 +79,7 @@ impl Slot {
     }
 
     fn tokens(&self) -> u64 {
-        self.total.input_tokens
-            + self.total.output_tokens
-            + self.total.cache_creation_input_tokens
-            + self.total.cache_read_input_tokens
+        self.total.total_tokens()
     }
 
     fn context_pct(&self) -> f64 {
@@ -92,9 +89,7 @@ impl Slot {
 
     /// Project name = last path component of the captured cwd.
     fn project(&self) -> Option<&str> {
-        self.cwd
-            .as_deref()
-            .and_then(|c| c.rsplit(['/', '\\']).find(|s| !s.is_empty()))
+        self.cwd.as_deref().and_then(cctk::paths::cwd_basename)
     }
 }
 
@@ -142,19 +137,13 @@ impl NowStats {
         // model + any skill/agent/mcp invocations; user lines yield commands).
         if let Some(at) = line.timestamp_utc() {
             for ex in line.extracted() {
-                let (category, name, weight) = match ex {
-                    Extracted::Model { name, usage } => {
-                        let tokens = usage.input_tokens
-                            + usage.output_tokens
-                            + usage.cache_creation_input_tokens;
-                        (Category::Model, name, tokens)
-                    }
-                    Extracted::Agent { name } => (Category::Agent, name, 1),
-                    Extracted::Skill { name } => (Category::Skill, name, 1),
-                    Extracted::Command { name } => (Category::Command, name, 1),
-                    Extracted::Mcp { server } => (Category::Mcp, server, 1),
+                let (category, name) = Category::of(&ex);
+                let weight = match &ex {
+                    Extracted::Model { usage, .. } => usage.tokens_without_cache_reads(),
+                    _ => 1,
                 };
-                self.events.push_back((at, category, name, weight));
+                self.events
+                    .push_back((at, category, name.to_string(), weight));
             }
             if self.events.len() > EVENTS_CAP {
                 let drop = self.events.len() - EVENTS_CAP;

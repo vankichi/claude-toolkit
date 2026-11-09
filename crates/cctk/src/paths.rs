@@ -111,12 +111,17 @@ fn is_hex16(s: &str) -> bool {
     s.len() == 16 && s.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
+/// Last non-empty component of a session's `cwd` (either separator, so a
+/// Windows path from the log works too); usually the project / repo name.
+#[must_use]
+pub fn cwd_basename(cwd: &str) -> Option<&str> {
+    cwd.rsplit(['/', '\\']).find(|s| !s.is_empty())
+}
+
 /// Basename of `cwd` if present, else the file's parent directory name.
 #[must_use]
 pub fn project_label(file: &Path, cwd: Option<&str>) -> String {
-    if let Some(cwd) = cwd
-        && let Some(base) = cwd.rsplit(['/', '\\']).find(|s| !s.is_empty())
-    {
+    if let Some(base) = cwd.and_then(cwd_basename) {
         return base.to_string();
     }
     file.parent()
@@ -288,6 +293,15 @@ mod tests {
             project_label(file, Some("/Users/me/work/my-repo/")),
             "my-repo"
         );
+    }
+
+    #[test]
+    fn cwd_basename_takes_the_last_non_empty_component() {
+        assert_eq!(cwd_basename("/Users/me/work/my-repo"), Some("my-repo"));
+        assert_eq!(cwd_basename("/Users/me/work/my-repo/"), Some("my-repo"));
+        assert_eq!(cwd_basename(r"C:\work\my-repo"), Some("my-repo"));
+        assert_eq!(cwd_basename("/"), None);
+        assert_eq!(cwd_basename(""), None);
     }
 
     #[test]
