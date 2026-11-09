@@ -328,7 +328,11 @@ command times out (`git` 3 seconds, `gh` 20 seconds, host `tmux` 2 seconds,
 container `tmux` 3 seconds, `kill` 1 second), the board stops every process in
 that group with SIGKILL, whether or not the process closed its pipes. It also
 stops the group when someone still holds the output pipe open 0.5 seconds after
-the command has exited. Stopping the group is best effort: when the `kill`
+the command has exited. Closing the board (`q` / `Esc`, or quitting cctop) also
+stops the group of every command still running with SIGKILL. It first waits for
+the `tmux` command of a jump (`1`-`9`, `Enter`) to finish, so a jump in progress
+is carried out to the end even if you close the board. A command that was about
+to start after the close is stopped right after it starts. Stopping the group is best effort: when the `kill`
 command is missing or fails, the group is not stopped, and on a timeout only the
 command itself is stopped. A process that closed its stdout and stderr
 (`>/dev/null 2>&1`) survives only when the command finishes within its timeout.
