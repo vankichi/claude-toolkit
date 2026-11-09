@@ -333,13 +333,14 @@ runs with the defaults and shows the reason on the bottom line.
 limit = 4                   # parallel-session limit (1-99)
 round_minutes = 30          # check-in interval; 0 hides it (0-1440)
 container_target = "dev"    # fallback tmux target for a container session
-container_tmux = "dev tmux" # runs tmux inside the container; empty = off (default)
+# container_tmux = "dev tmux" # runs tmux inside the container; unset (empty) by default
 ```
 
-`container_tmux` is split on whitespace into an argv and run without a shell.
-A value with a control character or longer than 256 bytes is rejected (the
-config counts as broken: the board runs with the defaults and shows the reason
-on the bottom line).
+`container_tmux` is split on spaces and tabs into an argv and run without a
+shell. Other whitespace (such as NBSP) does not separate words. A value with
+whitespace other than space and tab, a control character, or more than 256 bytes
+is rejected (the config counts as broken: the board runs with the defaults and
+shows the reason on the bottom line).
 
 Housekeeping: the board (`ccfocus` and cctop's Focus panel) runs a cleanup at
 start-up and every hour. It deletes event logs (`events/*.tsv`) older than 90
@@ -360,13 +361,28 @@ container, `1`-`9` or `Enter` on that row does two steps:
    session's window and pane in the container's tmux. With `container_tmux =
    "dev tmux"` and dotfiles' `dev tmux <args>` (which is `docker exec -u <user>
    <container> tmux <args>`), this runs tmux inside the container.
-2. The board runs `tmux switch-client -t` to move the host's client to
-   `host_tmux_pane`, the host pane that runs the container (read from the session
-   file). If it is not recorded, is not of the form `%N`, or the host has no such
-   pane (`switch-client` fails), it switches to `container_target` instead.
+   After that, the board runs `<container_tmux> show-environment -t <tmux_pane>
+   CCFOCUS_HOST_PANE` to ask the container's tmux which host pane shows the
+   container now (see below for why).
+2. The board runs `tmux switch-client -t` to move the host's client to a host
+   pane. It tries these candidates in order: the pane just asked in step 1, then
+   `host_tmux_pane` in the session file (the value when Claude started), then
+   `container_target`. A candidate is skipped if it is missing, is not of the form
+   `%N`, or the host has no such pane (`switch-client` fails).
 
 Step 2 runs even when step 1 fails; the error from step 1 shows on the bottom
-line. Without `container_tmux`, step 1 is skipped.
+line, and the question is skipped when the select step fails. Without
+`container_tmux`, step 1 is skipped, including the question (the recorded pane,
+then `container_target`). When a candidate fails and the board moves to a later one, the reason shows on the bottom line (`fell back to <target>: <reason>`).
+
+Why ask: when you re-enter the container with `dev in`, the container's tmux
+rewrites `CCFOCUS_HOST_PANE` in its session environment to the new host pane
+(through `update-environment`). A Claude that is already running, and its hook,
+keep the value from startup, and a session waiting for input sends no hook event,
+so the record alone would jump to the old pane. This needs `set -ga
+update-environment CCFOCUS_HOST_PANE` in the container's `tmux.conf` (dotfiles
+sets it). Without it, or if the question fails, the board uses the recorded pane.
+The answer comes from the container too, so its form is checked as `%N` before use.
 
 To record `host_tmux_pane`, the side that starts the container passes the
 host's pane through the `CCFOCUS_HOST_PANE` environment variable, for example
@@ -376,8 +392,17 @@ reads it and stores it as `host_tmux_pane`; it records only a value of the form
 
 The session file is written by the container, so the board does not trust it: a
 pane id is checked to be of the form `%N` before it is used as a tmux target,
-and the command to run comes only from the host's `config.toml`. A desktop app
+and the command to run comes only from the host's `config.toml`. Any value of the
+form `%N` can point at any pane on the host, but all that happens is a move; no
+command is run. A desktop app
 session (outside tmux) still cannot be jumped to.
+
+Limits:
+
+- If several host panes are attached to the same container at once, the jump goes
+  to the pane that attached last.
+- After you detach from the container (leave `dev in`), that host pane is back at
+  the host's shell. The switch succeeds, but the container is not shown.
 
 ## Releasing
 
