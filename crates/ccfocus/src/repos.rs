@@ -328,9 +328,11 @@ impl<T: Send + 'static> Job<T> {
         true
     }
 
-    /// Work was started and its result hasn't been polled yet.
+    /// Work was started and its result hasn't been polled yet (it may have
+    /// finished).
+    #[cfg(test)]
     #[must_use]
-    pub fn is_running(&self) -> bool {
+    pub fn is_pending(&self) -> bool {
         self.running.is_some()
     }
 

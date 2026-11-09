@@ -30,6 +30,8 @@ const TASKS_EVERY: Duration = Duration::from_mins(10);
 const PRUNE_EVERY: Duration = Duration::from_hours(1);
 /// Key feedback stays this long.
 const MESSAGE_FOR: Duration = Duration::from_secs(5);
+/// Shown while a jump runs; cleared when it lands as planned.
+const SWITCHING: &str = "switching…";
 
 /// What a jump's thread sends back: the finished row's `seen_key` (to mark
 /// it seen on arrival) and [`tmux::run_jump`]'s result.
@@ -321,8 +323,14 @@ impl Focus {
     }
 
     fn say(&mut self, msg: String) {
-        self.message = Some((msg, Instant::now()));
+        self.note(msg, Instant::now());
         self.rebuild(self.view.now);
+    }
+
+    /// Set the bottom line without rebuilding (for callers that rebuild
+    /// anyway, like `tick_at`).
+    fn note(&mut self, msg: String, clock: Instant) {
+        self.message = Some((msg, clock));
     }
 
     /// Handle a key. `true` when the board should close (`q` / `Esc`).
@@ -394,10 +402,12 @@ impl Focus {
         // The result arrives through `tick`. A key pressed meanwhile is
         // refused rather than queued: the client may already be on its way.
         let run = self.run_jump;
-        if !self
+        if self
             .jump_job
             .kick(Instant::now(), true, move || (done, run(&plan)))
         {
+            self.say(SWITCHING.into());
+        } else {
             self.say("still switching to the last session".into());
         }
     }
@@ -413,9 +423,12 @@ impl Focus {
         match result {
             Ok(warning) => {
                 // Arrived, but not as planned (a container step failed, or
-                // a fallback target was used): say why.
+                // a fallback target was used): say why. Otherwise drop the
+                // "switching" note, unless a newer message replaced it.
                 if let Some(w) = warning {
-                    self.message = Some((w, clock));
+                    self.note(w, clock);
+                } else if self.message.as_ref().is_some_and(|(m, _)| m == SWITCHING) {
+                    self.message = None;
                 }
                 // A finished session counts as seen once visited: pick the
                 // next one without it.
@@ -424,7 +437,7 @@ impl Focus {
                     self.read_board(now, clock);
                 }
             }
-            Err(e) => self.message = Some((e, clock)),
+            Err(e) => self.note(e, clock),
         }
     }
 }
@@ -611,7 +624,7 @@ mod tests {
     /// Tick until the jump's result lands (it runs on its own thread).
     fn tick_until_arrived(f: &mut Focus, now: DateTime<FixedOffset>) {
         let deadline = Instant::now() + Duration::from_secs(5);
-        while f.jump_job.is_running() {
+        while f.jump_job.is_pending() {
             assert!(Instant::now() < deadline, "the jump never finished");
             std::thread::sleep(Duration::from_millis(10));
             f.tick_at(now, Instant::now(), false);
@@ -636,7 +649,11 @@ mod tests {
         // Whenever the thread finishes, its result waits for a tick, so
         // these hold however fast the fake is.
         f.on_key(KeyCode::Char('1'));
-        assert_eq!(f.view().message, None, "the key doesn't wait for the jump");
+        assert_eq!(
+            f.view().message.as_deref(),
+            Some(SWITCHING),
+            "the key doesn't wait for the jump"
+        );
         f.on_key(KeyCode::Char('1'));
         assert_eq!(
             f.view().message.as_deref(),
@@ -653,6 +670,30 @@ mod tests {
             None,
             "the finished session counts as seen"
         );
+    }
+
+    #[test]
+    fn a_jump_that_lands_as_planned_clears_only_its_own_note() {
+        let tmp = tempfile::tempdir().unwrap();
+        let a = "00000000-0000-4000-8000-00000000000a";
+        write_session(tmp.path(), a, Status::Waiting, "2026-01-05T14:20:00+09:00");
+        let mut f = board_over(tmp.path());
+        f.client = Client {
+            inside: true,
+            pane: None,
+        };
+        f.run_jump = |_| Ok(None);
+        let now = at("2026-01-05T14:24:00+09:00");
+        f.tick_at(now, Instant::now(), false);
+
+        f.on_key(KeyCode::Char('1'));
+        tick_until_arrived(&mut f, now);
+        assert_eq!(f.view().message, None);
+
+        f.on_key(KeyCode::Char('1'));
+        f.on_key(KeyCode::Char('7'));
+        tick_until_arrived(&mut f, now);
+        assert_eq!(f.view().message.as_deref(), Some("no session [7]"));
     }
 
     #[test]
@@ -675,7 +716,7 @@ mod tests {
         assert_eq!(f.view().board.next, Some(0));
         // The next key starts a new jump.
         f.on_key(KeyCode::Enter);
-        assert!(f.jump_job.is_running());
+        assert!(f.jump_job.is_pending());
     }
 
     #[test]
