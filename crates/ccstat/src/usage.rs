@@ -138,30 +138,21 @@ impl UsageDb {
     pub fn absorb(&mut self, line: &LineData, project: &str, fallback_day: NaiveDate) {
         let day = line.timestamp.map_or(fallback_day, |t| t.date_naive());
         for item in &line.items {
-            let (category, name, stat) = match item {
-                Extracted::Model { name, usage } => {
-                    let cost = ModelInfo::parse(name).pricing().cost_usd(usage);
-                    (
-                        Category::Model,
-                        name.clone(),
-                        DayStat {
-                            count: 1,
-                            input: usage.input_tokens,
-                            output: usage.output_tokens,
-                            cache_creation: usage.cache_creation_input_tokens,
-                            cache_read: usage.cache_read_input_tokens,
-                            cost_usd: cost,
-                        },
-                    )
-                }
-                Extracted::Skill { name } => (Category::Skill, name.clone(), unit()),
-                Extracted::Agent { name } => (Category::Agent, name.clone(), unit()),
-                Extracted::Command { name } => (Category::Command, name.clone(), unit()),
-                Extracted::Mcp { server } => (Category::Mcp, server.clone(), unit()),
+            let (category, name) = Category::of(item);
+            let stat = match item {
+                Extracted::Model { name, usage } => DayStat {
+                    count: 1,
+                    input: usage.input_tokens,
+                    output: usage.output_tokens,
+                    cache_creation: usage.cache_creation_input_tokens,
+                    cache_read: usage.cache_read_input_tokens,
+                    cost_usd: ModelInfo::parse(name).pricing().cost_usd(usage),
+                },
+                _ => unit(),
             };
             let key = EntryKey {
                 category,
-                name,
+                name: name.to_string(),
                 project: project.to_string(),
             };
             self.entries

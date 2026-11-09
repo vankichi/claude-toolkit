@@ -24,6 +24,20 @@ impl Category {
         Category::Mcp,
     ];
 
+    /// The category an extracted usage record counts under, and the name it
+    /// is recorded by (an MCP record by its server).
+    #[must_use]
+    pub fn of(item: &cctk::jsonl::Extracted) -> (Category, &str) {
+        use cctk::jsonl::Extracted;
+        match item {
+            Extracted::Model { name, .. } => (Category::Model, name),
+            Extracted::Agent { name } => (Category::Agent, name),
+            Extracted::Skill { name } => (Category::Skill, name),
+            Extracted::Command { name } => (Category::Command, name),
+            Extracted::Mcp { server } => (Category::Mcp, server),
+        }
+    }
+
     /// Display label for the tab bar.
     #[must_use]
     pub fn title(self) -> &'static str {

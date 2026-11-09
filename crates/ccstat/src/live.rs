@@ -12,7 +12,7 @@
 //! *recent* activity in a live session rather than a still-executing process.
 
 use crate::model::Category;
-use cctk::jsonl::{Extracted, Line};
+use cctk::jsonl::Line;
 use chrono::{DateTime, Duration, Utc};
 use std::collections::BTreeSet;
 
@@ -104,7 +104,8 @@ pub fn active_items_in_tail(
             continue;
         }
         for item in &parsed.extracted() {
-            out.push(item_key(item));
+            let (category, name) = Category::of(item);
+            out.push((category, name.to_string()));
         }
     }
     out
@@ -124,17 +125,6 @@ pub fn tail_has_recent_line(tail: &[u8], now: DateTime<Utc>, window: Duration) -
             .and_then(|l| l.timestamp_utc())
             .is_some_and(|ts| ts >= cutoff)
     })
-}
-
-/// Map an extracted usage record to its `(category, name)` key.
-fn item_key(item: &Extracted) -> (Category, String) {
-    match item {
-        Extracted::Model { name, .. } => (Category::Model, name.clone()),
-        Extracted::Agent { name } => (Category::Agent, name.clone()),
-        Extracted::Skill { name } => (Category::Skill, name.clone()),
-        Extracted::Command { name } => (Category::Command, name.clone()),
-        Extracted::Mcp { server } => (Category::Mcp, server.clone()),
-    }
 }
 
 #[cfg(test)]

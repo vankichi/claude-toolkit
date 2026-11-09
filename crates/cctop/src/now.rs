@@ -140,19 +140,15 @@ impl NowStats {
         // model + any skill/agent/mcp invocations; user lines yield commands).
         if let Some(at) = line.timestamp_utc() {
             for ex in line.extracted() {
-                let (category, name, weight) = match ex {
-                    Extracted::Model { name, usage } => {
-                        let tokens = usage.input_tokens
-                            + usage.output_tokens
-                            + usage.cache_creation_input_tokens;
-                        (Category::Model, name, tokens)
+                let (category, name) = Category::of(&ex);
+                let weight = match &ex {
+                    Extracted::Model { usage, .. } => {
+                        usage.input_tokens + usage.output_tokens + usage.cache_creation_input_tokens
                     }
-                    Extracted::Agent { name } => (Category::Agent, name, 1),
-                    Extracted::Skill { name } => (Category::Skill, name, 1),
-                    Extracted::Command { name } => (Category::Command, name, 1),
-                    Extracted::Mcp { server } => (Category::Mcp, server, 1),
+                    _ => 1,
                 };
-                self.events.push_back((at, category, name, weight));
+                self.events
+                    .push_back((at, category, name.to_string(), weight));
             }
             if self.events.len() > EVENTS_CAP {
                 let drop = self.events.len() - EVENTS_CAP;
