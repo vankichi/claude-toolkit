@@ -25,7 +25,7 @@ struct RecentEntry {
 pub(crate) struct SessionStats {
     /// Model, usage, cost, context, cwd and tool counts, folded the same
     /// way as cctop's Now panel.
-    totals: SessionTotals,
+    agg: SessionTotals,
     started_at: Instant,
     /// `output_tokens` per assistant message, oldest first, capped at `HISTORY_CAP`.
     output_history: Vec<u64>,
@@ -48,7 +48,7 @@ impl SessionStats {
     /// `CCWATCH_CONTEXT_WINDOW` env var).
     pub(crate) fn new(override_context_window: Option<u64>) -> Self {
         Self {
-            totals: SessionTotals::default(),
+            agg: SessionTotals::default(),
             started_at: Instant::now(),
             output_history: Vec::new(),
             recent: VecDeque::new(),
@@ -90,7 +90,7 @@ impl SessionStats {
             return;
         }
 
-        let Some((usage, event_cost)) = self.totals.ingest(line) else {
+        let Some((usage, event_cost)) = self.agg.ingest(line) else {
             return;
         };
 
@@ -133,50 +133,50 @@ impl SessionStats {
 
     #[must_use]
     pub(crate) fn model_raw(&self) -> Option<&str> {
-        self.totals.model()
+        self.agg.model()
     }
 
     /// Full cwd (working directory) recorded in session events.
     #[must_use]
     pub(crate) fn cwd(&self) -> Option<&str> {
-        self.totals.cwd()
+        self.agg.cwd()
     }
 
     /// Last path component of `cwd` — typically the project / repo name.
     #[must_use]
     pub(crate) fn project_basename(&self) -> Option<&str> {
-        self.totals.project()
+        self.agg.project()
     }
 
     #[must_use]
     pub(crate) fn model_color(&self) -> Color {
-        self.totals.model_info().color()
+        self.agg.model_info().color()
     }
 
     #[must_use]
     pub(crate) fn totals(&self) -> &Usage {
-        self.totals.total()
+        self.agg.total()
     }
 
     #[must_use]
     pub(crate) fn session_cost_usd(&self) -> f64 {
-        self.totals.cost_usd()
+        self.agg.cost_usd()
     }
 
     #[must_use]
     pub(crate) fn last_context_size(&self) -> u64 {
-        self.totals.last_context_size()
+        self.agg.last_context_size()
     }
 
     #[must_use]
     pub(crate) fn context_window(&self) -> u64 {
         self.user_override_context_window
-            .unwrap_or_else(|| self.totals.model_info().context_window())
+            .unwrap_or_else(|| self.agg.model_info().context_window())
     }
 
     #[must_use]
     pub(crate) fn assistant_messages(&self) -> u64 {
-        self.totals.messages()
+        self.agg.messages()
     }
 
     #[must_use]
@@ -188,7 +188,7 @@ impl SessionStats {
     #[must_use]
     pub(crate) fn tools_sorted(&self) -> Vec<(&str, u64)> {
         let mut items: Vec<(&str, u64)> = self
-            .totals
+            .agg
             .tool_counts()
             .iter()
             .map(|(k, v)| (k.as_str(), *v))
@@ -199,13 +199,13 @@ impl SessionStats {
 
     #[must_use]
     pub(crate) fn context_pct(&self) -> f64 {
-        self.totals.context_pct(self.context_window())
+        self.agg.context_pct(self.context_window())
     }
 
     /// `cache_read / (cache_read + input + cache_creation)` — share of context that hit cache.
     #[must_use]
     pub(crate) fn cache_hit_ratio(&self) -> f64 {
-        let total = self.totals.total();
+        let total = self.agg.total();
         let denom = total.context_size();
         if denom == 0 {
             return 0.0;
