@@ -16,6 +16,10 @@ use std::time::{Duration, Instant};
 /// so a hung command must not stall it.
 const COMMAND_TIMEOUT: Duration = Duration::from_millis(500);
 
+/// Set by the container's launcher (e.g. `docker exec -e`) to the host's
+/// `$TMUX_PANE`, so the host board can switch to the container's window.
+pub(crate) const HOST_PANE_ENV: &str = "CCFOCUS_HOST_PANE";
+
 /// Where the session's working directory sits in git.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct GitInfo {
@@ -37,6 +41,9 @@ pub trait Probe {
     fn host(&self) -> HostKind;
     fn hostname(&self) -> Option<String>;
     fn tmux(&self) -> TmuxInfo;
+    /// The host tmux pane (`%N`) that runs the container, as passed in by
+    /// the container's launcher. Read only for container sessions.
+    fn host_pane(&self) -> Option<String>;
     fn pid(&self) -> Option<u32>;
     fn git(&self, cwd: &Path) -> GitInfo;
 }
@@ -88,6 +95,10 @@ impl Probe for SystemProbe {
             location: self.run(cmd).and_then(|out| non_empty(out.trim())),
             pane: Some(pane),
         }
+    }
+
+    fn host_pane(&self) -> Option<String> {
+        std::env::var(HOST_PANE_ENV).ok().filter(|p| is_pane_id(p))
     }
 
     fn pid(&self) -> Option<u32> {

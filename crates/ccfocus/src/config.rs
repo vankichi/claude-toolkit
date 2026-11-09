@@ -1,21 +1,33 @@
 //! Dashboard settings from `<state>/config.toml`.
 //!
-//! Only a flat subset of TOML is read (no new dependency for three keys):
+//! Only a flat subset of TOML is read (no new dependency for a few keys):
 //! `key = 123` and `key = "text"` lines, blank lines, and `#` comments.
 //!
 //! ```toml
 //! limit = 4               # parallel sessions before the header turns red
 //! round_minutes = 30      # check-in grid from local midnight; 0 hides it
-//! container_target = "dev" # tmux target for jumping to a container session
+//! container_target = "dev" # fallback tmux target for a container session
 //! ```
+//!
+//! The command that runs tmux inside the container (`container_tmux`) is
+//! the one setting the board executes, so it is read only from the host's
+//! `$CCFOCUS_CONTAINER_TMUX`, never from this file: a dev container may
+//! mount the state directory writable, and could otherwise choose a program
+//! for the host to run.
 
 use std::io::Read;
 use std::path::Path;
 
 pub const FILE_NAME: &str = "config.toml";
 
+/// Host environment variable holding `container_tmux` (e.g. `dev tmux`).
+pub const CONTAINER_TMUX_ENV: &str = "CCFOCUS_CONTAINER_TMUX";
+
 /// Larger config files are refused rather than read.
 const MAX_BYTES: u64 = 64 * 1024;
+
+/// Longest `container_tmux` value.
+const MAX_COMMAND_BYTES: usize = 256;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Config {
@@ -23,9 +35,13 @@ pub struct Config {
     pub limit: usize,
     /// Minutes between check-ins, aligned to local midnight; 0 hides them.
     pub round_minutes: u32,
-    /// `tmux switch-client -t` target for sessions running in the container
-    /// (whose panes live in the host tmux's window for the container).
+    /// `tmux switch-client -t` target for a container session that didn't
+    /// record its host pane (see `SessionState::host_tmux_pane`).
     pub container_target: String,
+    /// argv prefix that runs `tmux` inside the container (e.g. `dev tmux`),
+    /// used to select the session's window there. Empty: don't. From
+    /// [`CONTAINER_TMUX_ENV`] only.
+    pub container_tmux: Vec<String>,
 }
 
 impl Default for Config {
@@ -34,18 +50,56 @@ impl Default for Config {
             limit: 4,
             round_minutes: 30,
             container_target: "dev".to_string(),
+            container_tmux: Vec::new(),
         }
     }
 }
 
-/// The config in `state_dir`, plus a one-line warning (cleaned for display:
-/// it can quote the file) when the file exists but could not be used (the
-/// defaults apply then). A missing file is not a warning. A symlink is
+/// The config in `state_dir` with `container_tmux` from the host's
+/// [`CONTAINER_TMUX_ENV`], plus a one-line warning (cleaned for display: it
+/// can quote the file) when either could not be used (the defaults apply
+/// then). A missing file or unset variable is not a warning. A symlink is
 /// followed, so a config managed elsewhere (e.g. a dotfiles link) works.
 #[must_use]
 pub fn load(state_dir: &Path) -> (Config, Option<String>) {
-    let (config, warning) = load_raw(state_dir);
-    (config, warning.map(|w| crate::text::clean(&w)))
+    load_with(state_dir, &env())
+}
+
+/// The value of [`CONTAINER_TMUX_ENV`]: `Ok(None)` when unset, `Err` when
+/// it is not UTF-8. Read once and kept, so a reload (and a test) doesn't
+/// depend on the process environment.
+pub(crate) type Env = Result<Option<String>, ()>;
+
+pub(crate) fn env() -> Env {
+    match std::env::var(CONTAINER_TMUX_ENV) {
+        Ok(v) => Ok(Some(v)),
+        Err(std::env::VarError::NotPresent) => Ok(None),
+        Err(std::env::VarError::NotUnicode(_)) => Err(()),
+    }
+}
+
+/// [`load`] with the variable's value given.
+pub(crate) fn load_with(state_dir: &Path, env: &Env) -> (Config, Option<String>) {
+    let (mut config, file_warning) = load_raw(state_dir);
+    let env_warning = match env {
+        Ok(None) => None,
+        Ok(Some(v)) => match parse_command(v) {
+            Some(argv) => {
+                config.container_tmux = argv;
+                None
+            }
+            None => Some(format!("${CONTAINER_TMUX_ENV}: invalid command")),
+        },
+        Err(()) => Some(format!("${CONTAINER_TMUX_ENV}: not UTF-8")),
+    };
+    let warning = [file_warning, env_warning]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>();
+    (
+        config,
+        (!warning.is_empty()).then(|| crate::text::clean(&warning.join("; "))),
+    )
 }
 
 fn load_raw(state_dir: &Path) -> (Config, Option<String>) {
@@ -101,6 +155,11 @@ pub fn parse(text: &str) -> Result<Config, String> {
             ("container_target", Value::Text(v)) if is_tmux_target(&v) => {
                 config.container_target = v;
             }
+            ("container_tmux", _) => {
+                return Err(format!(
+                    "line {n}: `container_tmux` is read only from ${CONTAINER_TMUX_ENV} on the host"
+                ));
+            }
             ("limit" | "round_minutes" | "container_target", _) => {
                 return Err(format!("line {n}: invalid value for `{}`", key.trim()));
             }
@@ -145,6 +204,26 @@ fn is_tmux_target(s: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || "_-.:%=@$".contains(c))
 }
 
+/// What `container_tmux` is split on.
+const COMMAND_SEPARATORS: [char; 2] = [' ', '\t'];
+
+/// A command line split on spaces and tabs into argv (never through a
+/// shell); empty means "not set". Tokens may start with `-` (they are the
+/// command's own flags). Any other whitespace (which would look like a
+/// separator but isn't one), control characters, and values over
+/// [`MAX_COMMAND_BYTES`] are refused (`None`).
+fn parse_command(s: &str) -> Option<Vec<String>> {
+    let ok = s.len() <= MAX_COMMAND_BYTES
+        && s.chars()
+            .all(|c| COMMAND_SEPARATORS.contains(&c) || !(c.is_control() || c.is_whitespace()));
+    ok.then(|| {
+        s.split(COMMAND_SEPARATORS)
+            .filter(|t| !t.is_empty())
+            .map(str::to_string)
+            .collect()
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -167,6 +246,81 @@ mod tests {
     }
 
     #[test]
+    fn container_tmux_is_an_argv_prefix() {
+        assert_eq!(parse_command("  dev   tmux ").unwrap(), ["dev", "tmux"]);
+        assert_eq!(parse_command("dev\ttmux").unwrap(), ["dev", "tmux"]);
+        // Flags are the command's own, and nothing goes through a shell.
+        assert_eq!(
+            parse_command("docker exec -u me box tmux").unwrap(),
+            ["docker", "exec", "-u", "me", "box", "tmux"]
+        );
+        assert_eq!(parse_command("a;b $(c)").unwrap(), ["a;b", "$(c)"]);
+        assert!(parse_command("").unwrap().is_empty());
+    }
+
+    #[test]
+    fn container_tmux_refuses_control_characters_and_long_values() {
+        assert_eq!(parse_command("dev\u{1b}[2J tmux"), None);
+        assert_eq!(parse_command("dev\u{0}tmux"), None);
+        assert_eq!(parse_command("dev\u{7f}tmux"), None);
+        assert_eq!(parse_command("dev\ntmux"), None);
+        // Whitespace that is not a separator would split nowhere.
+        assert_eq!(parse_command("dev\u{a0}tmux"), None);
+        assert_eq!(parse_command("dev\u{2028}tmux"), None);
+        assert!(parse_command(&"a".repeat(256)).is_some());
+        assert_eq!(parse_command(&"a".repeat(257)), None);
+    }
+
+    #[test]
+    fn container_tmux_is_never_read_from_the_file() {
+        // A container that can write the state directory must not pick a
+        // program for the host to run.
+        let e = parse("container_tmux = \"sh -c evil\"").unwrap_err();
+        assert!(e.contains(CONTAINER_TMUX_ENV), "{e}");
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            tmp.path().join(FILE_NAME),
+            "limit = 2\ncontainer_tmux = \"sh -c evil\"\n",
+        )
+        .unwrap();
+        let (c, warning) = load_with(tmp.path(), &Ok(Some("dev tmux".into())));
+        assert_eq!(c.container_tmux, ["dev", "tmux"]);
+        assert_eq!(
+            c.limit,
+            Config::default().limit,
+            "the broken file is dropped"
+        );
+        assert!(warning.unwrap().contains("line 2"));
+    }
+
+    #[test]
+    fn load_takes_container_tmux_from_the_host_env() {
+        let tmp = tempfile::tempdir().unwrap();
+        assert_eq!(load_with(tmp.path(), &Ok(None)), (Config::default(), None));
+        let (c, warning) = load_with(tmp.path(), &Ok(Some("dev tmux".into())));
+        assert_eq!((c.container_tmux, warning), (args(&["dev", "tmux"]), None));
+        let (c, warning) = load_with(tmp.path(), &Ok(Some("dev\u{1b}tmux".into())));
+        assert!(c.container_tmux.is_empty());
+        let warning = warning.unwrap();
+        assert!(warning.contains(CONTAINER_TMUX_ENV), "{warning}");
+        assert!(!warning.contains('\u{1b}'));
+        let (c, warning) = load_with(tmp.path(), &Err(()));
+        assert!(c.container_tmux.is_empty());
+        assert!(warning.unwrap().contains("not UTF-8"));
+        // Both broken: both reasons, on one line.
+        std::fs::write(tmp.path().join(FILE_NAME), "limit = nope\n").unwrap();
+        let warning = load_with(tmp.path(), &Err(())).1.unwrap();
+        assert!(
+            warning.contains("line 1") && warning.contains("not UTF-8"),
+            "{warning}"
+        );
+    }
+
+    fn args(a: &[&str]) -> Vec<String> {
+        a.iter().map(|s| (*s).to_string()).collect()
+    }
+
+    #[test]
     fn rejects_bad_input() {
         assert!(parse("limit = 0").is_err());
         assert!(parse("limit = \"4\"").is_err());
@@ -181,6 +335,7 @@ mod tests {
 
     #[test]
     fn load_warns_on_a_broken_file_and_keeps_defaults() {
+        let load = |p: &Path| load_with(p, &Ok(None));
         let tmp = tempfile::tempdir().unwrap();
         assert_eq!(load(tmp.path()), (Config::default(), None));
         std::fs::write(tmp.path().join(FILE_NAME), "limit = nope\n").unwrap();
@@ -201,7 +356,7 @@ mod tests {
         std::fs::write(&elsewhere, "limit = 3\n").unwrap();
         std::os::unix::fs::symlink(&elsewhere, tmp.path().join(FILE_NAME)).unwrap();
         assert_eq!(
-            load(tmp.path()),
+            load_with(tmp.path(), &Ok(None)),
             (
                 Config {
                     limit: 3,

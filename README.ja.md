@@ -287,7 +287,7 @@ key:
 
 | キー | 動作 |
 |---|---|
-| `1`-`9` | その session の tmux pane に移る (`tmux switch-client`)。container の session は `container_target` の window に移る |
+| `1`-`9` | その session の tmux pane に移る (`tmux switch-client`)。container の session は、container の中でもその session の window と pane を選ぶ (「container の session に移る」を参照) |
 | `j` / `k` (`↓` / `↑`) | 選ぶ行を動かす |
 | `Enter` | 選んだ行に移る |
 | `d` | 選んだ行の worktree で `hunk diff <merge-base> --watch` を board の上の tmux の popup で開く (`<merge-base>` は `git merge-base HEAD origin/HEAD`)。hunk を終えると popup が閉じる。hunk が失敗した時は error を出したまま残り、`Esc` で閉じる。window の layout は変わらない |
@@ -300,7 +300,8 @@ tmux の外では、移動や名前変更の key (`1`-`9`・`Enter`・`d`・`p`)
 
 board が呼ぶ tool:
 
-- `tmux`: `1`-`9`・`Enter`・`d`・`p` の key。
+- `tmux`: `1`-`9`・`Enter`・`d`・`p` の key。container の session では、
+  env `CCFOCUS_CONTAINER_TMUX` に書いた command も (host で、shell を通さずに) 実行する。
 - `hunk`: `d` の key。
 - `gh`: `tasks done` と、`to finish` の PR の判定。`gh` が無い・失敗した時は、
   `tasks done` が `n/a` になり、`to finish` は PR で絞らない。
@@ -314,10 +315,25 @@ board は `git fetch` をしない。local の ref だけを読む。session の
 dotfiles から link で配れる。壊れていたら既定の値で動き、理由を最下行に出す。
 
 ```toml
-limit = 4                # 並行の上限 (1-99)
-round_minutes = 30       # 次に回る時刻の間隔。0 で出さない (0-1440)
-container_target = "dev" # container の session に移る時の tmux target
+limit = 4                   # 並行の上限 (1-99)
+round_minutes = 30          # 次に回る時刻の間隔。0 で出さない (0-1440)
+container_target = "dev"    # container の session に移る時の fallback の tmux target
 ```
+
+container の中の tmux を動かす command は、`config.toml` からは読まない。host の
+環境変数 `CCFOCUS_CONTAINER_TMUX` に書く。board を起動する host の shell か tmux の
+環境に置く。例: `export CCFOCUS_CONTAINER_TMUX="dev tmux"`。未設定なら、board は
+container の tmux を操作しない。
+
+理由: この設定は、board が host で実行する program を決めるため。dev container は
+state dir (`~/.claude`) を書き込みのできる形で mount することがあり、`config.toml`
+から読むと、container が host で動く program を選べてしまう。`config.toml` に
+`container_tmux` の行があると、壊れた行として拒否する (他の壊れた行と同じく、file
+全体が既定値になり、`$CCFOCUS_CONTAINER_TMUX` を使うよう最下行に出す)。
+
+値は、space と tab で区切って argv にし、shell を通さずに実行する。NBSP などの他の
+空白は区切りにならない。space と tab 以外の空白や制御文字を含む値、256 byte を超える
+値、UTF-8 でない値は無視し、理由を最下行に出す (file の警告があれば並べて 1 行に)。
 
 掃除: board (`ccfocus` の TUI と cctop の Focus panel) が、起動時と 1 時間ごとに、
 90 日より古い event の log (`events/*.tsv`) と、10 分より古い hook の temp file
@@ -326,6 +342,58 @@ container_target = "dev" # container の session に移る時の tmux target
 外への送信: `gh` が GitHub に問い合わせるのは、自分 (`@me`) の PR の検索と、
 各 session の repo での `gh pr list --author @me` だけ。board は prompt や
 transcript を読まない。
+
+#### container の session に移る
+
+board を host の tmux で動かし、Claude の session が dev container の中にある時、
+その行で `1`-`9` か `Enter` を押すと、次の 2 段階で移る。
+
+1. `CCFOCUS_CONTAINER_TMUX` が設定されていて、session の `tmux_pane` (container の中の
+   pane、`%N`) が分かる時は、`<CCFOCUS_CONTAINER_TMUX> select-window -t <pane>` と
+   `<CCFOCUS_CONTAINER_TMUX> select-pane -t <pane>` を実行する。container の中の tmux で、
+   その session の window と pane を選ぶ。`CCFOCUS_CONTAINER_TMUX="dev tmux"` と、
+   dotfiles の `dev tmux <args>` (`docker exec -u <user> <container> tmux <args>`
+   のこと) の組み合わせなら、container の中で tmux が動く。
+   その後、`<CCFOCUS_CONTAINER_TMUX> show-environment -t <tmux_pane> CCFOCUS_HOST_PANE`
+   を実行し、今 container を映している host の pane を container の tmux に聞く
+   (理由は下に書く)。
+2. host の client を、host の pane へ `tmux switch-client -t` で移す。候補は次の順
+   に試す: 1 で今聞いた pane、session の file の `host_tmux_pane` (Claude の起動時
+   の値)、`container_target`。値が無い候補は飛ばす。1 で今聞いた pane と `host_tmux_pane`
+   は `%N` の形でなければ飛ばす。`container_target` は `dev` や `main:dev` のような名前の
+   target でよい (config.toml の値)。どの候補も、`switch-client` が失敗したら次へ進む。
+
+1 が失敗しても 2 は行い、1 の error は最下行に出る。select が失敗した時は問い合わせ
+を省く。`CCFOCUS_CONTAINER_TMUX` が無ければ、問い合わせも含めて 1 をしない (記録の pane、
+次に `container_target`)。候補が失敗して後の候補に移った時は、その理由を最下行に出す (`fell back to <target>: <理由>`)。
+
+聞く理由: `dev in` で入り直すと、container の tmux は `update-environment` で、
+session env の `CCFOCUS_HOST_PANE` を新しい host の pane に書き換える。既に動いて
+いる Claude と hook は起動時の値のままで、入力待ちの session は hook の event も
+来ないので、記録だけでは古い pane に移ってしまう。container の `tmux.conf` に
+`set -ga update-environment CCFOCUS_HOST_PANE` が要る (dotfiles は設定済み)。無い
+時や問い合わせが失敗した時は、記録の pane を使う。答えも container 由来なので、
+使う前に `%N` の形を確かめる。
+
+`host_tmux_pane` を記録するには、container を起動する側が、host の pane を
+`CCFOCUS_HOST_PANE` の環境変数で渡す。例: `docker exec -e CCFOCUS_HOST_PANE="$TMUX_PANE" …`。
+container の中の hook がこれを読んで `host_tmux_pane` に記録する。記録するのは
+`%N` の形の値だけで、host の hook はこの変数を読まない。
+
+session の file は container が書くので、board は信用しない。pane id は `%N` の形を
+確かめてから tmux の target にだけ使い、実行する command は host の env `CCFOCUS_CONTAINER_TMUX`
+からだけ取る。`%N` の形でさえあれば host の任意の pane を指せるが、起きるのは移動
+だけで、command は実行されない。desktop app の session (tmux の外) には、今までどおり移れない。
+
+制約:
+
+- 同じ container に複数の host pane から同時に attach していると、最後に attach
+  した pane に移る。
+- container から detach した (`dev in` を抜けた) 後は、その host pane は host の
+  shell に戻っている。switch は成功するが、container は映っていない。
+- `CCFOCUS_CONTAINER_TMUX` は 1 つの値なので、container は 1 つだと前提にしている。
+  複数の container の session が同じ state dir にあると、別の container の同じ番号の
+  pane を選ぶことがある。
 
 ## Releasing
 

@@ -52,6 +52,11 @@ pub struct SessionState {
     pub tmux: Option<String>,
     /// `$TMUX_PANE` (`%N`), stable across window renumbering.
     pub tmux_pane: Option<String>,
+    /// Container sessions only: the host tmux pane (`%N`) of the window that
+    /// runs the container, from `$CCFOCUS_HOST_PANE`. Written by the container,
+    /// so readers must validate it before use. Absent in older files.
+    #[serde(default)]
+    pub host_tmux_pane: Option<String>,
     /// Parent process of the hook (the Claude process when the hook is
     /// registered without a wrapping shell). In a container this is a
     /// container-namespace pid.
@@ -180,6 +185,7 @@ mod tests {
             hostname: Some("example-host".into()),
             tmux: Some("work:2.1".into()),
             tmux_pane: Some("%7".into()),
+            host_tmux_pane: None,
             pid: Some(4242),
             cwd: "/work/example".into(),
             repo: Some("/work/example".into()),
@@ -205,6 +211,14 @@ mod tests {
         assert!(json.contains("\"status\":\"working\""));
         assert!(json.contains("\"host\":\"host\""));
         assert_eq!(serde_json::from_str::<SessionState>(&json).unwrap(), s);
+    }
+
+    #[test]
+    fn host_tmux_pane_is_optional_in_older_files() {
+        let mut v = serde_json::to_value(sample("old")).unwrap();
+        v.as_object_mut().unwrap().remove("host_tmux_pane");
+        let s: SessionState = serde_json::from_value(v).unwrap();
+        assert_eq!(s, sample("old"));
     }
 
     #[test]

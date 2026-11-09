@@ -12,12 +12,19 @@ const BATCH: &str = include_str!("fixtures/post_tool_batch.json");
 const FAILURE: &str = include_str!("fixtures/stop_failure.json");
 
 fn ccfocus(args: &[&str], stdin: &str) -> Output {
+    ccfocus_with(args, stdin, &[])
+}
+
+/// `ccfocus` with `env` set on top of a clean environment.
+fn ccfocus_with(args: &[&str], stdin: &str, env: &[(&str, &str)]) -> Output {
     let mut child = Command::new(env!("CARGO_BIN_EXE_ccfocus"))
         .args(args)
         // Keep the host's tmux / container markers out of the run.
         .env_remove("TMUX_PANE")
         .env_remove("DEV_CONTAINER")
+        .env_remove("CCFOCUS_HOST_PANE")
         .env_remove("CCFOCUS_STATE_DIR")
+        .envs(env.iter().copied())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -64,6 +71,37 @@ fn records_and_removes_a_session() {
 
     assert_quiet_success(&hook("SessionEnd", &dir, END), false);
     assert!(!path.exists());
+}
+
+#[test]
+fn only_a_container_hook_records_a_valid_host_pane() {
+    let host_pane = |env: &[(&str, &str)]| -> serde_json::Value {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("focus");
+        let out = ccfocus_with(
+            &["hook", "SessionStart", "--state-dir", dir.to_str().unwrap()],
+            START,
+            env,
+        );
+        assert_quiet_success(&out, false);
+        let path = dir
+            .join("sessions")
+            .join("00000000-0000-4000-8000-000000000001.json");
+        serde_json::from_slice::<serde_json::Value>(&std::fs::read(path).unwrap()).unwrap()
+            ["host_tmux_pane"]
+            .clone()
+    };
+    assert_eq!(
+        host_pane(&[("DEV_CONTAINER", "1"), ("CCFOCUS_HOST_PANE", "%5")]),
+        "%5"
+    );
+    assert!(host_pane(&[("CCFOCUS_HOST_PANE", "%5")]).is_null());
+    for bad in ["#(touch x)", "-t %5", "5", "%5 "] {
+        assert!(
+            host_pane(&[("DEV_CONTAINER", "1"), ("CCFOCUS_HOST_PANE", bad)]).is_null(),
+            "{bad:?}"
+        );
+    }
 }
 
 #[test]
