@@ -135,6 +135,9 @@ fn group_target(pgid: u32) -> Option<String> {
 /// [`READ_WINDOW`] after the exit (a grandchild holding it) comes back
 /// empty for stdout and as [`STDERR_UNREAD`] for stderr, so a failure
 /// still says why it has no message.
+///
+/// Unlike [`run`], the command stays in our process group and nothing is
+/// group-killed: what it starts (a popup) is meant to outlive the call.
 pub(crate) fn start(mut cmd: Command, settle: Duration) -> Result<Option<Output>, ()> {
     let mut child = cmd
         .stdin(Stdio::null())
@@ -336,6 +339,17 @@ mod tests {
         false
     }
 
+    /// SIGKILLs process `.0` when dropped.
+    struct KillOnDrop(u32);
+
+    impl Drop for KillOnDrop {
+        fn drop(&mut self) {
+            let mut k = Command::new("kill");
+            k.args(["-s", "KILL", "--", &self.0.to_string()]);
+            let _ = run(k, Duration::from_secs(1));
+        }
+    }
+
     #[test]
     fn a_timeout_kills_what_the_command_started_in_the_background() {
         let dir = tempfile::tempdir().unwrap();
@@ -363,17 +377,17 @@ mod tests {
             "sleep 30 >/dev/null 2>&1 & echo $! > \"$PIDFILE\"; echo ok",
             &pidfile,
         );
-        let o = run(cmd, Duration::from_secs(10)).unwrap();
-        assert_eq!(o.stdout, "ok\n");
+        let o = run(cmd, Duration::from_secs(10));
         let pid: u32 = std::fs::read_to_string(&pidfile)
             .unwrap()
             .trim()
             .parse()
             .unwrap();
+        // Kill the sleep even if an assert below fails.
+        let guard = KillOnDrop(pid);
+        assert_eq!(o.map(|o| o.stdout).as_deref(), Some("ok\n"));
         assert_eq!(crate::app::pid_alive(pid), Some(true));
-        let mut k = Command::new("kill");
-        k.args(["-s", "KILL", "--", &pid.to_string()]);
-        assert!(run(k, Duration::from_secs(1)).is_some_and(|o| o.success));
+        drop(guard);
         assert!(background_is_gone(&pidfile));
     }
 
