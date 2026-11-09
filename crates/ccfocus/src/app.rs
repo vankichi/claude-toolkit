@@ -9,8 +9,9 @@
 use crate::board::{self, Board, Shown, Side};
 use crate::config::{self, Config};
 use crate::events::{self, EventLog};
+use crate::job::Job;
 use crate::probe::{Probe, SystemProbe};
-use crate::repos::{self, Job, Tasks, Worktree};
+use crate::repos::{self, Tasks, Worktree};
 use crate::tmux::{self, Client};
 use crate::ui::{TaskCount, Today, View};
 use cctk::focus;
@@ -264,7 +265,7 @@ impl Focus {
             match cache.get(&pid) {
                 Some((at, v)) if clock.duration_since(*at) < ALIVE_TTL => *v,
                 _ => {
-                    let v = pid_alive(pid);
+                    let v = crate::cmd::pid_alive(pid);
                     cache.insert(pid, (clock, v));
                     v
                 }
@@ -490,30 +491,6 @@ pub fn next_round(now: DateTime<FixedOffset>, minutes: u32) -> Option<(String, i
     Some((format!("{:02}:{:02}", at / 3600, at % 3600 / 60), left))
 }
 
-/// Whether `pid` is running, via `kill -0` (`std` has no portable check and
-/// this workspace forbids `unsafe`). A permission error still means the
-/// process exists. `None` when the answer is unclear.
-#[must_use]
-pub fn pid_alive(pid: u32) -> Option<bool> {
-    if cfg!(not(unix)) || pid == 0 {
-        return None;
-    }
-    let mut cmd = std::process::Command::new("kill");
-    cmd.args(["-0", &pid.to_string()]).env("LC_ALL", "C");
-    let out = crate::cmd::run(cmd, Duration::from_secs(1))?;
-    if out.success {
-        return Some(true);
-    }
-    let err = out.stderr.to_ascii_lowercase();
-    if err.contains("no such process") {
-        Some(false)
-    } else if err.contains("not permitted") {
-        Some(true)
-    } else {
-        None
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -560,14 +537,6 @@ mod tests {
             start_of_day(at("2026-01-05T14:24:00+09:00")),
             "2026-01-05T00:00:00+09:00"
         );
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn own_pid_is_alive() {
-        // The sandbox some runs use refuses signals; that still reads as alive.
-        assert_eq!(pid_alive(std::process::id()), Some(true));
-        assert_eq!(pid_alive(0), None);
     }
 
     fn write_session(dir: &Path, id: &str, status: Status, updated: &str) {

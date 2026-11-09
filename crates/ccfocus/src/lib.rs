@@ -7,16 +7,17 @@
 //! never stored. All writes live in this crate; `cctk` only reads.
 
 pub mod app;
-pub mod board;
+mod board;
 mod cmd;
-pub mod config;
-pub mod events;
-pub mod fsx;
+mod config;
+mod events;
+mod fsx;
+mod job;
 pub mod probe;
-pub mod prune;
-pub mod repos;
-pub mod text;
-pub mod tmux;
+mod prune;
+mod repos;
+mod text;
+mod tmux;
 pub mod tui;
 pub mod ui;
 
@@ -138,19 +139,7 @@ pub fn handle(
     let path = focus::session_path(state_dir, &input.session_id);
 
     let status = match event {
-        Event::SessionEnd => {
-            // Stay fast (1.5 s budget): no probes, no event line.
-            // Removed under the session lock so a writer still holding it
-            // finishes first (waiters then retry on a fresh lock file).
-            if fsx::is_real_dir(state_dir)? && fsx::is_real_dir(&focus::sessions_dir(state_dir))? {
-                let lock_path = session_lock_path(state_dir, &input.session_id);
-                let lock = fsx::lock_exclusive(&lock_path)?;
-                fsx::remove_if_present(&path)?;
-                fsx::remove_if_present(&lock_path)?;
-                drop(lock);
-            }
-            return Ok(Outcome::Removed);
-        }
+        Event::SessionEnd => return end_session(state_dir, &input.session_id, &path),
         // Refined below: a mid-turn compaction keeps the current status.
         Event::SessionStart => Status::Idle,
         Event::UserPromptSubmit => Status::Working,
@@ -202,17 +191,9 @@ pub fn handle(
         .as_ref()
         .and_then(|s| s.hostname.clone())
         .or_else(|| probe.hostname());
-    // Kept while the file lives. SessionEnd deletes it, so a resumed session
-    // recovers its original start from the transcript's first timestamp.
     let started_at = match existing {
         Some(prev) => prev.started_at,
-        None if event == Event::SessionStart && input.source.as_deref() == Some("resume") => {
-            transcript.and_then(first_timestamp).map_or_else(
-                || stamp.clone(),
-                |t| rfc3339(&t.with_timezone(&now.timezone())),
-            )
-        }
-        None => stamp.clone(),
+        None => first_start(event, &input, transcript, now, &stamp),
     };
 
     let host = probe.host();
@@ -245,11 +226,52 @@ pub fn handle(
     Ok(Outcome::Written(status))
 }
 
+/// `SessionEnd`: stay fast (1.5 s budget), so no probes and no event line.
+/// The file is removed under the session lock so a writer still holding it
+/// finishes first (waiters then retry on a fresh lock file).
+fn end_session(state_dir: &Path, session_id: &str, path: &Path) -> Result<Outcome> {
+    if sessions_dir_ready(state_dir)? {
+        let lock_path = session_lock_path(state_dir, session_id);
+        let lock = fsx::lock_exclusive(&lock_path)?;
+        fsx::remove_if_present(path)?;
+        fsx::remove_if_present(&lock_path)?;
+        drop(lock);
+    }
+    Ok(Outcome::Removed)
+}
+
+/// Whether the state dir and its `sessions/` already exist as real
+/// directories (for the events that never create them).
+fn sessions_dir_ready(state_dir: &Path) -> Result<bool> {
+    Ok(fsx::is_real_dir(state_dir)? && fsx::is_real_dir(&focus::sessions_dir(state_dir))?)
+}
+
+/// `started_at` for a session with no file yet: `stamp` (now), unless it
+/// is a resume. The file is kept while the session lives; `SessionEnd`
+/// deletes it, so a resumed session recovers its original start from the
+/// transcript's first timestamp.
+fn first_start(
+    event: Event,
+    input: &HookInput,
+    transcript: Option<&Path>,
+    now: DateTime<FixedOffset>,
+    stamp: &str,
+) -> String {
+    let resumed = event == Event::SessionStart && input.source.as_deref() == Some("resume");
+    resumed
+        .then(|| transcript.and_then(first_timestamp))
+        .flatten()
+        .map_or_else(
+            || stamp.to_string(),
+            |t| rfc3339(&t.with_timezone(&now.timezone())),
+        )
+}
+
 /// `PostToolBatch` fires after every batch of tool calls, so it stays cheap: no
 /// probes, and nothing written (nor any directory created) unless a waiting
 /// session has had its prompt answered (the approved tools just ran).
 fn resume_after_wait(state_dir: &Path, path: &Path, now: DateTime<FixedOffset>) -> Result<Outcome> {
-    if !(fsx::is_real_dir(state_dir)? && fsx::is_real_dir(&focus::sessions_dir(state_dir))?) {
+    if !sessions_dir_ready(state_dir)? {
         return Ok(Outcome::Ignored);
     }
     let Some(mut state) = focus::read_session(path) else {

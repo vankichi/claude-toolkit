@@ -6,7 +6,7 @@
 
 use std::io::Read;
 use std::path::Path;
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::mpsc::Receiver;
 use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
@@ -77,16 +77,9 @@ fn wait_for(running: &Running, child: &mut Child, timeout: Duration) -> Option<O
     };
     let out = reader(out);
     let err = reader(err);
-    let deadline = Instant::now() + timeout;
-    let status = loop {
-        match child.try_wait() {
-            Ok(Some(status)) => break status,
-            Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(5)),
-            _ => {
-                give_up(running, child);
-                return None;
-            }
-        }
+    let Ok(Some(status)) = wait_until(child, Instant::now() + timeout) else {
+        give_up(running, child);
+        return None;
     };
     let (stdout, stderr) = read_after_exit(&out, &err);
     if stdout.is_none() || stderr.is_none() {
@@ -202,11 +195,17 @@ fn kill_group(pgid: u32) {
 /// [`kill_group`] for several groups with a single `kill`.
 fn kill_groups(pgids: &[u32]) {
     let targets: Vec<String> = pgids.iter().filter_map(|&p| group_target(p)).collect();
-    if targets.is_empty() {
-        return;
+    if !targets.is_empty() {
+        sigkill(&targets);
     }
+}
+
+/// Run `kill -s KILL -- <targets>`, waiting up to [`KILL_TIMEOUT`]. Not
+/// through [`run`]: [`Running::close`] calls this holding the lock `run`
+/// takes.
+fn sigkill(targets: &[String]) {
     let Ok(mut k) = Command::new("kill")
-        .args(sigkill_args(&targets))
+        .args(sigkill_args(targets))
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -214,12 +213,20 @@ fn kill_groups(pgids: &[u32]) {
     else {
         return;
     };
-    let deadline = Instant::now() + KILL_TIMEOUT;
-    while matches!(k.try_wait(), Ok(None)) && Instant::now() < deadline {
-        std::thread::sleep(Duration::from_millis(5));
-    }
+    let _ = wait_until(&mut k, Instant::now() + KILL_TIMEOUT);
     let _ = k.kill();
     let _ = k.wait();
+}
+
+/// Poll `child` until it exits (`Ok(Some)`), `deadline` passes (`Ok(None)`)
+/// or waiting fails.
+fn wait_until(child: &mut Child, deadline: Instant) -> std::io::Result<Option<ExitStatus>> {
+    loop {
+        match child.try_wait()? {
+            None if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(5)),
+            done => return Ok(done),
+        }
+    }
 }
 
 /// `kill` arguments that SIGKILL `targets` (pids, or `-<pgid>` for a
@@ -261,29 +268,25 @@ pub(crate) fn start(mut cmd: Command, settle: Duration) -> Result<Option<Output>
     };
     let out = reader(out);
     let err = reader(err);
-    let deadline = Instant::now() + settle;
-    loop {
-        match child.try_wait() {
-            Ok(Some(status)) => {
-                let (stdout, stderr) = read_after_exit(&out, &err);
-                return Ok(Some(Output {
-                    success: status.success(),
-                    stdout: stdout.unwrap_or_default(),
-                    stderr: stderr.unwrap_or_else(|| STDERR_UNREAD.to_string()),
-                }));
-            }
-            Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(5)),
-            Ok(None) => {
-                std::thread::spawn(move || {
-                    let _ = child.wait();
-                });
-                return Ok(None);
-            }
-            Err(_) => {
-                let _ = child.kill();
+    match wait_until(&mut child, Instant::now() + settle) {
+        Ok(Some(status)) => {
+            let (stdout, stderr) = read_after_exit(&out, &err);
+            Ok(Some(Output {
+                success: status.success(),
+                stdout: stdout.unwrap_or_default(),
+                stderr: stderr.unwrap_or_else(|| STDERR_UNREAD.to_string()),
+            }))
+        }
+        Ok(None) => {
+            std::thread::spawn(move || {
                 let _ = child.wait();
-                return Err(());
-            }
+            });
+            Ok(None)
+        }
+        Err(_) => {
+            let _ = child.kill();
+            let _ = child.wait();
+            Err(())
         }
     }
 }
@@ -320,6 +323,30 @@ fn drain(mut r: impl Read) -> String {
     let _ = r.by_ref().take(MAX_OUTPUT).read_to_end(&mut buf);
     let _ = std::io::copy(&mut r, &mut std::io::sink());
     String::from_utf8_lossy(&buf).into_owned()
+}
+
+/// Whether `pid` is running, via `kill -0` (`std` has no portable check and
+/// this workspace forbids `unsafe`). A permission error still means the
+/// process exists. `None` when the answer is unclear.
+#[must_use]
+pub(crate) fn pid_alive(pid: u32) -> Option<bool> {
+    if cfg!(not(unix)) || pid == 0 {
+        return None;
+    }
+    let mut cmd = Command::new("kill");
+    cmd.args(["-0", &pid.to_string()]).env("LC_ALL", "C");
+    let out = run(cmd, KILL_TIMEOUT)?;
+    if out.success {
+        return Some(true);
+    }
+    let err = out.stderr.to_ascii_lowercase();
+    if err.contains("no such process") {
+        Some(false)
+    } else if err.contains("not permitted") {
+        Some(true)
+    } else {
+        None
+    }
 }
 
 /// Each git call; local plumbing finishes in milliseconds.
@@ -442,7 +469,7 @@ mod tests {
             .expect("a pid");
         let deadline = Instant::now() + Duration::from_secs(5);
         while Instant::now() < deadline {
-            if crate::app::pid_alive(pid) == Some(false) {
+            if pid_alive(pid) == Some(false) {
                 return true;
             }
             std::thread::sleep(Duration::from_millis(50));
@@ -455,9 +482,7 @@ mod tests {
 
     impl Drop for KillOnDrop {
         fn drop(&mut self) {
-            let mut k = Command::new("kill");
-            k.args(sigkill_args(&[self.0.to_string()]));
-            let _ = run(k, Duration::from_secs(1));
+            sigkill(&[self.0.to_string()]);
         }
     }
 
@@ -502,7 +527,7 @@ mod tests {
         // Wait first: a killed sleep reads as alive until init reaps it, so
         // checking at once could pass even if run had killed it.
         std::thread::sleep(Duration::from_millis(300));
-        assert_eq!(crate::app::pid_alive(pid), Some(true));
+        assert_eq!(pid_alive(pid), Some(true));
         drop(guard);
         assert!(background_is_gone(&pidfile));
     }
@@ -590,6 +615,13 @@ mod tests {
         let o = run_in(&running, cmd, Duration::from_secs(5)).unwrap();
         assert_eq!(o.stdout, "ok\n");
         assert!(running.lock().ids.is_empty());
+    }
+
+    #[test]
+    fn own_pid_is_alive() {
+        // The sandbox some runs use refuses signals; that still reads as alive.
+        assert_eq!(pid_alive(std::process::id()), Some(true));
+        assert_eq!(pid_alive(0), None);
     }
 
     #[test]
