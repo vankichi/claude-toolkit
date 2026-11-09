@@ -1100,6 +1100,20 @@ mod tests {
         NaiveDate::from_ymd_opt(y, m, d).unwrap()
     }
 
+    /// `draw(st)` on an 80×12 test terminal, as one string of cell symbols.
+    fn render(st: &AppState) -> String {
+        use ratatui::{Terminal, backend::TestBackend};
+        let mut terminal = Terminal::new(TestBackend::new(80, 12)).unwrap();
+        terminal.draw(|f| draw(f, st)).unwrap();
+        terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(ratatui::buffer::Cell::symbol)
+            .collect()
+    }
+
     fn db_with(items: &[(Category, &str, &str)]) -> UsageDb {
         let mut db = UsageDb::default();
         let ts = chrono::Utc.with_ymd_and_hms(2026, 7, 16, 12, 0, 0).unwrap();
@@ -1678,8 +1692,6 @@ mod tests {
 
     #[test]
     fn watch_mode_renders_running_line_and_active_spinner() {
-        use ratatui::{Terminal, backend::TestBackend};
-
         let db = db_with(&[
             (Category::Skill, "brainstorm", "p"),
             (Category::Skill, "idle-one", "p"),
@@ -1693,15 +1705,7 @@ mod tests {
         active.record_session();
         st.set_active(active);
 
-        let mut terminal = Terminal::new(TestBackend::new(80, 12)).unwrap();
-        terminal.draw(|f| draw(f, &st)).unwrap();
-        let grid: String = terminal
-            .backend()
-            .buffer()
-            .content
-            .iter()
-            .map(ratatui::buffer::Cell::symbol)
-            .collect();
+        let grid = render(&st);
 
         // The running-summary line is present.
         assert!(
@@ -1715,23 +1719,13 @@ mod tests {
 
     #[test]
     fn snapshot_mode_has_no_running_line() {
-        use ratatui::{Terminal, backend::TestBackend};
-
         let db = db_with(&[(Category::Skill, "brainstorm", "p")]);
         let mut st = AppState::new(db, ProvenanceMap::default(), day(2026, 7, 16));
         st.tab = Category::Skill;
         st.window = Window::All;
         // watch stays false.
 
-        let mut terminal = Terminal::new(TestBackend::new(80, 12)).unwrap();
-        terminal.draw(|f| draw(f, &st)).unwrap();
-        let grid: String = terminal
-            .backend()
-            .buffer()
-            .content
-            .iter()
-            .map(ratatui::buffer::Cell::symbol)
-            .collect();
+        let grid = render(&st);
 
         assert!(!grid.contains("running:"));
         assert!(!grid.contains("· watch"));
