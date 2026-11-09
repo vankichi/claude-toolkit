@@ -2,14 +2,16 @@
 //! active session.
 //!
 //! Self-contained (does not re-enter ccwatch): each tailed session folds into
-//! its own [`Slot`] (tokens, cost, messages, context, model), while tool names
+//! its own [`SessionTotals`] (tokens, cost, messages, context, model, tools;
+//! per session so a re-tailed session that replays from byte 0 rebuilds its
+//! counts instead of double-counting), while tool names
 //! and a timestamped token log are kept globally so the recent-tools strip and
 //! the real-time tokens/minute rate chart aggregate every session at once.
 //! Pure and terminal-free, so it is fully unit-tested by feeding parsed lines.
 
 use ccstat::model::Category;
-use cctk::jsonl::{Extracted, Kind, Line, Usage};
-use cctk::pricing::{ModelInfo, Pricing};
+use cctk::jsonl::{Extracted, Kind, Line};
+use cctk::session::SessionTotals;
 use chrono::{DateTime, Duration, Utc};
 use std::collections::{BTreeMap, HashMap, VecDeque};
 
@@ -17,80 +19,9 @@ use std::collections::{BTreeMap, HashMap, VecDeque};
 /// outside every rate window anyway).
 const EVENTS_CAP: usize = 4096;
 
-/// Per-session running aggregate.
-#[derive(Debug)]
-struct Slot {
-    model: Option<String>,
-    model_info: ModelInfo,
-    pricing: Pricing,
-    total: Usage,
-    cost_usd: f64,
-    messages: u64,
-    last_context_size: u64,
-    /// Working directory captured from the first line that carries one; its
-    /// basename is the session's project name.
-    cwd: Option<String>,
-    /// Tool-use counts for this session (per-slot so a re-tailed session that
-    /// replays from byte 0 rebuilds its counts instead of double-counting).
-    tool_counts: HashMap<String, u64>,
-}
-
-impl Default for Slot {
-    fn default() -> Self {
-        let info = ModelInfo::default();
-        Self {
-            model: None,
-            model_info: info,
-            pricing: info.pricing(),
-            total: Usage::default(),
-            cost_usd: 0.0,
-            messages: 0,
-            last_context_size: 0,
-            cwd: None,
-            tool_counts: HashMap::new(),
-        }
-    }
-}
-
-impl Slot {
-    fn ingest(&mut self, line: &Line) {
-        if self.cwd.is_none()
-            && let Some(cwd) = &line.cwd
-        {
-            self.cwd = Some(cwd.clone());
-        }
-        if let Some(model) = &line.model
-            && self.model.as_deref() != Some(model.as_str())
-        {
-            self.model = Some(model.clone());
-            self.model_info = ModelInfo::parse(model);
-            self.pricing = self.model_info.pricing();
-        }
-        for name in line.tool_use_names() {
-            if !name.is_empty() {
-                *self.tool_counts.entry(name.to_string()).or_insert(0) += 1;
-            }
-        }
-        let Some(usage) = line.usage else { return };
-        self.total += usage;
-        self.last_context_size = usage.context_size();
-        self.cost_usd += self.pricing.cost_usd(&usage);
-        self.messages += 1;
-    }
-
-    fn tokens(&self) -> u64 {
-        self.total.total_tokens()
-    }
-
-    fn context_pct(&self) -> f64 {
-        let window = self.model_info.context_window().max(1);
-        (self.last_context_size as f64 / window as f64).min(1.0)
-    }
-
-    /// Project name = last path component of the captured cwd.
-    fn project(&self) -> Option<&str> {
-        self.cwd.as_deref().and_then(cctk::paths::cwd_basename)
-    }
+/// How full a session's context is, against its model's window.
+fn session_context_pct(s: &SessionTotals) -> f64 {
+    s.context_pct(s.model_info().context_window())
 }
 
 /// Identity of a tailed session: its file-stem id and (once known) the human
@@ -114,7 +45,7 @@ pub struct SessionView {
 /// Rollup across all active sessions.
 #[derive(Debug, Default)]
 pub struct NowStats {
-    sessions: BTreeMap<usize, Slot>,
+    sessions: BTreeMap<usize, SessionTotals>,
     /// Per-tag session identity (file-stem id + resolved name).
     meta: HashMap<usize, SessionMeta>,
     /// Timestamped usage events across all sessions, oldest first, capped:
@@ -200,10 +131,10 @@ impl NowStats {
                 SessionView {
                     project: slot.project().unwrap_or("?").to_string(),
                     name,
-                    model: slot.model.clone().unwrap_or_else(|| "—".to_string()),
-                    tokens: slot.tokens(),
-                    cost_usd: slot.cost_usd,
-                    context_pct: slot.context_pct(),
+                    model: slot.model().unwrap_or("—").to_string(),
+                    tokens: slot.total().total_tokens(),
+                    cost_usd: slot.cost_usd(),
+                    context_pct: session_context_pct(slot),
                 }
             })
             .collect();
@@ -230,7 +161,7 @@ impl NowStats {
         let mut models: Vec<&str> = self
             .sessions
             .values()
-            .filter_map(|s| s.model.as_deref())
+            .filter_map(SessionTotals::model)
             .collect();
         models.sort_unstable();
         models.dedup();
@@ -244,17 +175,20 @@ impl NowStats {
 
     #[must_use]
     pub fn total_tokens(&self) -> u64 {
-        self.sessions.values().map(Slot::tokens).sum()
+        self.sessions
+            .values()
+            .map(|s| s.total().total_tokens())
+            .sum()
     }
 
     #[must_use]
     pub fn cost_usd(&self) -> f64 {
-        self.sessions.values().map(|s| s.cost_usd).sum()
+        self.sessions.values().map(SessionTotals::cost_usd).sum()
     }
 
     #[must_use]
     pub fn assistant_messages(&self) -> u64 {
-        self.sessions.values().map(|s| s.messages).sum()
+        self.sessions.values().map(SessionTotals::messages).sum()
     }
 
     /// Fill fraction of the fullest active session's context window (context is
@@ -263,7 +197,7 @@ impl NowStats {
     pub fn context_pct(&self) -> f64 {
         self.sessions
             .values()
-            .map(Slot::context_pct)
+            .map(session_context_pct)
             .fold(0.0_f64, f64::max)
     }
 
@@ -273,7 +207,7 @@ impl NowStats {
     pub fn tools_by_count(&self) -> Vec<(&str, u64)> {
         let mut agg: HashMap<&str, u64> = HashMap::new();
         for slot in self.sessions.values() {
-            for (name, &c) in &slot.tool_counts {
+            for (name, &c) in slot.tool_counts() {
                 *agg.entry(name.as_str()).or_insert(0) += c;
             }
         }

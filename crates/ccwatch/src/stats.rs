@@ -1,8 +1,8 @@
 use cctk::jsonl::{Kind, Line, Usage};
-use cctk::pricing::ModelInfo;
+use cctk::session::SessionTotals;
 use chrono::{DateTime, Utc};
 use ratatui::style::Color;
-use std::collections::{HashMap, VecDeque};
+use std::collections::VecDeque;
 use std::time::Instant;
 
 const HISTORY_CAP: usize = 200;
@@ -23,19 +23,12 @@ struct RecentEntry {
 /// Aggregate usage stats for one session, plus rolling history for sparkline.
 #[derive(Debug)]
 pub(crate) struct SessionStats {
-    model_raw: Option<String>,
-    model_info: ModelInfo,
+    /// Model, usage, cost, context, cwd and tool counts, folded the same
+    /// way as cctop's Now panel.
+    agg: SessionTotals,
     started_at: Instant,
-    total: Usage,
-    session_cost_usd: f64,
-    last_context_size: u64,
-    assistant_messages: u64,
-    tool_counts: HashMap<String, u64>,
     /// `output_tokens` per assistant message, oldest first, capped at `HISTORY_CAP`.
     output_history: Vec<u64>,
-    /// Working directory captured from the first event that carries one.
-    /// Same for every event in a session, so we only set it once.
-    cwd: Option<String>,
     /// Sliding window of recent events for cost/min and tokens/min rates.
     /// Pruned to entries within `RECENT_WINDOW_SECS` on each ingest.
     recent: VecDeque<RecentEntry>,
@@ -55,16 +48,9 @@ impl SessionStats {
     /// `CCWATCH_CONTEXT_WINDOW` env var).
     pub(crate) fn new(override_context_window: Option<u64>) -> Self {
         Self {
-            model_raw: None,
-            model_info: ModelInfo::default(),
+            agg: SessionTotals::default(),
             started_at: Instant::now(),
-            total: Usage::default(),
-            session_cost_usd: 0.0,
-            last_context_size: 0,
-            assistant_messages: 0,
-            tool_counts: HashMap::new(),
             output_history: Vec::new(),
-            cwd: None,
             recent: VecDeque::new(),
             last_event_at: None,
             user_override_context_window: override_context_window,
@@ -104,31 +90,9 @@ impl SessionStats {
             return;
         }
 
-        if self.cwd.is_none()
-            && let Some(cwd) = &line.cwd
-        {
-            self.cwd = Some(cwd.clone());
-        }
-
-        if let Some(model) = &line.model
-            && self.model_raw.as_deref() != Some(model.as_str())
-        {
-            self.model_raw = Some(model.clone());
-            self.model_info = ModelInfo::parse(model);
-        }
-
-        for name in line.tool_use_names() {
-            if !name.is_empty() {
-                *self.tool_counts.entry(name.to_string()).or_insert(0) += 1;
-            }
-        }
-
-        let Some(usage) = line.usage else { return };
-        self.total += usage;
-        self.last_context_size = usage.context_size();
-        self.assistant_messages += 1;
-        let event_cost = self.model_info.pricing().cost_usd(&usage);
-        self.session_cost_usd += event_cost;
+        let Some((usage, event_cost)) = self.agg.ingest(line) else {
+            return;
+        };
 
         if let Some(at) = line.timestamp_utc() {
             self.last_event_at = Some(at);
@@ -169,52 +133,50 @@ impl SessionStats {
 
     #[must_use]
     pub(crate) fn model_raw(&self) -> Option<&str> {
-        self.model_raw.as_deref()
+        self.agg.model()
     }
 
     /// Full cwd (working directory) recorded in session events.
     #[must_use]
     pub(crate) fn cwd(&self) -> Option<&str> {
-        self.cwd.as_deref()
+        self.agg.cwd()
     }
 
     /// Last path component of `cwd` — typically the project / repo name.
     #[must_use]
     pub(crate) fn project_basename(&self) -> Option<&str> {
-        self.cwd.as_deref().and_then(cctk::paths::cwd_basename)
+        self.agg.project()
     }
 
     #[must_use]
     pub(crate) fn model_color(&self) -> Color {
-        self.model_info.color()
+        self.agg.model_info().color()
     }
 
     #[must_use]
     pub(crate) fn totals(&self) -> &Usage {
-        &self.total
+        self.agg.total()
     }
 
     #[must_use]
     pub(crate) fn session_cost_usd(&self) -> f64 {
-        self.session_cost_usd
+        self.agg.cost_usd()
     }
 
     #[must_use]
     pub(crate) fn last_context_size(&self) -> u64 {
-        self.last_context_size
+        self.agg.last_context_size()
     }
 
     #[must_use]
     pub(crate) fn context_window(&self) -> u64 {
-        if let Some(w) = self.user_override_context_window {
-            return w;
-        }
-        self.model_info.context_window()
+        self.user_override_context_window
+            .unwrap_or_else(|| self.agg.model_info().context_window())
     }
 
     #[must_use]
     pub(crate) fn assistant_messages(&self) -> u64 {
-        self.assistant_messages
+        self.agg.messages()
     }
 
     #[must_use]
@@ -226,7 +188,8 @@ impl SessionStats {
     #[must_use]
     pub(crate) fn tools_sorted(&self) -> Vec<(&str, u64)> {
         let mut items: Vec<(&str, u64)> = self
-            .tool_counts
+            .agg
+            .tool_counts()
             .iter()
             .map(|(k, v)| (k.as_str(), *v))
             .collect();
@@ -236,18 +199,18 @@ impl SessionStats {
 
     #[must_use]
     pub(crate) fn context_pct(&self) -> f64 {
-        let win = self.context_window().max(1);
-        (self.last_context_size as f64 / win as f64).min(1.0)
+        self.agg.context_pct(self.context_window())
     }
 
     /// `cache_read / (cache_read + input + cache_creation)` — share of context that hit cache.
     #[must_use]
     pub(crate) fn cache_hit_ratio(&self) -> f64 {
-        let denom = self.total.context_size();
+        let total = self.agg.total();
+        let denom = total.context_size();
         if denom == 0 {
             return 0.0;
         }
-        self.total.cache_read_input_tokens as f64 / denom as f64
+        total.cache_read_input_tokens as f64 / denom as f64
     }
 
     /// Time since ccwatch first attached to this session (wall-clock).

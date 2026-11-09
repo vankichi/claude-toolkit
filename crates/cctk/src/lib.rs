@@ -11,6 +11,7 @@ pub mod fuzzy;
 pub mod jsonl;
 pub mod paths;
 pub mod pricing;
+pub mod session;
 pub mod viz;
 
 #[cfg(feature = "tail")]
