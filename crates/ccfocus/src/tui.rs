@@ -1,9 +1,9 @@
 //! `ccfocus` / `ccfocus tui`: the focus board full screen (`--tiny`: the
 //! card view for a narrow side pane). A plain synchronous loop: poll the
-//! keyboard briefly, tick, draw. The worktree scan and gh run on
-//! [`crate::repos::Job`] threads; what stays on this thread is
-//! bounded by timeouts (a key action's tmux / merge-base call, the periodic
-//! `kill -0` checks).
+//! keyboard briefly, tick, draw. The worktree scan, gh and a jump's tmux
+//! commands run on [`crate::repos::Job`] threads; what stays on this thread
+//! is bounded by timeouts (the `d` / `p` keys' tmux / merge-base call, the
+//! periodic `kill -0` checks, and waiting for a jump on quit).
 
 use crate::app::Focus;
 use anyhow::Result;
@@ -36,6 +36,9 @@ pub fn run(state_dir: PathBuf, tiny: bool) -> Result<()> {
             focus.tick(false);
         }
     })();
+    // A jump key just before `q`: let the switch finish while the board
+    // (showing "switching…") is still on screen.
+    focus.finish_jump();
     ratatui::restore();
     result
 }

@@ -30,6 +30,19 @@ const TASKS_EVERY: Duration = Duration::from_mins(10);
 const PRUNE_EVERY: Duration = Duration::from_hours(1);
 /// Key feedback stays this long.
 const MESSAGE_FOR: Duration = Duration::from_secs(5);
+/// Shown while a jump runs; cleared when it lands as planned.
+const SWITCHING: &str = "switching…";
+/// A jump key pressed while one runs.
+const STILL_SWITCHING: &str = "still switching to the last session";
+
+/// The jump's own notes: kept while it runs, cleared when it lands.
+fn is_jump_note(m: &str) -> bool {
+    m == SWITCHING || m == STILL_SWITCHING
+}
+
+/// What a jump's thread sends back: the finished row's `seen_key` (to mark
+/// it seen on arrival) and [`tmux::run_jump`]'s result.
+type JumpDone = (Option<String>, Result<Option<String>, String>);
 
 #[derive(Debug)]
 enum TaskState {
@@ -58,6 +71,11 @@ pub struct Focus {
     fetch_tasks: fn(&str, &[PathBuf]) -> Option<Tasks>,
     tasks: TaskState,
     tasks_day: Option<NaiveDate>,
+    /// A jump runs here so a slow `container_tmux` or tmux never freezes the
+    /// board; one at a time.
+    jump_job: Job<JumpDone>,
+    /// `tmux::run_jump`; replaced in tests so they never call tmux.
+    run_jump: fn(&tmux::Jump) -> Result<Option<String>, String>,
     last_read: Option<Instant>,
     last_prune: Option<Instant>,
     board: Board,
@@ -134,6 +152,8 @@ impl Focus {
             fetch_tasks: repos::fetch_tasks,
             tasks: TaskState::Pending,
             tasks_day: None,
+            jump_job: Job::new(Duration::ZERO),
+            run_jump: tmux::run_jump,
             last_read: None,
             last_prune: None,
             board: Board::default(),
@@ -172,11 +192,15 @@ impl Focus {
             }
             changed = true;
         }
-        if self
-            .message
-            .as_ref()
-            .is_some_and(|(_, at)| clock.duration_since(*at) >= MESSAGE_FOR)
-        {
+        if let Some((done, result)) = self.jump_job.poll() {
+            self.arrived(done, result, now, clock);
+            changed = true;
+        }
+        // A jump's own note stays while it runs, however long that is.
+        let jumping = self.jump_job.is_pending();
+        if self.message.as_ref().is_some_and(|(m, at)| {
+            clock.duration_since(*at) >= MESSAGE_FOR && !(jumping && is_jump_note(m))
+        }) {
             self.message = None;
             changed = true;
         }
@@ -306,8 +330,14 @@ impl Focus {
     }
 
     fn say(&mut self, msg: String) {
-        self.message = Some((msg, Instant::now()));
+        self.note(msg, Instant::now());
         self.rebuild(self.view.now);
+    }
+
+    /// Set the bottom line without rebuilding (for callers that rebuild
+    /// anyway, like `tick_at`).
+    fn note(&mut self, msg: String, clock: Instant) {
+        self.message = Some((msg, clock));
     }
 
     /// Handle a key. `true` when the board should close (`q` / `Esc`).
@@ -371,24 +401,63 @@ impl Focus {
         let Some(row) = self.board.rows.get(i) else {
             return;
         };
+        // Refuse before planning, so a row that can't be planned doesn't
+        // replace the note of the jump still running.
+        if self.jump_job.is_pending() {
+            return self.say(STILL_SWITCHING.into());
+        }
         let done = (row.shown == Shown::Done).then(|| row.seen_key());
-        match tmux::jump(row, &self.client, &self.config).and_then(|j| tmux::run_jump(&j)) {
+        let plan = match tmux::jump(row, &self.client, &self.config) {
+            Ok(plan) => plan,
+            Err(e) => return self.say(e),
+        };
+        // The result arrives through `tick`. A key pressed meanwhile is
+        // refused rather than queued: the client may already be on its way.
+        let run = self.run_jump;
+        if self
+            .jump_job
+            .kick(Instant::now(), true, move || (done, run(&plan)))
+        {
+            self.say(SWITCHING.into());
+        } else {
+            self.say(STILL_SWITCHING.into());
+        }
+    }
+
+    /// Wait for a jump still running, so a board closed right after a jump
+    /// key doesn't drop the switch (the process exiting would end its
+    /// thread mid-way). Bounded by the jump's own timeouts. Call it before
+    /// tearing the screen down.
+    pub fn finish_jump(&mut self) {
+        let _ = self.jump_job.wait();
+    }
+
+    /// A jump's thread finished.
+    fn arrived(
+        &mut self,
+        done: Option<String>,
+        result: Result<Option<String>, String>,
+        now: DateTime<FixedOffset>,
+        clock: Instant,
+    ) {
+        match result {
             Ok(warning) => {
                 // Arrived, but not as planned (a container step failed, or
-                // a fallback target was used): say why.
+                // a fallback target was used): say why. Otherwise drop the
+                // "switching" note, unless a newer message replaced it.
                 if let Some(w) = warning {
-                    self.say(w);
+                    self.note(w, clock);
+                } else if self.message.as_ref().is_some_and(|(m, _)| is_jump_note(m)) {
+                    self.message = None;
                 }
                 // A finished session counts as seen once visited: pick the
                 // next one without it.
                 if let Some(key) = done {
                     self.seen.insert(key);
-                    let now = self.view.now;
-                    self.read_board(now, Instant::now());
-                    self.rebuild(now);
+                    self.read_board(now, clock);
                 }
             }
-            Err(e) => self.say(e),
+            Err(e) => self.note(e, clock),
         }
     }
 }
@@ -442,6 +511,14 @@ mod tests {
     use super::*;
     use cctk::focus::{HostKind, SCHEMA, SessionState, Status};
     use std::path::Path;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    /// Set by the fake jump in `closing_the_board_waits_for_a_jump_in_flight`.
+    static SWITCHED: AtomicBool = AtomicBool::new(false);
+    /// Holds the fake jump in `the_jump_notes_outlast_the_message_timeout_while_it_runs`.
+    static RELEASE: AtomicBool = AtomicBool::new(false);
+    /// Holds the fake jump in `a_key_during_a_jump_is_refused_before_planning`.
+    static HOLD_RELEASE: AtomicBool = AtomicBool::new(false);
 
     fn at(s: &str) -> DateTime<FixedOffset> {
         DateTime::parse_from_rfc3339(s).unwrap()
@@ -525,6 +602,7 @@ mod tests {
             "focus".into(),
         );
         f.fetch_tasks = |_, _| None;
+        f.run_jump = |_| Err("tests never run tmux".into());
         f
     }
 
@@ -569,6 +647,187 @@ mod tests {
         f.on_key(KeyCode::Char('7'));
         assert_eq!(f.view().message.as_deref(), Some("no session [7]"));
         assert!(f.on_key(KeyCode::Char('q')));
+    }
+
+    /// Tick until the jump's result lands (it runs on its own thread).
+    fn tick_until_arrived(f: &mut Focus, now: DateTime<FixedOffset>) {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while f.jump_job.is_pending() {
+            assert!(Instant::now() < deadline, "the jump never finished");
+            std::thread::sleep(Duration::from_millis(10));
+            f.tick_at(now, Instant::now(), false);
+        }
+    }
+
+    #[test]
+    fn a_jump_runs_off_the_board_and_reports_when_it_lands() {
+        let tmp = tempfile::tempdir().unwrap();
+        let a = "00000000-0000-4000-8000-00000000000a";
+        write_session(tmp.path(), a, Status::Done, "2026-01-05T14:20:00+09:00");
+        let mut f = board_over(tmp.path());
+        f.client = Client {
+            inside: true,
+            pane: None,
+        };
+        f.run_jump = |_| Ok(Some("fell back to dev: no such pane".into()));
+        let now = at("2026-01-05T14:24:00+09:00");
+        f.tick_at(now, Instant::now(), false);
+        assert_eq!(f.view().board.next, Some(0));
+
+        // Whenever the thread finishes, its result waits for a tick, so
+        // these hold however fast the fake is.
+        f.on_key(KeyCode::Char('1'));
+        assert_eq!(
+            f.view().message.as_deref(),
+            Some(SWITCHING),
+            "the key doesn't wait for the jump"
+        );
+        f.on_key(KeyCode::Char('1'));
+        assert_eq!(f.view().message.as_deref(), Some(STILL_SWITCHING));
+
+        tick_until_arrived(&mut f, now);
+        assert_eq!(
+            f.view().message.as_deref(),
+            Some("fell back to dev: no such pane")
+        );
+        assert_eq!(
+            f.view().board.next,
+            None,
+            "the finished session counts as seen"
+        );
+    }
+
+    #[test]
+    fn a_jump_that_lands_as_planned_clears_only_its_own_note() {
+        let tmp = tempfile::tempdir().unwrap();
+        let a = "00000000-0000-4000-8000-00000000000a";
+        write_session(tmp.path(), a, Status::Waiting, "2026-01-05T14:20:00+09:00");
+        let mut f = board_over(tmp.path());
+        f.client = Client {
+            inside: true,
+            pane: None,
+        };
+        f.run_jump = |_| Ok(None);
+        let now = at("2026-01-05T14:24:00+09:00");
+        f.tick_at(now, Instant::now(), false);
+
+        f.on_key(KeyCode::Char('1'));
+        tick_until_arrived(&mut f, now);
+        assert_eq!(f.view().message, None);
+
+        f.on_key(KeyCode::Char('1'));
+        f.on_key(KeyCode::Char('7'));
+        tick_until_arrived(&mut f, now);
+        assert_eq!(f.view().message.as_deref(), Some("no session [7]"));
+    }
+
+    #[test]
+    fn closing_the_board_waits_for_a_jump_in_flight() {
+        let tmp = tempfile::tempdir().unwrap();
+        let a = "00000000-0000-4000-8000-00000000000a";
+        write_session(tmp.path(), a, Status::Waiting, "2026-01-05T14:20:00+09:00");
+        let mut f = board_over(tmp.path());
+        f.client = Client {
+            inside: true,
+            pane: None,
+        };
+        f.run_jump = |_| {
+            std::thread::sleep(Duration::from_millis(200));
+            SWITCHED.store(true, Ordering::SeqCst);
+            Ok(None)
+        };
+        f.tick_at(at("2026-01-05T14:24:00+09:00"), Instant::now(), false);
+
+        f.on_key(KeyCode::Char('1'));
+        assert!(f.on_key(KeyCode::Char('q')));
+        f.finish_jump();
+        assert!(SWITCHED.load(Ordering::SeqCst), "the switch ran to the end");
+    }
+
+    #[test]
+    fn the_jump_notes_outlast_the_message_timeout_while_it_runs() {
+        let tmp = tempfile::tempdir().unwrap();
+        let a = "00000000-0000-4000-8000-00000000000a";
+        write_session(tmp.path(), a, Status::Waiting, "2026-01-05T14:20:00+09:00");
+        let mut f = board_over(tmp.path());
+        f.client = Client {
+            inside: true,
+            pane: None,
+        };
+        f.run_jump = |_| {
+            while !RELEASE.load(Ordering::SeqCst) {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            Ok(None)
+        };
+        let now = at("2026-01-05T14:24:00+09:00");
+        f.tick_at(now, Instant::now(), false);
+
+        f.on_key(KeyCode::Char('1'));
+        f.on_key(KeyCode::Char('1'));
+        // The jump is held, so a tick past MESSAGE_FOR can't see a result.
+        let later = Instant::now() + MESSAGE_FOR + Duration::from_secs(1);
+        f.tick_at(now, later, false);
+        assert_eq!(f.view().message.as_deref(), Some(STILL_SWITCHING));
+
+        // Landing as planned clears the refusal note too.
+        RELEASE.store(true, Ordering::SeqCst);
+        tick_until_arrived(&mut f, now);
+        assert_eq!(f.view().message, None);
+    }
+
+    #[test]
+    fn a_key_during_a_jump_is_refused_before_planning() {
+        let tmp = tempfile::tempdir().unwrap();
+        let a = "00000000-0000-4000-8000-00000000000a";
+        write_session(tmp.path(), a, Status::Waiting, "2026-01-05T14:20:00+09:00");
+        let mut f = board_over(tmp.path());
+        f.client = Client {
+            inside: true,
+            pane: None,
+        };
+        f.run_jump = |_| {
+            while !HOLD_RELEASE.load(Ordering::SeqCst) {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            Ok(None)
+        };
+        let now = at("2026-01-05T14:24:00+09:00");
+        f.tick_at(now, Instant::now(), false);
+
+        f.on_key(KeyCode::Char('1'));
+        // A key that couldn't be planned now (outside tmux) still reads as
+        // a refusal, so the note keeps saying a jump is under way.
+        f.client.inside = false;
+        f.on_key(KeyCode::Char('1'));
+        assert_eq!(f.view().message.as_deref(), Some(STILL_SWITCHING));
+
+        HOLD_RELEASE.store(true, Ordering::SeqCst);
+        tick_until_arrived(&mut f, now);
+        assert_eq!(f.view().message, None);
+    }
+
+    #[test]
+    fn a_failed_jump_says_why_and_leaves_the_session_unseen() {
+        let tmp = tempfile::tempdir().unwrap();
+        let a = "00000000-0000-4000-8000-00000000000a";
+        write_session(tmp.path(), a, Status::Done, "2026-01-05T14:20:00+09:00");
+        let mut f = board_over(tmp.path());
+        f.client = Client {
+            inside: true,
+            pane: None,
+        };
+        f.run_jump = |_| Err("can't find session: dev".into());
+        let now = at("2026-01-05T14:24:00+09:00");
+        f.tick_at(now, Instant::now(), false);
+
+        f.on_key(KeyCode::Enter);
+        tick_until_arrived(&mut f, now);
+        assert_eq!(f.view().message.as_deref(), Some("can't find session: dev"));
+        assert_eq!(f.view().board.next, Some(0));
+        // The next key starts a new jump.
+        f.on_key(KeyCode::Enter);
+        assert!(f.jump_job.is_pending());
     }
 
     #[test]

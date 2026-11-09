@@ -79,6 +79,8 @@ pub async fn run(cfg: RunConfig) -> Result<()> {
         &mut next_tag,
     )
     .await;
+    // A jump started in the Focus panel: let the switch finish before exit.
+    dash.focus.finish_jump();
     ratatui::restore();
     for (_, (_, handle)) in tails {
         handle.abort();
