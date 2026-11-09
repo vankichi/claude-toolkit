@@ -7,6 +7,7 @@
 
 use crate::session::AgentStatusKind;
 use crate::stats::SessionStats;
+use crate::style::{bold, bold_fg, dim};
 use chrono::{DateTime, Utc};
 use ratatui::{
     Frame,
@@ -155,16 +156,6 @@ pub(crate) fn draw(f: &mut Frame<'_>, area: Rect, entries: &[EntryView<'_>], sel
     draw_aggregate(f, chunks[0], entries);
     draw_table(f, chunks[1], entries, selected);
     draw_footer(f, chunks[2]);
-}
-
-fn dim() -> Style {
-    Style::default().fg(Color::DarkGray)
-}
-fn bold() -> Style {
-    Style::default().add_modifier(Modifier::BOLD)
-}
-fn bold_fg(c: Color) -> Style {
-    Style::default().fg(c).add_modifier(Modifier::BOLD)
 }
 
 fn draw_aggregate(f: &mut Frame<'_>, area: Rect, entries: &[EntryView<'_>]) {

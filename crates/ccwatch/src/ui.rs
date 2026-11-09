@@ -16,7 +16,7 @@ use futures::StreamExt;
 use ratatui::{
     DefaultTerminal, Frame,
     layout::{Constraint, Direction, Layout, Rect},
-    style::{Color, Modifier, Style},
+    style::{Color, Style},
     text::{Line, Span},
     widgets::{Bar, BarChart, BarGroup, Block, Borders, Paragraph, Wrap},
 };
@@ -28,6 +28,7 @@ use tokio::task::JoinHandle;
 
 use crate::session::{self, DiscoveredSession};
 use crate::stats::SessionStats;
+use crate::style::{bold, bold_fg, dim};
 use crate::summary::{self, AgentStatus, EntryView};
 use cctk::jsonl::Line as SessionLine;
 use cctk::tail;
@@ -695,18 +696,6 @@ fn open_in_browser(url: &str) {
 }
 
 // ---- style helpers ----
-
-fn dim() -> Style {
-    Style::default().fg(Color::DarkGray)
-}
-
-fn bold() -> Style {
-    Style::default().add_modifier(Modifier::BOLD)
-}
-
-fn bold_fg(c: Color) -> Style {
-    Style::default().fg(c).add_modifier(Modifier::BOLD)
-}
 
 fn value_span<S: Into<String>>(s: S, color: Color) -> Span<'static> {
     Span::styled(s.into(), bold_fg(color))
