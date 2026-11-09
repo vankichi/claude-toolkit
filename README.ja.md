@@ -306,6 +306,19 @@ board が呼ぶ tool:
 - `gh`: `tasks done` と、`to finish` の PR の判定。`gh` が無い・失敗した時は、
   `tasks done` が `n/a` になり、`to finish` は PR で絞らない。
 
+unix では、board は動いている間に実行する外部の command (`git`・`gh`・`tmux`・`kill`、env
+`CCFOCUS_CONTAINER_TMUX` の command) を、それぞれ新しい process group で起動する
+(起動時に 1 回実行する `hostname` は除く)。command が timeout した時 (`git` 3 秒・`gh` 20 秒・host の `tmux` 2 秒・container の
+`tmux` 3 秒・`kill` 1 秒) は、pipe を閉じたかどうかに関係なく、その group の process を
+すべて SIGKILL で止める。command が終わった後 0.5 秒たっても出力の pipe を誰かが
+開けたままの時も、group を止める。group を止めるのは best effort で、`kill` command が
+無い・失敗した時は group を止められず、timeout の時は command 本体だけを止める。stdout と stderr を閉じた (`>/dev/null 2>&1`)
+process が残るのは、command が timeout の内に終わった時だけ。timeout しても残したい
+process は、`setsid` などで group から外して起動する。止まるのは host の上の process
+だけで、`CCFOCUS_CONTAINER_TMUX` が `docker exec` などで container の中に起動した
+process には届かない (host の docker の client は止まる)。tmux の popup (`d` の key) と
+Windows は対象外。
+
 board は `git fetch` をしない。local の ref だけを読む。session の file と events は
 2 秒ごと、worktree は 30 秒ごとに読み直し、`gh` の結果は 10 分 cache する (`r` でも
 `gh` は取り直さない)。

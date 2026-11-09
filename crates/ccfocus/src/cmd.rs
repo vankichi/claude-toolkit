@@ -33,9 +33,15 @@ pub(crate) struct Output {
 /// within [`READ_WINDOW`]: a grandchild that keeps a pipe open (e.g.
 /// something a launcher script started in the background) would otherwise
 /// hang the caller. That case reads as a failure even if the command
-/// itself succeeded, rather than handing back partial output. The reader
-/// threads are left to finish once the pipes close.
+/// itself succeeded, rather than handing back partial output.
+///
+/// On unix the command gets its own process group, and both cases kill
+/// that whole group, so what it started in the background goes too and
+/// the reader threads end once the pipes close. A process that left the
+/// group (`setsid`, as daemons do) is out of reach and keeps its reader
+/// alive while it holds the pipe.
 pub(crate) fn run(mut cmd: Command, timeout: Duration) -> Option<Output> {
+    own_group(&mut cmd);
     let mut child = cmd
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -52,6 +58,9 @@ pub(crate) fn run(mut cmd: Command, timeout: Duration) -> Option<Output> {
             Ok(Some(status)) => break status,
             Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(5)),
             _ => {
+                // Before reaping: the unreaped child keeps its pid, so the
+                // group id can't have been handed to anyone else.
+                kill_group(child.id());
                 let _ = child.kill();
                 let _ = child.wait();
                 return None;
@@ -59,11 +68,74 @@ pub(crate) fn run(mut cmd: Command, timeout: Duration) -> Option<Output> {
         }
     };
     let (stdout, stderr) = read_after_exit(&out, &err);
+    if stdout.is_none() || stderr.is_none() {
+        // The child is reaped, so its id is free once the group is empty.
+        // Usually someone in the group still holds a pipe, so the group and
+        // its id still exist. The group may already be gone if the reader
+        // was only slow, or if the pipe is held by a process that left the
+        // group (setsid); then kill fails. Either way, another group taking
+        // this id would need the pids to wrap around within about 0.5 s.
+        kill_group(child.id());
+    }
     Some(Output {
         success: status.success(),
         stdout: stdout?,
         stderr: stderr?,
     })
+}
+
+/// Start `cmd` as the leader of a new process group (unix), so that
+/// [`kill_group`] reaches what it starts in the background.
+fn own_group(cmd: &mut Command) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        cmd.process_group(0);
+    }
+    #[cfg(not(unix))]
+    let _ = cmd;
+}
+
+/// How long to wait for `kill` itself.
+const KILL_TIMEOUT: Duration = Duration::from_secs(1);
+
+/// SIGKILL every process in group `pgid`, via the `kill` command (`std`
+/// can't signal a group and this workspace forbids `unsafe`). Best effort:
+/// failures are ignored. Does nothing off unix.
+fn kill_group(pgid: u32) {
+    let Some(target) = group_target(pgid) else {
+        return;
+    };
+    let Ok(mut k) = Command::new("kill")
+        .args(sigkill_args(&target))
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+    else {
+        return;
+    };
+    let deadline = Instant::now() + KILL_TIMEOUT;
+    while matches!(k.try_wait(), Ok(None)) && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let _ = k.kill();
+    let _ = k.wait();
+}
+
+/// `kill` arguments that SIGKILL `target` (a pid, or `-<pgid>` for a
+/// group). Keep the `--`: without it procps' kill reads `-<pgid>` as an
+/// option and signals minus its first digit only, so `-1234` would become
+/// -1, every process we may signal (procps 4.0.4 `src/kill.c`).
+fn sigkill_args(target: &str) -> [&str; 4] {
+    ["-s", "KILL", "--", target]
+}
+
+/// The `kill` operand for group `pgid` (`-<pgid>`). `None` off unix and
+/// for 0 and 1: `kill -- -0` is our own group and `-1` every process we
+/// may signal.
+fn group_target(pgid: u32) -> Option<String> {
+    (cfg!(unix) && pgid > 1).then(|| format!("-{pgid}"))
 }
 
 /// Start `cmd` for a command that may keep running (a tmux popup returns
@@ -73,6 +145,9 @@ pub(crate) fn run(mut cmd: Command, timeout: Duration) -> Option<Output> {
 /// [`READ_WINDOW`] after the exit (a grandchild holding it) comes back
 /// empty for stdout and as [`STDERR_UNREAD`] for stderr, so a failure
 /// still says why it has no message.
+///
+/// Unlike [`run`], the command stays in our process group and nothing is
+/// group-killed: what it starts (a popup) is meant to outlive the call.
 pub(crate) fn start(mut cmd: Command, settle: Duration) -> Result<Option<Output>, ()> {
     let mut child = cmd
         .stdin(Stdio::null())
@@ -246,6 +321,101 @@ mod tests {
         assert!(o.success);
         assert_eq!(o.stderr, STDERR_UNREAD);
         assert!(begin.elapsed() < GIVES_UP_BY, "{:?}", begin.elapsed());
+    }
+
+    /// `sh -c "<script>"` where `$PIDFILE` is a file to write a pid to.
+    fn sh_with_pidfile(script: &str, pidfile: &Path) -> Command {
+        let mut cmd = Command::new("sh");
+        cmd.args(["-c", script]).env("PIDFILE", pidfile);
+        cmd
+    }
+
+    /// Whether the background process whose pid the script wrote to
+    /// `pidfile` is gone within a few seconds (it is reaped by init once
+    /// killed).
+    fn background_is_gone(pidfile: &Path) -> bool {
+        let pid: u32 = std::fs::read_to_string(pidfile)
+            .expect("the script wrote its background pid")
+            .trim()
+            .parse()
+            .expect("a pid");
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < deadline {
+            if crate::app::pid_alive(pid) == Some(false) {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        false
+    }
+
+    /// SIGKILLs process `.0` when dropped.
+    struct KillOnDrop(u32);
+
+    impl Drop for KillOnDrop {
+        fn drop(&mut self) {
+            let mut k = Command::new("kill");
+            k.args(sigkill_args(&self.0.to_string()));
+            let _ = run(k, Duration::from_secs(1));
+        }
+    }
+
+    #[test]
+    fn a_timeout_kills_what_the_command_started_in_the_background() {
+        let dir = tempfile::tempdir().unwrap();
+        let pidfile = dir.path().join("pid");
+        // `wait` holds the command until the timeout; 1 s leaves time to
+        // start the sleep and write its pid on a busy machine.
+        let cmd = sh_with_pidfile("sleep 30 & echo $! > \"$PIDFILE\"; wait", &pidfile);
+        assert!(run(cmd, Duration::from_secs(1)).is_none());
+        assert!(background_is_gone(&pidfile));
+    }
+
+    #[test]
+    fn a_process_still_holding_a_pipe_after_the_exit_is_killed() {
+        let dir = tempfile::tempdir().unwrap();
+        let pidfile = dir.path().join("pid");
+        let cmd = sh_with_pidfile("sleep 30 & echo $! > \"$PIDFILE\"", &pidfile);
+        assert!(run(cmd, Duration::from_secs(10)).is_none());
+        assert!(background_is_gone(&pidfile));
+    }
+
+    #[test]
+    fn a_background_process_that_closed_the_pipes_is_left_alone() {
+        // Output read in full: nothing is killed, as before.
+        let dir = tempfile::tempdir().unwrap();
+        let pidfile = dir.path().join("pid");
+        let cmd = sh_with_pidfile(
+            "sleep 30 >/dev/null 2>&1 & echo $! > \"$PIDFILE\"; echo ok",
+            &pidfile,
+        );
+        let o = run(cmd, Duration::from_secs(10));
+        let pid: u32 = std::fs::read_to_string(&pidfile)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        // Kill the sleep even if an assert below fails.
+        let guard = KillOnDrop(pid);
+        assert_eq!(o.map(|o| o.stdout).as_deref(), Some("ok\n"));
+        // Wait first: a killed sleep reads as alive until init reaps it, so
+        // checking at once could pass even if run had killed it.
+        std::thread::sleep(Duration::from_millis(300));
+        assert_eq!(crate::app::pid_alive(pid), Some(true));
+        drop(guard);
+        assert!(background_is_gone(&pidfile));
+    }
+
+    #[test]
+    fn never_signals_our_own_group_or_every_process() {
+        assert_eq!(group_target(0), None);
+        assert_eq!(group_target(1), None);
+        assert_eq!(group_target(4242).as_deref(), Some("-4242"));
+    }
+
+    #[test]
+    fn the_kill_target_comes_after_double_dash() {
+        assert_eq!(sigkill_args("-4242"), ["-s", "KILL", "--", "-4242"]);
     }
 
     #[test]
