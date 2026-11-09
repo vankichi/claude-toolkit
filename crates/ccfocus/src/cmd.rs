@@ -69,10 +69,12 @@ pub(crate) fn run(mut cmd: Command, timeout: Duration) -> Option<Output> {
     };
     let (stdout, stderr) = read_after_exit(&out, &err);
     if stdout.is_none() || stderr.is_none() {
+        // The child is reaped, so its id is free once the group is empty.
         // Usually someone in the group still holds a pipe, so the group and
-        // its id still exist. If the reader was only slow, the group may be
-        // gone and kill fails; the id going to another group in between
-        // would take the pids wrapping around within those milliseconds.
+        // its id still exist. The group may already be gone if the reader
+        // was only slow, or if the pipe is held by a process that left the
+        // group (setsid); then kill fails. Either way, another group taking
+        // this id would need the pids to wrap around within about 0.5 s.
         kill_group(child.id());
     }
     Some(Output {
@@ -105,7 +107,7 @@ fn kill_group(pgid: u32) {
         return;
     };
     let Ok(mut k) = Command::new("kill")
-        .args(["-s", "KILL", "--", &target])
+        .args(sigkill_args(&target))
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -119,6 +121,14 @@ fn kill_group(pgid: u32) {
     }
     let _ = k.kill();
     let _ = k.wait();
+}
+
+/// `kill` arguments that SIGKILL `target` (a pid, or `-<pgid>` for a
+/// group). Keep the `--`: without it procps' kill reads `-<pgid>` as an
+/// option and signals minus its first digit only, so `-1234` would become
+/// -1, every process we may signal (procps 4.0.4 `src/kill.c`).
+fn sigkill_args(target: &str) -> [&str; 4] {
+    ["-s", "KILL", "--", target]
 }
 
 /// The `kill` operand for group `pgid` (`-<pgid>`). `None` off unix and
@@ -345,7 +355,7 @@ mod tests {
     impl Drop for KillOnDrop {
         fn drop(&mut self) {
             let mut k = Command::new("kill");
-            k.args(["-s", "KILL", "--", &self.0.to_string()]);
+            k.args(sigkill_args(&self.0.to_string()));
             let _ = run(k, Duration::from_secs(1));
         }
     }
@@ -354,8 +364,10 @@ mod tests {
     fn a_timeout_kills_what_the_command_started_in_the_background() {
         let dir = tempfile::tempdir().unwrap();
         let pidfile = dir.path().join("pid");
+        // `wait` holds the command until the timeout; 1 s leaves time to
+        // start the sleep and write its pid on a busy machine.
         let cmd = sh_with_pidfile("sleep 30 & echo $! > \"$PIDFILE\"; wait", &pidfile);
-        assert!(run(cmd, Duration::from_millis(300)).is_none());
+        assert!(run(cmd, Duration::from_secs(1)).is_none());
         assert!(background_is_gone(&pidfile));
     }
 
@@ -386,6 +398,9 @@ mod tests {
         // Kill the sleep even if an assert below fails.
         let guard = KillOnDrop(pid);
         assert_eq!(o.map(|o| o.stdout).as_deref(), Some("ok\n"));
+        // Wait first: a killed sleep reads as alive until init reaps it, so
+        // checking at once could pass even if run had killed it.
+        std::thread::sleep(Duration::from_millis(300));
         assert_eq!(crate::app::pid_alive(pid), Some(true));
         drop(guard);
         assert!(background_is_gone(&pidfile));
@@ -396,6 +411,11 @@ mod tests {
         assert_eq!(group_target(0), None);
         assert_eq!(group_target(1), None);
         assert_eq!(group_target(4242).as_deref(), Some("-4242"));
+    }
+
+    #[test]
+    fn the_kill_target_comes_after_double_dash() {
+        assert_eq!(sigkill_args("-4242"), ["-s", "KILL", "--", "-4242"]);
     }
 
     #[test]
