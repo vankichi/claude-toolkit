@@ -361,7 +361,7 @@ fn last_custom_title(transcript: &Path) -> Option<String> {
     }
     // Cheap pre-filter so only candidate lines are parsed as JSON.
     const NEEDLE: &[u8] = b"\"custom-title\"";
-    if !std::fs::symlink_metadata(transcript).is_ok_and(|m| m.file_type().is_file()) {
+    if !fsx::is_regular_file(transcript) {
         return None;
     }
     let tail = cctk::paths::read_tail(transcript, TITLE_SCAN_BYTES);
@@ -406,7 +406,7 @@ fn first_timestamp(transcript: &Path) -> Option<DateTime<FixedOffset>> {
     struct Stamped {
         timestamp: Option<String>,
     }
-    if !std::fs::symlink_metadata(transcript).is_ok_and(|m| m.file_type().is_file()) {
+    if !fsx::is_regular_file(transcript) {
         return None;
     }
     let mut head = Vec::new();

@@ -68,6 +68,13 @@ pub fn ensure_private_dir(path: &Path, how: Create) -> Result<()> {
     Ok(())
 }
 
+/// True when `path` is a regular file, not following a symlink (so a
+/// symlink to a file is false). Any error reads as false.
+#[must_use]
+pub fn is_regular_file(path: &Path) -> bool {
+    fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_file())
+}
+
 /// True when `path` exists as a real directory; false when missing. Errors
 /// when something else (a symlink, a file) sits there.
 pub fn is_real_dir(path: &Path) -> Result<bool> {
