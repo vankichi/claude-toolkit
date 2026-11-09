@@ -60,6 +60,14 @@ impl MapCounts {
     }
 }
 
+/// Discover the config map once, for both the map and the stats' provenance
+/// colors. `discover_all` already includes what `discover_extensions` finds,
+/// and `ProvenanceMap::build` skips the plugin and MCP items it adds.
+fn discover_once(ctx: &Context) -> (ProvenanceMap, Vec<Item>) {
+    let items = discover::discover_all(ctx).items;
+    (ProvenanceMap::build(&items), items)
+}
+
 /// The live dashboard state shared by the overview and drill-down views.
 pub struct Dashboard {
     pub now: NowStats,
@@ -84,10 +92,9 @@ impl Dashboard {
         focus_dir: PathBuf,
     ) -> Self {
         let db = scan::scan(scan_cfg, today);
-        let provenance = ProvenanceMap::build(&discover::discover_extensions(ctx));
+        let (provenance, items) = discover_once(ctx);
         let stats = ccstat::ui::AppState::new(db, provenance, today);
 
-        let items = discover::discover_all(ctx).items;
         let map_counts = MapCounts::from_items(&items);
         let map = ccmap::ui::AppState::new(items);
 
@@ -105,10 +112,9 @@ impl Dashboard {
     /// aggregate and the stats/map view state (selection, filter, tab).
     pub fn rescan(&mut self, scan_cfg: &ScanConfig, ctx: &Context, today: NaiveDate) {
         let db = scan::scan(scan_cfg, today);
-        let provenance = ProvenanceMap::build(&discover::discover_extensions(ctx));
+        let (provenance, items) = discover_once(ctx);
         self.stats.reload_at(today, db, provenance);
 
-        let items = discover::discover_all(ctx).items;
         self.map_counts = MapCounts::from_items(&items);
         self.map.reload(items);
 
@@ -156,6 +162,53 @@ mod tests {
     #[test]
     fn map_counts_empty_is_all_zero() {
         assert_eq!(MapCounts::from_items(&[]), MapCounts::default());
+    }
+
+    #[test]
+    fn provenance_from_one_discovery_matches_the_extensions_only_one() {
+        let claude = tempfile::tempdir().unwrap();
+        let project = tempfile::tempdir().unwrap();
+        let write = |path: std::path::PathBuf, body: &str| {
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, body).unwrap();
+        };
+        write(
+            claude.path().join("agents/helper.md"),
+            "---\nname: helper\n---\n",
+        );
+        write(
+            claude.path().join("skills/tidy/SKILL.md"),
+            "---\nname: tidy\n---\n",
+        );
+        write(project.path().join(".claude/commands/ship.md"), "ship\n");
+        // An MCP server named like the agent: discover_all adds it, and it
+        // must not change the agent's provenance.
+        write(
+            project.path().join(".mcp.json"),
+            r#"{"mcpServers":{"helper":{}}}"#,
+        );
+        let ctx = Context {
+            claude_dir: claude.path().to_path_buf(),
+            project_dir: project.path().to_path_buf(),
+        };
+
+        let (once, items) = discover_once(&ctx);
+        assert!(items.iter().any(|i| i.kind == Kind::Mcp), "MCP is included");
+        let extensions_only = ProvenanceMap::build(&discover::discover_extensions(&ctx));
+        for (category, name) in [
+            (ccstat::model::Category::Agent, "helper"),
+            (ccstat::model::Category::Skill, "tidy"),
+            (ccstat::model::Category::Command, "/ship"),
+            (ccstat::model::Category::Mcp, "helper"),
+        ] {
+            assert_eq!(
+                once.lookup(category, name),
+                extensions_only.lookup(category, name),
+                "{category:?} {name}"
+            );
+        }
+        assert!(once.lookup(ccstat::model::Category::Agent, "helper").is_some());
+        assert!(once.lookup(ccstat::model::Category::Command, "/ship").is_some());
     }
 
     #[test]
