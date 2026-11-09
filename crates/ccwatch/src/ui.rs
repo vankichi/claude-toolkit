@@ -21,7 +21,7 @@ use ratatui::{
     widgets::{Bar, BarChart, BarGroup, Block, Borders, Paragraph, Wrap},
 };
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
@@ -764,11 +764,6 @@ fn tool_color(name: &str) -> Color {
         _ => Color::White,
     }
 }
-
-// Keep Path import alive for any future helpers; currently unused at the
-// function level but referenced in module-level docs.
-#[allow(dead_code)]
-fn _unused_path_marker(_p: &Path) {}
 
 #[cfg(test)]
 mod tests {
