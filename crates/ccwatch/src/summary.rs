@@ -207,7 +207,7 @@ fn draw_table(f: &mut Frame<'_>, area: Rect, entries: &[EntryView<'_>], selected
             let mode = mode_display(s.permission_mode()).to_string();
             let ctx_cell = format!(
                 "{} {:.0}%",
-                fmt_tokens_k(s.last_context_size()),
+                cctk::fmt::tokens(s.last_context_size()),
                 s.context_pct() * 100.0
             );
             let row_style = if idx == selected {
@@ -251,18 +251,6 @@ fn draw_table(f: &mut Frame<'_>, area: Rect, entries: &[EntryView<'_>], selected
     .header(header)
     .block(Block::default().borders(Borders::ALL));
     f.render_widget(table, area);
-}
-
-/// Compact "k / M" formatter for token counts. Sub-1000 values render
-/// untransformed so empty-session rows show `0` (not `0k`).
-fn fmt_tokens_k(n: u64) -> String {
-    if n >= 1_000_000 {
-        format!("{:.1}M", n as f64 / 1_000_000.0)
-    } else if n >= 1_000 {
-        format!("{}k", n / 1_000)
-    } else {
-        n.to_string()
-    }
 }
 
 /// Display the model name with the `claude-` prefix stripped. Empty / missing
@@ -476,17 +464,6 @@ mod tests {
         assert_eq!(model_family(Some("claude-sonnet-4-6-1m")), "sonnet");
         assert_eq!(model_family(Some("claude-haiku-4-5")), "haiku");
         assert_eq!(model_family(None), "?");
-    }
-
-    #[test]
-    fn fmt_tokens_k_buckets_sub_thousand_kilo_and_mega() {
-        assert_eq!(fmt_tokens_k(0), "0");
-        assert_eq!(fmt_tokens_k(999), "999");
-        assert_eq!(fmt_tokens_k(1_000), "1k");
-        assert_eq!(fmt_tokens_k(61_874), "61k");
-        assert_eq!(fmt_tokens_k(999_999), "999k");
-        assert_eq!(fmt_tokens_k(1_000_000), "1.0M");
-        assert_eq!(fmt_tokens_k(1_234_567), "1.2M");
     }
 
     #[test]

@@ -1,0 +1,30 @@
+//! Number formatting shared by the tools' text and chart labels.
+
+/// A token count as `999`, `13k` (rounded to the nearest thousand) or
+/// `1.2M`.
+#[must_use]
+pub fn tokens(n: u64) -> String {
+    if n >= 1_000_000 {
+        format!("{:.1}M", n as f64 / 1_000_000.0)
+    } else if n >= 1_000 {
+        format!("{:.0}k", n as f64 / 1_000.0)
+    } else {
+        n.to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tokens_scale_and_round() {
+        assert_eq!(tokens(0), "0");
+        assert_eq!(tokens(999), "999");
+        assert_eq!(tokens(1_000), "1k");
+        assert_eq!(tokens(12_800), "13k");
+        assert_eq!(tokens(61_874), "62k");
+        assert_eq!(tokens(1_000_000), "1.0M");
+        assert_eq!(tokens(1_234_567), "1.2M");
+    }
+}
