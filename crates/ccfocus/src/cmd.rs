@@ -202,11 +202,17 @@ fn kill_group(pgid: u32) {
 /// [`kill_group`] for several groups with a single `kill`.
 fn kill_groups(pgids: &[u32]) {
     let targets: Vec<String> = pgids.iter().filter_map(|&p| group_target(p)).collect();
-    if targets.is_empty() {
-        return;
+    if !targets.is_empty() {
+        sigkill(&targets);
     }
+}
+
+/// Run `kill -s KILL -- <targets>`, waiting up to [`KILL_TIMEOUT`]. Not
+/// through [`run`]: [`Running::close`] calls this holding the lock `run`
+/// takes.
+fn sigkill(targets: &[String]) {
     let Ok(mut k) = Command::new("kill")
-        .args(sigkill_args(&targets))
+        .args(sigkill_args(targets))
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -320,6 +326,30 @@ fn drain(mut r: impl Read) -> String {
     let _ = r.by_ref().take(MAX_OUTPUT).read_to_end(&mut buf);
     let _ = std::io::copy(&mut r, &mut std::io::sink());
     String::from_utf8_lossy(&buf).into_owned()
+}
+
+/// Whether `pid` is running, via `kill -0` (`std` has no portable check and
+/// this workspace forbids `unsafe`). A permission error still means the
+/// process exists. `None` when the answer is unclear.
+#[must_use]
+pub(crate) fn pid_alive(pid: u32) -> Option<bool> {
+    if cfg!(not(unix)) || pid == 0 {
+        return None;
+    }
+    let mut cmd = Command::new("kill");
+    cmd.args(["-0", &pid.to_string()]).env("LC_ALL", "C");
+    let out = run(cmd, KILL_TIMEOUT)?;
+    if out.success {
+        return Some(true);
+    }
+    let err = out.stderr.to_ascii_lowercase();
+    if err.contains("no such process") {
+        Some(false)
+    } else if err.contains("not permitted") {
+        Some(true)
+    } else {
+        None
+    }
 }
 
 /// Each git call; local plumbing finishes in milliseconds.
@@ -442,7 +472,7 @@ mod tests {
             .expect("a pid");
         let deadline = Instant::now() + Duration::from_secs(5);
         while Instant::now() < deadline {
-            if crate::app::pid_alive(pid) == Some(false) {
+            if pid_alive(pid) == Some(false) {
                 return true;
             }
             std::thread::sleep(Duration::from_millis(50));
@@ -455,9 +485,7 @@ mod tests {
 
     impl Drop for KillOnDrop {
         fn drop(&mut self) {
-            let mut k = Command::new("kill");
-            k.args(sigkill_args(&[self.0.to_string()]));
-            let _ = run(k, Duration::from_secs(1));
+            sigkill(&[self.0.to_string()]);
         }
     }
 
@@ -502,7 +530,7 @@ mod tests {
         // Wait first: a killed sleep reads as alive until init reaps it, so
         // checking at once could pass even if run had killed it.
         std::thread::sleep(Duration::from_millis(300));
-        assert_eq!(crate::app::pid_alive(pid), Some(true));
+        assert_eq!(pid_alive(pid), Some(true));
         drop(guard);
         assert!(background_is_gone(&pidfile));
     }
@@ -590,6 +618,13 @@ mod tests {
         let o = run_in(&running, cmd, Duration::from_secs(5)).unwrap();
         assert_eq!(o.stdout, "ok\n");
         assert!(running.lock().ids.is_empty());
+    }
+
+    #[test]
+    fn own_pid_is_alive() {
+        // The sandbox some runs use refuses signals; that still reads as alive.
+        assert_eq!(pid_alive(std::process::id()), Some(true));
+        assert_eq!(pid_alive(0), None);
     }
 
     #[test]
