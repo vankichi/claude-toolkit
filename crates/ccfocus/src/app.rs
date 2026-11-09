@@ -32,6 +32,13 @@ const PRUNE_EVERY: Duration = Duration::from_hours(1);
 const MESSAGE_FOR: Duration = Duration::from_secs(5);
 /// Shown while a jump runs; cleared when it lands as planned.
 const SWITCHING: &str = "switching…";
+/// A jump key pressed while one runs.
+const STILL_SWITCHING: &str = "still switching to the last session";
+
+/// The jump's own notes: kept while it runs, cleared when it lands.
+fn is_jump_note(m: &str) -> bool {
+    m == SWITCHING || m == STILL_SWITCHING
+}
 
 /// What a jump's thread sends back: the finished row's `seen_key` (to mark
 /// it seen on arrival) and [`tmux::run_jump`]'s result.
@@ -189,11 +196,11 @@ impl Focus {
             self.arrived(done, result, now, clock);
             changed = true;
         }
-        if self
-            .message
-            .as_ref()
-            .is_some_and(|(_, at)| clock.duration_since(*at) >= MESSAGE_FOR)
-        {
+        // A jump's own note stays while it runs, however long that is.
+        let jumping = self.jump_job.is_pending();
+        if self.message.as_ref().is_some_and(|(m, at)| {
+            clock.duration_since(*at) >= MESSAGE_FOR && !(jumping && is_jump_note(m))
+        }) {
             self.message = None;
             changed = true;
         }
@@ -408,14 +415,14 @@ impl Focus {
         {
             self.say(SWITCHING.into());
         } else {
-            self.say("still switching to the last session".into());
+            self.say(STILL_SWITCHING.into());
         }
     }
 
     /// Wait for a jump still running, so a board closed right after a jump
     /// key doesn't drop the switch (the process exiting would end its
     /// thread mid-way). Bounded by the jump's own timeouts. Call it before
-    /// tearing the screen down; dropping the board calls it too.
+    /// tearing the screen down.
     pub fn finish_jump(&mut self) {
         let _ = self.jump_job.wait();
     }
@@ -435,7 +442,7 @@ impl Focus {
                 // "switching" note, unless a newer message replaced it.
                 if let Some(w) = warning {
                     self.note(w, clock);
-                } else if self.message.as_ref().is_some_and(|(m, _)| m == SWITCHING) {
+                } else if self.message.as_ref().is_some_and(|(m, _)| is_jump_note(m)) {
                     self.message = None;
                 }
                 // A finished session counts as seen once visited: pick the
@@ -447,13 +454,6 @@ impl Focus {
             }
             Err(e) => self.note(e, clock),
         }
-    }
-}
-
-impl Drop for Focus {
-    /// cctop drops its board on exit without calling [`Focus::finish_jump`].
-    fn drop(&mut self) {
-        self.finish_jump();
     }
 }
 
@@ -506,6 +506,12 @@ mod tests {
     use super::*;
     use cctk::focus::{HostKind, SCHEMA, SessionState, Status};
     use std::path::Path;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    /// Set by the fake jump in `closing_the_board_waits_for_a_jump_in_flight`.
+    static SWITCHED: AtomicBool = AtomicBool::new(false);
+    /// Holds the fake jump in `the_jump_notes_outlast_the_message_timeout_while_it_runs`.
+    static RELEASE: AtomicBool = AtomicBool::new(false);
 
     fn at(s: &str) -> DateTime<FixedOffset> {
         DateTime::parse_from_rfc3339(s).unwrap()
@@ -670,10 +676,7 @@ mod tests {
             "the key doesn't wait for the jump"
         );
         f.on_key(KeyCode::Char('1'));
-        assert_eq!(
-            f.view().message.as_deref(),
-            Some("still switching to the last session")
-        );
+        assert_eq!(f.view().message.as_deref(), Some(STILL_SWITCHING));
 
         tick_until_arrived(&mut f, now);
         assert_eq!(
@@ -713,8 +716,6 @@ mod tests {
 
     #[test]
     fn closing_the_board_waits_for_a_jump_in_flight() {
-        use std::sync::atomic::{AtomicBool, Ordering};
-        static SWITCHED: AtomicBool = AtomicBool::new(false);
         let tmp = tempfile::tempdir().unwrap();
         let a = "00000000-0000-4000-8000-00000000000a";
         write_session(tmp.path(), a, Status::Waiting, "2026-01-05T14:20:00+09:00");
@@ -732,8 +733,40 @@ mod tests {
 
         f.on_key(KeyCode::Char('1'));
         assert!(f.on_key(KeyCode::Char('q')));
-        drop(f);
+        f.finish_jump();
         assert!(SWITCHED.load(Ordering::SeqCst), "the switch ran to the end");
+    }
+
+    #[test]
+    fn the_jump_notes_outlast_the_message_timeout_while_it_runs() {
+        let tmp = tempfile::tempdir().unwrap();
+        let a = "00000000-0000-4000-8000-00000000000a";
+        write_session(tmp.path(), a, Status::Waiting, "2026-01-05T14:20:00+09:00");
+        let mut f = board_over(tmp.path());
+        f.client = Client {
+            inside: true,
+            pane: None,
+        };
+        f.run_jump = |_| {
+            while !RELEASE.load(Ordering::SeqCst) {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            Ok(None)
+        };
+        let now = at("2026-01-05T14:24:00+09:00");
+        f.tick_at(now, Instant::now(), false);
+
+        f.on_key(KeyCode::Char('1'));
+        f.on_key(KeyCode::Char('1'));
+        // The jump is held, so a tick past MESSAGE_FOR can't see a result.
+        let later = Instant::now() + MESSAGE_FOR + Duration::from_secs(1);
+        f.tick_at(now, later, false);
+        assert_eq!(f.view().message.as_deref(), Some(STILL_SWITCHING));
+
+        // Landing as planned clears the refusal note too.
+        RELEASE.store(true, Ordering::SeqCst);
+        tick_until_arrived(&mut f, now);
+        assert_eq!(f.view().message, None);
     }
 
     #[test]
