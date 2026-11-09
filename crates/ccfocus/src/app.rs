@@ -412,6 +412,14 @@ impl Focus {
         }
     }
 
+    /// Wait for a jump still running, so a board closed right after a jump
+    /// key doesn't drop the switch (the process exiting would end its
+    /// thread mid-way). Bounded by the jump's own timeouts. Call it before
+    /// tearing the screen down; dropping the board calls it too.
+    pub fn finish_jump(&mut self) {
+        let _ = self.jump_job.wait();
+    }
+
     /// A jump's thread finished.
     fn arrived(
         &mut self,
@@ -439,6 +447,13 @@ impl Focus {
             }
             Err(e) => self.note(e, clock),
         }
+    }
+}
+
+impl Drop for Focus {
+    /// cctop drops its board on exit without calling [`Focus::finish_jump`].
+    fn drop(&mut self) {
+        self.finish_jump();
     }
 }
 
@@ -694,6 +709,31 @@ mod tests {
         f.on_key(KeyCode::Char('7'));
         tick_until_arrived(&mut f, now);
         assert_eq!(f.view().message.as_deref(), Some("no session [7]"));
+    }
+
+    #[test]
+    fn closing_the_board_waits_for_a_jump_in_flight() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        static SWITCHED: AtomicBool = AtomicBool::new(false);
+        let tmp = tempfile::tempdir().unwrap();
+        let a = "00000000-0000-4000-8000-00000000000a";
+        write_session(tmp.path(), a, Status::Waiting, "2026-01-05T14:20:00+09:00");
+        let mut f = board_over(tmp.path());
+        f.client = Client {
+            inside: true,
+            pane: None,
+        };
+        f.run_jump = |_| {
+            std::thread::sleep(Duration::from_millis(200));
+            SWITCHED.store(true, Ordering::SeqCst);
+            Ok(None)
+        };
+        f.tick_at(at("2026-01-05T14:24:00+09:00"), Instant::now(), false);
+
+        f.on_key(KeyCode::Char('1'));
+        assert!(f.on_key(KeyCode::Char('q')));
+        drop(f);
+        assert!(SWITCHED.load(Ordering::SeqCst), "the switch ran to the end");
     }
 
     #[test]
