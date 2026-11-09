@@ -80,9 +80,8 @@ impl ModelInfo {
     /// and JSONL doesn't surface the variant on assistant events.
     #[must_use]
     pub fn context_window(self) -> u64 {
-        // `long_context` is still consulted by `pricing()` (1M-tier billing
-        // differs above 200k input), but the gauge denominator is uniform.
-        let _ = self.long_context;
+        // Uniform, so `long_context` doesn't change it; `pricing()` doesn't
+        // read it either (it prices by family only).
         1_000_000
     }
 

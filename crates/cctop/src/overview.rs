@@ -18,7 +18,7 @@ use ratatui::{
 
 /// Human-readable token count: `1.2M`, `900k`, or the bare number.
 #[must_use]
-pub fn fmt_tokens(n: u64) -> String {
+fn fmt_tokens(n: u64) -> String {
     if n >= 1_000_000 {
         format!("{:.1}M", n as f64 / 1_000_000.0)
     } else if n >= 1_000 {
@@ -30,7 +30,7 @@ pub fn fmt_tokens(n: u64) -> String {
 
 /// Dollar cost with cents.
 #[must_use]
-pub fn fmt_cost(cost: f64) -> String {
+fn fmt_cost(cost: f64) -> String {
     format!("${cost:.2}")
 }
 

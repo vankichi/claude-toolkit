@@ -1,9 +1,9 @@
 //! cctk — shared core for the claude-toolkit tools.
 //!
 //! Owns the canonical JSONL session-log schema and parser, per-model pricing,
-//! pure path/tail helpers, and terminal-free visualization/fuzzy primitives so
-//! `ccwatch`, `ccstat`, `ccmap`, and (later) `cctop` all share one core instead
-//! of maintaining parallel copies.
+//! pure path/tail helpers, ratatui chart / text visualization helpers, and
+//! fuzzy matching, so `ccwatch`, `ccstat`, `ccmap`, `cctop` and `ccfocus`
+//! share one core instead of maintaining parallel copies.
 
 pub mod chart;
 pub mod focus;

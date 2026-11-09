@@ -1131,7 +1131,6 @@ mod tests {
             };
             let line = LineData {
                 timestamp: Some(ts),
-                cwd: None,
                 items: vec![ex],
             };
             db.absorb(&line, project, day(2026, 7, 16));

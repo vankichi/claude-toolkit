@@ -55,16 +55,6 @@ impl Default for Config {
     }
 }
 
-/// The config in `state_dir` with `container_tmux` from the host's
-/// [`CONTAINER_TMUX_ENV`], plus a one-line warning (cleaned for display: it
-/// can quote the file) when either could not be used (the defaults apply
-/// then). A missing file or unset variable is not a warning. A symlink is
-/// followed, so a config managed elsewhere (e.g. a dotfiles link) works.
-#[must_use]
-pub fn load(state_dir: &Path) -> (Config, Option<String>) {
-    load_with(state_dir, &env())
-}
-
 /// The value of [`CONTAINER_TMUX_ENV`]: `Ok(None)` when unset, `Err` when
 /// it is not UTF-8. Read once and kept, so a reload (and a test) doesn't
 /// depend on the process environment.
@@ -78,7 +68,12 @@ pub(crate) fn env() -> Env {
     }
 }
 
-/// [`load`] with the variable's value given.
+/// The config in `state_dir` with `container_tmux` from the host's
+/// [`CONTAINER_TMUX_ENV`] (its value given as `env`, see [`env`]), plus a
+/// one-line warning (cleaned for display: it can quote the file) when
+/// either could not be used (the defaults apply then). A missing file or
+/// unset variable is not a warning. A symlink is followed, so a config
+/// managed elsewhere (e.g. a dotfiles link) works.
 pub(crate) fn load_with(state_dir: &Path, env: &Env) -> (Config, Option<String>) {
     let (mut config, file_warning) = load_raw(state_dir);
     let env_warning = match env {

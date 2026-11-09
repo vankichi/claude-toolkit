@@ -1,4 +1,4 @@
-//! Live data store backing the three overview panels.
+//! Live data store backing the overview panels.
 //!
 //! Holds the self-aggregated [`NowStats`] plus a `ccstat` and a `ccmap`
 //! `AppState` (reused verbatim for both the compact overview panels and the
