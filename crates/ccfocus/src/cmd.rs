@@ -6,7 +6,7 @@
 
 use std::io::Read;
 use std::path::Path;
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::mpsc::Receiver;
 use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
@@ -77,16 +77,9 @@ fn wait_for(running: &Running, child: &mut Child, timeout: Duration) -> Option<O
     };
     let out = reader(out);
     let err = reader(err);
-    let deadline = Instant::now() + timeout;
-    let status = loop {
-        match child.try_wait() {
-            Ok(Some(status)) => break status,
-            Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(5)),
-            _ => {
-                give_up(running, child);
-                return None;
-            }
-        }
+    let Ok(Some(status)) = wait_until(child, Instant::now() + timeout) else {
+        give_up(running, child);
+        return None;
     };
     let (stdout, stderr) = read_after_exit(&out, &err);
     if stdout.is_none() || stderr.is_none() {
@@ -220,12 +213,20 @@ fn sigkill(targets: &[String]) {
     else {
         return;
     };
-    let deadline = Instant::now() + KILL_TIMEOUT;
-    while matches!(k.try_wait(), Ok(None)) && Instant::now() < deadline {
-        std::thread::sleep(Duration::from_millis(5));
-    }
+    let _ = wait_until(&mut k, Instant::now() + KILL_TIMEOUT);
     let _ = k.kill();
     let _ = k.wait();
+}
+
+/// Poll `child` until it exits (`Ok(Some)`), `deadline` passes (`Ok(None)`)
+/// or waiting fails.
+fn wait_until(child: &mut Child, deadline: Instant) -> std::io::Result<Option<ExitStatus>> {
+    loop {
+        match child.try_wait()? {
+            None if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(5)),
+            done => return Ok(done),
+        }
+    }
 }
 
 /// `kill` arguments that SIGKILL `targets` (pids, or `-<pgid>` for a
@@ -267,29 +268,25 @@ pub(crate) fn start(mut cmd: Command, settle: Duration) -> Result<Option<Output>
     };
     let out = reader(out);
     let err = reader(err);
-    let deadline = Instant::now() + settle;
-    loop {
-        match child.try_wait() {
-            Ok(Some(status)) => {
-                let (stdout, stderr) = read_after_exit(&out, &err);
-                return Ok(Some(Output {
-                    success: status.success(),
-                    stdout: stdout.unwrap_or_default(),
-                    stderr: stderr.unwrap_or_else(|| STDERR_UNREAD.to_string()),
-                }));
-            }
-            Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(5)),
-            Ok(None) => {
-                std::thread::spawn(move || {
-                    let _ = child.wait();
-                });
-                return Ok(None);
-            }
-            Err(_) => {
-                let _ = child.kill();
+    match wait_until(&mut child, Instant::now() + settle) {
+        Ok(Some(status)) => {
+            let (stdout, stderr) = read_after_exit(&out, &err);
+            Ok(Some(Output {
+                success: status.success(),
+                stdout: stdout.unwrap_or_default(),
+                stderr: stderr.unwrap_or_else(|| STDERR_UNREAD.to_string()),
+            }))
+        }
+        Ok(None) => {
+            std::thread::spawn(move || {
                 let _ = child.wait();
-                return Err(());
-            }
+            });
+            Ok(None)
+        }
+        Err(_) => {
+            let _ = child.kill();
+            let _ = child.wait();
+            Err(())
         }
     }
 }
