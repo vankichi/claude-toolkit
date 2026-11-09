@@ -4,7 +4,7 @@
 //! [`ui::run`]. JSONL parsing, pricing, and the tail watcher are provided by
 //! the shared `cctk` crate.
 
-pub mod session;
-pub mod stats;
-pub mod summary;
+mod session;
+mod stats;
+mod summary;
 pub mod ui;
