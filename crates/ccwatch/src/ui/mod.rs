@@ -84,35 +84,7 @@ pub async fn run(cfg: Config) -> Result<()> {
 /// redraws each tick, and handles key input per the active view mode.
 async fn run_inner(terminal: &mut DefaultTerminal, cfg: Config) -> Result<()> {
     let (event_tx, mut event_rx) = mpsc::channel::<(usize, SessionLine)>(EVENT_CHANNEL_CAPACITY);
-
-    let (mut entries, pinned, mut mode) = if let Some(path) = cfg.explicit_session.clone() {
-        // `--session <path>` mode: single pinned entry, no summary toggle.
-        let short_id = session::short_id(&path);
-        let session_id = path
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or(&short_id)
-            .to_string();
-        let handle = tail::spawn(path.clone(), 0, event_tx.clone());
-        let stats = SessionStats::new(cfg.context_window_override);
-        let entry = SessionEntry {
-            path,
-            short_id,
-            session_id,
-            name: None,
-            status: AgentStatus::Offline,
-            stats,
-            handle,
-        };
-        (vec![entry], true, ViewMode::Single)
-    } else {
-        let discovered = session::discover_sessions(&cfg.projects_dir, cfg.days).await?;
-        if discovered.is_empty() {
-            anyhow::bail!("no sessions found (start one with `claude` or widen with `--days N`)");
-        }
-        let entries = spawn_entries(&discovered, &event_tx, cfg.context_window_override);
-        (entries, false, ViewMode::Summary)
-    };
+    let (mut entries, pinned, mut mode) = initial_entries(&cfg, &event_tx).await?;
 
     let mut selected: usize = 0;
     let mut event_buf: Vec<(usize, SessionLine)> = Vec::with_capacity(EVENT_DRAIN_BATCH);
@@ -193,6 +165,43 @@ async fn run_inner(terminal: &mut DefaultTerminal, cfg: Config) -> Result<()> {
                 }
             }
         }
+    }
+}
+
+/// The entries to start with, whether they are pinned, and the first view:
+/// the one `--session` log in the single view, else every discovered
+/// session in the summary.
+async fn initial_entries(
+    cfg: &Config,
+    event_tx: &mpsc::Sender<(usize, SessionLine)>,
+) -> Result<(Vec<SessionEntry>, bool, ViewMode)> {
+    if let Some(path) = cfg.explicit_session.clone() {
+        // `--session <path>` mode: single pinned entry, no summary toggle.
+        let short_id = session::short_id(&path);
+        let session_id = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or(&short_id)
+            .to_string();
+        let handle = tail::spawn(path.clone(), 0, event_tx.clone());
+        let stats = SessionStats::new(cfg.context_window_override);
+        let entry = SessionEntry {
+            path,
+            short_id,
+            session_id,
+            name: None,
+            status: AgentStatus::Offline,
+            stats,
+            handle,
+        };
+        Ok((vec![entry], true, ViewMode::Single))
+    } else {
+        let discovered = session::discover_sessions(&cfg.projects_dir, cfg.days).await?;
+        if discovered.is_empty() {
+            anyhow::bail!("no sessions found (start one with `claude` or widen with `--days N`)");
+        }
+        let entries = spawn_entries(&discovered, event_tx, cfg.context_window_override);
+        Ok((entries, false, ViewMode::Summary))
     }
 }
 
