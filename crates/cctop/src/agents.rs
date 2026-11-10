@@ -6,29 +6,14 @@
 //! map, and cctop falls back to the short session id.
 
 use std::collections::HashMap;
-use std::time::Duration;
-
-/// Hard cap on how long we wait for `claude agents --json`.
-const TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Map of session id → display name for currently-listed agents. Sessions
 /// without a non-empty name are omitted (the caller falls back to the id).
 pub async fn names() -> HashMap<String, String> {
-    let fut = tokio::process::Command::new("claude")
-        .args(["agents", "--json"])
-        .stdin(std::process::Stdio::null())
-        // On a timeout the future is dropped; without this the CLI runs on.
-        .kill_on_drop(true)
-        .output();
-
-    let Ok(Ok(output)) = tokio::time::timeout(TIMEOUT, fut).await else {
+    let Ok(stdout) = cctk::agents::json().await else {
         return HashMap::new();
     };
-    if !output.status.success() {
-        return HashMap::new();
-    }
-
-    let Ok(value) = serde_json::from_slice::<serde_json::Value>(&output.stdout) else {
+    let Ok(value) = serde_json::from_slice::<serde_json::Value>(&stdout) else {
         return HashMap::new();
     };
     let mut map = HashMap::new();
