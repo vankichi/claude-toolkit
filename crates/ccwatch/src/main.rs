@@ -73,7 +73,7 @@ async fn main() -> Result<()> {
     ui::run(ui::Config {
         projects_dir,
         explicit_session: cli.session,
-        refresh_ms: cli.refresh_ms,
+        refresh_ms: cli.refresh_ms.max(16),
         context_window_override: cli.context_window,
         days: cli.days,
         watch_interval,
