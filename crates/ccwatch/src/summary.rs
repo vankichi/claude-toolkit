@@ -7,6 +7,7 @@
 
 use crate::session::AgentStatusKind;
 use crate::stats::SessionStats;
+use cctk::fmt::usd;
 use cctk::style::{bold, bold_fg, dim, panel, reversed};
 use chrono::{DateTime, Utc};
 use ratatui::{
@@ -166,7 +167,7 @@ fn draw_aggregate(f: &mut Frame<'_>, area: Rect, entries: &[EntryView<'_>]) {
         Span::styled(agg.live_count.to_string(), bold()),
         Span::raw("   "),
         Span::styled("total: ", dim()),
-        Span::styled(format!("${:.2}", agg.total_cost_usd), bold_fg(Color::White)),
+        Span::styled(usd(agg.total_cost_usd), bold_fg(Color::White)),
         Span::raw("   "),
         Span::styled("msgs: ", dim()),
         Span::styled(agg.total_msgs.to_string(), bold()),

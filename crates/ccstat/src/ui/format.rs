@@ -3,6 +3,7 @@
 use crate::model::Category;
 use crate::usage::Row;
 use ccmap::model::Provenance;
+use cctk::fmt::usd;
 use chrono::NaiveDate;
 use ratatui::style::Color;
 
@@ -62,7 +63,7 @@ pub fn detail_lines(row: &Row, category: Category, today: NaiveDate) -> Vec<Stri
             "tokens: in {} · out {} · cache-write {} · cache-read {}",
             row.input, row.output, row.cache_creation, row.cache_read
         ));
-        lines.push(format!("est. cost: ${:.2}", row.cost_usd));
+        lines.push(format!("est. cost: {}", usd(row.cost_usd)));
     }
 
     if !row.by_project.is_empty() {

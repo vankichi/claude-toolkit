@@ -6,6 +6,7 @@ use super::format::{fmt_int, format_duration, threshold_color, tool_color, value
 use super::state::{ViewMode, build_views, display_order};
 use crate::stats::SessionStats;
 use crate::summary;
+use cctk::fmt::usd;
 use cctk::style::{bold, bold_fg, dim, panel};
 use ratatui::{
     Frame,
@@ -207,7 +208,7 @@ fn draw_cost(f: &mut Frame<'_>, area: Rect, s: &SessionStats) {
     let burn_color = threshold_color(cph, 5.0, 15.0);
     let line = Line::from(vec![
         Span::styled("session: ", dim()),
-        value_span(format!("${:.2}", s.session_cost_usd()), Color::White),
+        value_span(usd(s.session_cost_usd()), Color::White),
         Span::raw("    "),
         Span::styled("rate: ", dim()),
         value_span(
@@ -216,7 +217,7 @@ fn draw_cost(f: &mut Frame<'_>, area: Rect, s: &SessionStats) {
         ),
         Span::raw("    "),
         Span::styled("burn: ", dim()),
-        value_span(format!("${cph:.2}/hr"), burn_color),
+        value_span(format!("{}/hr", usd(cph)), burn_color),
     ]);
     f.render_widget(Paragraph::new(line).block(panel(" cost ")), area);
 }

@@ -16,14 +16,8 @@ use ratatui::{
     widgets::{Block, Paragraph},
 };
 
-use cctk::fmt::tokens as fmt_tokens;
+use cctk::fmt::{tokens as fmt_tokens, usd};
 use cctk::style::{bold, bold_fg, dim, panel};
-
-/// Dollar cost with cents.
-#[must_use]
-fn fmt_cost(cost: f64) -> String {
-    format!("${cost:.2}")
-}
 
 fn panel_block(title: &str, which: Panel, app: &App) -> Block<'static> {
     let selected = app.mode == Mode::Overview && app.selected == which;
@@ -94,7 +88,7 @@ fn session_line(s: &crate::now::SessionView) -> Line<'static> {
             "   {}   {} tok   {}   ctx {:.0}%",
             s.model,
             fmt_tokens(s.tokens),
-            fmt_cost(s.cost_usd),
+            usd(s.cost_usd),
             s.context_pct * 100.0,
         )),
     ])
@@ -163,7 +157,7 @@ fn draw_now(f: &mut Frame<'_>, area: Rect, dash: &Dashboard, app: &App) {
             format!(
                 "{} tok   {}   ctx≤{:.0}%   (Enter for per-session)",
                 fmt_tokens(now.total_tokens()),
-                fmt_cost(now.cost_usd()),
+                usd(now.cost_usd()),
                 now.context_pct() * 100.0,
             ),
             dim(),
@@ -411,7 +405,7 @@ pub fn draw_now_detail(f: &mut Frame<'_>, now: &crate::now::NowStats) {
             Span::raw(format!(
                 "   {} tok   {}   {} msgs",
                 fmt_tokens(now.total_tokens()),
-                fmt_cost(now.cost_usd()),
+                usd(now.cost_usd()),
                 now.assistant_messages(),
             )),
         ]),
@@ -487,12 +481,5 @@ mod tests {
         let points = [(0.0, 0.0), (1.0, 0.0), (2.0, 0.0)];
         let out = render_to_string(48, 4, &points);
         assert!(out.contains("waiting"));
-    }
-
-    #[test]
-    fn fmt_cost_has_cents() {
-        assert_eq!(fmt_cost(0.0), "$0.00");
-        assert_eq!(fmt_cost(3.4), "$3.40");
-        assert_eq!(fmt_cost(142.5), "$142.50");
     }
 }

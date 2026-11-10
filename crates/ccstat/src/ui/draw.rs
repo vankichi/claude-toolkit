@@ -166,7 +166,7 @@ fn date_axis(today: NaiveDate, span: usize) -> Axis<'static> {
 /// Y-axis top label for the trends graph, formatted for the metric.
 fn metric_top_label(metric: GraphMetric, y_max: f64) -> String {
     if metric == GraphMetric::Cost {
-        return format!("${y_max:.2}");
+        return cctk::fmt::usd(y_max);
     }
     #[expect(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     cctk::fmt::tokens(y_max.round() as u64)

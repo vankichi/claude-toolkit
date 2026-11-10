@@ -13,9 +13,22 @@ pub fn tokens(n: u64) -> String {
     }
 }
 
+/// A dollar amount with cents, e.g. `$3.40`.
+#[must_use]
+pub fn usd(v: f64) -> String {
+    format!("${v:.2}")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn usd_has_cents() {
+        assert_eq!(usd(0.0), "$0.00");
+        assert_eq!(usd(3.4), "$3.40");
+        assert_eq!(usd(142.5), "$142.50");
+    }
 
     #[test]
     fn tokens_scale_and_round() {
