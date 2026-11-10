@@ -127,16 +127,14 @@ impl AppState {
     /// Switches to the next tab in fixed order, wrapping from `Mcp` back to
     /// `Agent`, and resets the selection to the top row.
     pub fn next_tab(&mut self) {
-        let idx = TABS.iter().position(|kind| *kind == self.tab).unwrap_or(0);
-        self.tab = TABS[(idx + 1) % TABS.len()];
+        self.tab = cctk::cycle::next(&TABS, self.tab);
         self.selected = 0;
     }
 
     /// Switches to the previous tab in fixed order, wrapping from `Agent`
     /// back to `Mcp`, and resets the selection to the top row.
     pub fn prev_tab(&mut self) {
-        let idx = TABS.iter().position(|kind| *kind == self.tab).unwrap_or(0);
-        self.tab = TABS[(idx + TABS.len() - 1) % TABS.len()];
+        self.tab = cctk::cycle::prev(&TABS, self.tab);
         self.selected = 0;
     }
 
