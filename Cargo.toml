@@ -3,6 +3,7 @@ resolver = "3"
 members = ["crates/*"]
 
 [workspace.package]
+version = "0.3.4"
 edition = "2024"
 rust-version = "1.99"
 license = "MIT"
@@ -14,6 +15,11 @@ categories = ["command-line-utilities"]
 publish = false
 
 [workspace.dependencies]
+# Workspace crates (one version, see [workspace.package]).
+ccfocus = { path = "crates/ccfocus", version = "0.3.4" }
+ccmap = { path = "crates/ccmap", version = "0.3.4" }
+ccstat = { path = "crates/ccstat", version = "0.3.4" }
+cctk = { path = "crates/cctk", version = "0.3.4" }
 anyhow = "1"
 chrono = "0.4"
 clap = { version = "4", features = ["derive", "env"] }

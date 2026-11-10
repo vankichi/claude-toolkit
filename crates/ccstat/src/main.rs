@@ -6,7 +6,6 @@ use ccstat::scan::ScanConfig;
 use ccstat::ui;
 use chrono::Utc;
 use clap::Parser;
-use std::path::PathBuf;
 
 #[derive(Parser, Debug)]
 #[command(
@@ -15,9 +14,8 @@ use std::path::PathBuf;
     about = "Terminal dashboard of Claude Code model/agent/skill/command/MCP usage across sessions"
 )]
 struct Cli {
-    /// Override Claude projects directory (default: ~/.claude/projects)
-    #[arg(long)]
-    projects_dir: Option<PathBuf>,
+    #[command(flatten)]
+    projects: cctk::cli::ProjectsDir,
 
     /// Live mode: spin a loading indicator on items running now and
     /// auto-refresh. Optionally set the full-rescan interval in SECONDS
@@ -30,6 +28,7 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
     let claude_dir = cctk::paths::default_claude_dir()?;
     let projects_dir = cli
+        .projects
         .projects_dir
         .unwrap_or_else(|| claude_dir.join("projects"));
     let cfg = ScanConfig { projects_dir };

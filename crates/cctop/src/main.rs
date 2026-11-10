@@ -13,9 +13,8 @@ mod overview;
 mod run;
 mod store;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use clap::Parser;
-use std::path::PathBuf;
 use std::time::Duration;
 
 #[derive(Parser, Debug)]
@@ -25,22 +24,17 @@ use std::time::Duration;
     about = "Unified TUI dashboard for Claude Code: live usage, stats, and config map"
 )]
 struct Cli {
-    /// Override the Claude projects directory (default: ~/.claude/projects)
-    #[arg(long)]
-    projects_dir: Option<PathBuf>,
+    #[command(flatten)]
+    projects: cctk::cli::ProjectsDir,
 
-    /// Override the Claude config directory (default: ~/.claude)
-    #[arg(long)]
-    claude_dir: Option<PathBuf>,
+    #[command(flatten)]
+    claude: cctk::cli::ClaudeDir,
 
-    /// Override the project directory scanned for `.claude` and `.mcp.json`
-    /// (default: the current working directory)
-    #[arg(long)]
-    project_dir: Option<PathBuf>,
+    #[command(flatten)]
+    project: cctk::cli::ProjectDir,
 
-    /// UI redraw interval in milliseconds
-    #[arg(long, default_value_t = 250)]
-    refresh_ms: u64,
+    #[command(flatten)]
+    refresh: cctk::cli::Refresh,
 
     /// How often (seconds) to re-scan the corpus and re-discover the config
     /// map. The active-session "Now" panel updates live regardless.
@@ -55,18 +49,9 @@ struct Cli {
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
-    let projects_dir = match cli.projects_dir {
-        Some(p) => p,
-        None => cctk::paths::default_projects_dir()?,
-    };
-    let claude_dir = match cli.claude_dir {
-        Some(p) => p,
-        None => cctk::paths::default_claude_dir()?,
-    };
-    let project_dir = match cli.project_dir {
-        Some(p) => p,
-        None => std::env::current_dir().context("could not determine current directory")?,
-    };
+    let projects_dir = cli.projects.resolve()?;
+    let claude_dir = cli.claude.resolve()?;
+    let project_dir = cli.project.resolve()?;
 
     // Where the hook writes (`$CCFOCUS_STATE_DIR`, else ~/.claude/focus);
     // `--claude-dir` does not move it.
@@ -77,7 +62,7 @@ async fn main() -> Result<()> {
         claude_dir,
         project_dir,
         focus_dir,
-        refresh: Duration::from_millis(cli.refresh_ms.max(16)),
+        refresh: cli.refresh.interval(),
         rescan_every: Duration::from_secs(cli.rescan_secs.max(1)),
     })
     .await
