@@ -28,13 +28,13 @@ struct Cli {
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
-    let home = std::env::home_dir().context("could not determine home directory")?;
+    let claude_dir = cctk::paths::default_claude_dir()?;
     let projects_dir = cli
         .projects_dir
-        .unwrap_or_else(|| home.join(".claude").join("projects"));
+        .unwrap_or_else(|| claude_dir.join("projects"));
     let cfg = ScanConfig { projects_dir };
     let ctx = discover::Context {
-        claude_dir: home.join(".claude"),
+        claude_dir,
         project_dir: std::env::current_dir().context("could not determine current directory")?,
     };
     // Zero disables live mode (and guards against a 0-length rescan interval).

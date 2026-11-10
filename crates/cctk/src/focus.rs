@@ -86,7 +86,9 @@ pub fn default_state_dir() -> Option<PathBuf> {
     if let Some(dir) = std::env::var_os(STATE_DIR_ENV).filter(|v| !v.is_empty()) {
         return Some(PathBuf::from(dir));
     }
-    std::env::home_dir().map(|h| h.join(".claude").join("focus"))
+    crate::paths::default_claude_dir()
+        .ok()
+        .map(|dir| dir.join("focus"))
 }
 
 #[must_use]

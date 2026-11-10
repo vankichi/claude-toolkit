@@ -5,8 +5,27 @@
 //! against a temp directory.
 
 use std::fs::File;
-use std::io::{Read, Seek, SeekFrom};
+use std::io::{self, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
+
+/// `~/.claude`, the default for every tool's `--claude-dir`.
+///
+/// # Errors
+/// When the home directory can't be determined.
+pub fn default_claude_dir() -> io::Result<PathBuf> {
+    std::env::home_dir()
+        .map(|home| home.join(".claude"))
+        .ok_or_else(|| io::Error::other("could not determine home directory"))
+}
+
+/// `~/.claude/projects`, where the session logs live; the default for every
+/// tool's `--projects-dir`.
+///
+/// # Errors
+/// When the home directory can't be determined.
+pub fn default_projects_dir() -> io::Result<PathBuf> {
+    Ok(default_claude_dir()?.join("projects"))
+}
 
 /// All session-transcript `*.jsonl` files under `projects_dir`: the per-session
 /// files one level down (`projects_dir/<encoded-project>/<session>.jsonl`) plus

@@ -30,11 +30,9 @@ struct Cli {
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    let claude_dir = if let Some(dir) = cli.claude_dir {
-        dir
-    } else {
-        let home = std::env::home_dir().context("could not determine home directory")?;
-        home.join(".claude")
+    let claude_dir = match cli.claude_dir {
+        Some(dir) => dir,
+        None => cctk::paths::default_claude_dir()?,
     };
 
     let project_dir = match cli.project_dir {
