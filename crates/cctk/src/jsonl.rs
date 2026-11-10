@@ -105,7 +105,7 @@ pub struct Line {
 /// One usage record extracted from a line. A single assistant line can yield a
 /// `Model` plus any number of `Skill`/`Agent`/`Mcp` records; a user line yields
 /// zero or more `Command` records.
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum Extracted {
     Model { name: String, usage: Usage },
     Skill { name: String },
