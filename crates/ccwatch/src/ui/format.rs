@@ -1,6 +1,6 @@
-//! Span / color / number helpers (shared styles live in `style`).
+//! Span / color / number helpers (shared styles live in `cctk::style`).
 
-use crate::style::bold_fg;
+use cctk::style::bold_fg;
 use ratatui::{style::Color, text::Span};
 
 pub(super) fn value_span<S: Into<String>>(s: S, color: Color) -> Span<'static> {

@@ -7,13 +7,14 @@ use super::format::{
 };
 use crate::model::{Category, ProjectFilter};
 use crate::usage::{GraphMetric, TREND_DAYS};
+use cctk::style::{bold_fg, dim, panel};
 use chrono::{Duration, NaiveDate};
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout, Rect},
-    style::{Color, Modifier, Style},
+    style::{Color, Style},
     text::{Line, Span},
-    widgets::{Axis, Block, Borders, Clear, List, ListItem, ListState, Paragraph, Tabs, Wrap},
+    widgets::{Axis, Clear, List, ListItem, ListState, Paragraph, Tabs, Wrap},
 };
 
 const TABS_H: u16 = 3;
@@ -105,25 +106,20 @@ pub fn trends_series(state: &AppState) -> Vec<cctk::chart::LineSeries> {
 /// x-axis. Model rows are colored by family; other tabs cycle a palette.
 fn draw_trends(f: &mut Frame<'_>, area: Rect, state: &AppState) {
     let metric = state.graph_metric;
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::DarkGray))
-        .title(format!(
-            " Trends · {} · top {} · window {} · (m: metric) ",
-            metric.label(),
-            TRENDS_TOP_N,
-            state.window.label(),
-        ));
+    let block = panel(format!(
+        " Trends · {} · top {} · window {} · (m: metric) ",
+        metric.label(),
+        TRENDS_TOP_N,
+        state.window.label(),
+    ))
+    .border_style(dim());
     let inner = block.inner(area);
     f.render_widget(block, area);
 
     let series = trends_series(state);
     if series.is_empty() || inner.height < 2 {
         f.render_widget(
-            Paragraph::new(Span::styled(
-                "no data in the selected window",
-                Style::default().fg(Color::DarkGray),
-            )),
+            Paragraph::new(Span::styled("no data in the selected window", dim())),
             inner,
         );
         return;
@@ -144,11 +140,7 @@ fn draw_trends(f: &mut Frame<'_>, area: Rect, state: &AppState) {
         .collect();
     f.render_widget(Paragraph::new(Line::from(legend)), parts[0]);
 
-    let y_max = series
-        .iter()
-        .flat_map(|s| s.points.iter().map(|&(_, y)| y))
-        .fold(0.0_f64, f64::max)
-        .max(1.0);
+    let y_max = cctk::chart::peak(&series);
 
     let chart = cctk::chart::braille_multi_line(&series, y_max, metric_top_label(metric, y_max))
         .x_axis(date_axis(state.today_for_rescan(), state.graph_span()));
@@ -170,24 +162,18 @@ fn date_axis(today: NaiveDate, span: usize) -> Axis<'static> {
 /// Y-axis top label for the trends graph, formatted for the metric.
 fn metric_top_label(metric: GraphMetric, y_max: f64) -> String {
     if metric == GraphMetric::Cost {
-        return format!("${y_max:.2}");
+        return cctk::fmt::usd(y_max);
     }
-    #[expect(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    cctk::fmt::tokens(y_max.round() as u64)
+    cctk::fmt::tokens_f64(y_max)
 }
 
 /// One-line running summary shown in watch mode: an animated spinner (or a dim
 /// `○` when idle) followed by the running-item names and live-session count.
 fn draw_running(f: &mut Frame<'_>, area: Rect, state: &AppState) {
     let (glyph, glyph_style) = if state.has_active() {
-        (
-            state.spinner_char(),
-            Style::default()
-                .fg(Color::Green)
-                .add_modifier(Modifier::BOLD),
-        )
+        (state.spinner_char(), bold_fg(Color::Green))
     } else {
-        ('○', Style::default().fg(Color::DarkGray))
+        ('○', dim())
     };
     let line = Line::from(vec![
         Span::styled(format!(" {glyph} "), glyph_style),
@@ -214,12 +200,8 @@ fn draw_tabs(f: &mut Frame<'_>, area: Rect, state: &AppState) {
         state.sort.label(),
     );
     let tabs = Tabs::new(titles)
-        .block(Block::default().borders(Borders::ALL).title(title))
-        .highlight_style(
-            Style::default()
-                .fg(Color::Yellow)
-                .add_modifier(Modifier::BOLD),
-        )
+        .block(panel(title))
+        .highlight_style(bold_fg(Color::Yellow))
         .select(selected);
     f.render_widget(tabs, area);
 }
@@ -269,7 +251,7 @@ fn draw_graph(f: &mut Frame<'_>, area: Rect, state: &AppState) {
         metric_top_label(state.graph_metric, peak),
         Color::Green,
     )
-    .block(Block::default().borders(Borders::ALL).title(title))
+    .block(panel(title))
     .x_axis(date_axis(today, span));
     f.render_widget(chart, area);
 }
@@ -299,12 +281,7 @@ fn draw_list(f: &mut Frame<'_>, area: Rect, state: &AppState) {
                 } else {
                     ' '
                 };
-                let spin_span = Span::styled(
-                    spin.to_string(),
-                    Style::default()
-                        .fg(Color::Green)
-                        .add_modifier(Modifier::BOLD),
-                );
+                let spin_span = Span::styled(spin.to_string(), bold_fg(Color::Green));
                 let rest = Span::styled(
                     format!(" {:>6}  {}  {}", r.count, bar, r.name),
                     Style::default().fg(color),
@@ -331,18 +308,13 @@ fn draw_list(f: &mut Frame<'_>, area: Rect, state: &AppState) {
     };
 
     let list = List::new(items)
-        .block(Block::default().borders(Borders::ALL).title(title))
-        .highlight_style(
-            Style::default()
-                .bg(Color::Green)
-                .fg(Color::Black)
-                .add_modifier(Modifier::BOLD),
-        );
+        .block(panel(title))
+        .highlight_style(cctk::style::highlight());
     f.render_stateful_widget(list, area, &mut list_state);
 }
 
 fn draw_detail(f: &mut Frame<'_>, area: Rect, state: &AppState) {
-    let block = Block::default().borders(Borders::ALL).title(" detail ");
+    let block = panel(" detail ");
     let Some(row) = state.selected_row() else {
         f.render_widget(Paragraph::new("(no matching items)").block(block), area);
         return;
@@ -405,17 +377,8 @@ fn draw_project_picker(f: &mut Frame<'_>, area: Rect, state: &AppState) {
 
     f.render_widget(Clear, popup);
     let list = List::new(items)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(" select project "),
-        )
-        .highlight_style(
-            Style::default()
-                .bg(Color::Green)
-                .fg(Color::Black)
-                .add_modifier(Modifier::BOLD),
-        );
+        .block(panel(" select project "))
+        .highlight_style(cctk::style::highlight());
     f.render_stateful_widget(list, popup, &mut ls);
 }
 

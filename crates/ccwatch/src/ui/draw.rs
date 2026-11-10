@@ -5,14 +5,15 @@ use super::SessionEntry;
 use super::format::{fmt_int, format_duration, threshold_color, tool_color, value_span};
 use super::state::{ViewMode, build_views, display_order};
 use crate::stats::SessionStats;
-use crate::style::{bold, bold_fg, dim};
 use crate::summary;
+use cctk::fmt::usd;
+use cctk::style::{bold, bold_fg, dim, panel};
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Style},
     text::{Line, Span},
-    widgets::{Bar, BarChart, BarGroup, Block, Borders, Paragraph, Wrap},
+    widgets::{Bar, BarChart, BarGroup, Paragraph, Wrap},
 };
 
 // ---- Single-view layout heights (rows). ----
@@ -73,29 +74,17 @@ fn draw_single(f: &mut Frame<'_>, entry: &SessionEntry, idx: usize, total: usize
     draw_single_footer(f, chunks[6], total > 1);
 }
 
-fn panel<'a>(title: impl Into<Line<'a>>) -> Block<'a> {
-    Block::default().borders(Borders::ALL).title(title)
-}
-
 fn draw_single_footer(f: &mut Frame<'_>, area: Rect, multi: bool) {
-    let mut spans: Vec<Span<'_>> = vec![Span::raw(" ")];
-    let push_key = |spans: &mut Vec<Span<'_>>, key: &'static str, desc: &'static str| {
-        if spans.len() > 1 {
-            spans.push(Span::styled("  ·  ", dim()));
-        }
-        spans.push(Span::styled(key, bold()));
-        spans.push(Span::styled(format!(" {desc}"), dim()));
-    };
-    push_key(&mut spans, "q", "quit");
-    push_key(&mut spans, "r", "reset");
-    push_key(&mut spans, "b", "browser");
+    let mut hints = vec![("q", "quit"), ("r", "reset"), ("b", "browser")];
     if multi {
-        push_key(&mut spans, "s", "summary");
-        push_key(&mut spans, "Tab/n", "next");
-        push_key(&mut spans, "⇧Tab/p", "prev");
-        push_key(&mut spans, "R", "rescan");
+        hints.extend([
+            ("s", "summary"),
+            ("Tab/n", "next"),
+            ("⇧Tab/p", "prev"),
+            ("R", "rescan"),
+        ]);
     }
-    f.render_widget(Paragraph::new(Line::from(spans)), area);
+    f.render_widget(Paragraph::new(summary::key_hints(&hints)), area);
 }
 
 fn draw_header(f: &mut Frame<'_>, area: Rect, entry: &SessionEntry, idx: usize, total: usize) {
@@ -211,7 +200,7 @@ fn draw_cost(f: &mut Frame<'_>, area: Rect, s: &SessionStats) {
     let burn_color = threshold_color(cph, 5.0, 15.0);
     let line = Line::from(vec![
         Span::styled("session: ", dim()),
-        value_span(format!("${:.2}", s.session_cost_usd()), Color::White),
+        value_span(usd(s.session_cost_usd()), Color::White),
         Span::raw("    "),
         Span::styled("rate: ", dim()),
         value_span(
@@ -220,7 +209,7 @@ fn draw_cost(f: &mut Frame<'_>, area: Rect, s: &SessionStats) {
         ),
         Span::raw("    "),
         Span::styled("burn: ", dim()),
-        value_span(format!("${cph:.2}/hr"), burn_color),
+        value_span(format!("{}/hr", usd(cph)), burn_color),
     ]);
     f.render_widget(Paragraph::new(line).block(panel(" cost ")), area);
 }

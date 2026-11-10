@@ -13,9 +13,40 @@ pub fn tokens(n: u64) -> String {
     }
 }
 
+/// [`tokens`] of a rate or peak held as `f64`, rounded to the nearest whole
+/// token. Negative and NaN values read as 0 (the cast saturates).
+#[must_use]
+pub fn tokens_f64(v: f64) -> String {
+    // The callers' values come from non-negative token counts, so the cast can
+    // neither lose a sign nor exceed `u64`.
+    #[expect(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    tokens(v.round() as u64)
+}
+
+/// A dollar amount with cents, e.g. `$3.40`.
+#[must_use]
+pub fn usd(v: f64) -> String {
+    format!("${v:.2}")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tokens_f64_rounds_then_scales() {
+        assert_eq!(tokens_f64(0.4), "0");
+        assert_eq!(tokens_f64(999.6), "1k");
+        assert_eq!(tokens_f64(61_873.6), "62k");
+        assert_eq!(tokens_f64(1_234_567.0), "1.2M");
+    }
+
+    #[test]
+    fn usd_has_cents() {
+        assert_eq!(usd(0.0), "$0.00");
+        assert_eq!(usd(3.4), "$3.40");
+        assert_eq!(usd(142.5), "$142.50");
+    }
 
     #[test]
     fn tokens_scale_and_round() {

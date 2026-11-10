@@ -11,34 +11,21 @@ use crate::store::Dashboard;
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
-    style::{Color, Modifier, Style},
+    style::{Color, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph},
+    widgets::{Block, Paragraph},
 };
 
-use cctk::fmt::tokens as fmt_tokens;
+use cctk::fmt::{tokens as fmt_tokens, tokens_f64, usd};
+use cctk::style::{bold, bold_fg, dim, panel};
 
-/// Dollar cost with cents.
-#[must_use]
-fn fmt_cost(cost: f64) -> String {
-    format!("${cost:.2}")
-}
-
-fn panel_block(title: &str, panel: Panel, app: &App) -> Block<'static> {
-    let selected = app.mode == Mode::Overview && app.selected == panel;
+fn panel_block(title: &str, which: Panel, app: &App) -> Block<'static> {
+    let selected = app.mode == Mode::Overview && app.selected == which;
     if selected {
-        let accent = Style::default()
-            .fg(Color::Yellow)
-            .add_modifier(Modifier::BOLD);
-        Block::default()
-            .borders(Borders::ALL)
-            .border_style(accent)
-            .title(Line::from(Span::styled(format!(" ▸ {title} "), accent)))
+        let accent = bold_fg(Color::Yellow);
+        panel(Line::from(Span::styled(format!(" ▸ {title} "), accent))).border_style(accent)
     } else {
-        Block::default()
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::DarkGray))
-            .title(format!("   {title} "))
+        panel(format!("   {title} ")).border_style(dim())
     }
 }
 
@@ -96,12 +83,12 @@ fn session_line(s: &crate::now::SessionView) -> Line<'static> {
     Line::from(vec![
         Span::styled(project, Style::default().fg(Color::Cyan)),
         Span::raw(" · "),
-        Span::styled(name, Style::default().add_modifier(Modifier::BOLD)),
+        Span::styled(name, bold()),
         Span::raw(format!(
             "   {}   {} tok   {}   ctx {:.0}%",
             s.model,
             fmt_tokens(s.tokens),
-            fmt_cost(s.cost_usd),
+            usd(s.cost_usd),
             s.context_pct * 100.0,
         )),
     ])
@@ -156,7 +143,7 @@ fn draw_now(f: &mut Frame<'_>, area: Rect, dash: &Dashboard, app: &App) {
     if n == 0 {
         lines.push(Line::from(Span::styled(
             "waiting for an active session…",
-            Style::default().fg(Color::DarkGray),
+            dim(),
         )));
     } else {
         let projects = now.projects();
@@ -165,20 +152,15 @@ fn draw_now(f: &mut Frame<'_>, area: Rect, dash: &Dashboard, app: &App) {
         } else {
             format!("{n} sessions · {}", project_label(&projects))
         };
-        lines.push(Line::from(Span::styled(
-            head,
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        )));
+        lines.push(Line::from(Span::styled(head, bold_fg(Color::Cyan))));
         lines.push(Line::from(Span::styled(
             format!(
                 "{} tok   {}   ctx≤{:.0}%   (Enter for per-session)",
                 fmt_tokens(now.total_tokens()),
-                fmt_cost(now.cost_usd()),
+                usd(now.cost_usd()),
                 now.context_pct() * 100.0,
             ),
-            Style::default().fg(Color::DarkGray),
+            dim(),
         )));
     }
 
@@ -218,17 +200,14 @@ fn draw_rate_chart(f: &mut Frame<'_>, area: Rect, points: &[(f64, f64)]) {
         f.render_widget(
             Paragraph::new(Line::from(Span::styled(
                 "token rate — waiting for activity…",
-                Style::default().fg(Color::DarkGray),
+                dim(),
             ))),
             area,
         );
         return;
     }
 
-    // `peak` is tokens/minute (from non-negative token counts), so the
-    // round-trip cast for the axis label cannot truncate or lose a sign.
-    #[expect(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    let peak_label = format!("{}/m", fmt_tokens(peak.round() as u64));
+    let peak_label = format!("{}/m", tokens_f64(peak));
     let last_x = points.last().map_or(1.0, |&(x, _)| x).max(1.0);
 
     let chart = cctk::chart::braille_line(points, peak, peak_label, Color::Cyan)
@@ -254,7 +233,7 @@ fn draw_usage(f: &mut Frame<'_>, area: Rect, dash: &Dashboard, app: &App) {
         f.render_widget(
             Paragraph::new(Span::styled(
                 format!("no active {} usage", category.title().to_lowercase()),
-                Style::default().fg(Color::DarkGray),
+                dim(),
             )),
             inner,
         );
@@ -291,14 +270,9 @@ fn draw_usage(f: &mut Frame<'_>, area: Rect, dash: &Dashboard, app: &App) {
     let parts = Layout::vertical([Constraint::Length(legend_h), Constraint::Min(0)]).split(inner);
     f.render_widget(Paragraph::new(legend), parts[0]);
 
-    let y_max = series
-        .iter()
-        .flat_map(|s| s.points.iter().map(|&(_, y)| y))
-        .fold(0.0_f64, f64::max)
-        .max(1.0);
-    #[expect(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let y_max = cctk::chart::peak(&series);
     let y_label = if is_model {
-        format!("{}/m", fmt_tokens(y_max.round() as u64))
+        format!("{}/m", tokens_f64(y_max))
     } else {
         format!("{y_max:.0}/m")
     };
@@ -337,16 +311,11 @@ fn draw_map(f: &mut Frame<'_>, area: Rect, dash: &Dashboard, app: &App) {
         .collect();
 
     if running.is_empty() {
-        lines.push(Line::from(Span::styled(
-            "running now: idle",
-            Style::default().fg(Color::DarkGray),
-        )));
+        lines.push(Line::from(Span::styled("running now: idle", dim())));
     } else {
         lines.push(Line::from(Span::styled(
             format!("running now ({})", running.len()),
-            Style::default()
-                .fg(Color::Green)
-                .add_modifier(Modifier::BOLD),
+            bold_fg(Color::Green),
         )));
         let cap = usize::from(inner.height).saturating_sub(lines.len()).max(1);
         for (tag, name) in running.iter().take(cap) {
@@ -358,7 +327,7 @@ fn draw_map(f: &mut Frame<'_>, area: Rect, dash: &Dashboard, app: &App) {
         if running.len() > cap {
             lines.push(Line::from(Span::styled(
                 format!("  +{} more", running.len() - cap),
-                Style::default().fg(Color::DarkGray),
+                dim(),
             )));
         }
     }
@@ -384,10 +353,7 @@ fn draw_recent(f: &mut Frame<'_>, area: Rect, dash: &Dashboard, app: &App) {
     } else {
         "Tool usage   ( 1-4 select · Enter drill · c usage-cat · / filter · q quit )".to_string()
     };
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::DarkGray))
-        .title(format!(" {title} "));
+    let block = panel(format!(" {title} ")).border_style(dim());
     let inner = block.inner(area);
     f.render_widget(block, area);
 
@@ -410,13 +376,11 @@ fn tools_text(now: &crate::now::NowStats) -> String {
 /// Full-screen "Now" detail shown when the Now panel is drilled into.
 pub fn draw_now_detail(f: &mut Frame<'_>, now: &crate::now::NowStats) {
     let area = f.area();
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Yellow))
-        .title(format!(
-            " Now · {}   (Esc/q to return) ",
-            project_label(&now.projects())
-        ));
+    let block = panel(format!(
+        " Now · {}   (Esc/q to return) ",
+        project_label(&now.projects())
+    ))
+    .border_style(Style::default().fg(Color::Yellow));
     let inner = block.inner(area);
     f.render_widget(block, area);
 
@@ -429,14 +393,11 @@ pub fn draw_now_detail(f: &mut Frame<'_>, now: &crate::now::NowStats) {
 
     let mut lines: Vec<Line> = vec![
         Line::from(vec![
-            Span::styled(
-                format!("{} session(s)", now.session_count()),
-                Style::default().add_modifier(Modifier::BOLD),
-            ),
+            Span::styled(format!("{} session(s)", now.session_count()), bold()),
             Span::raw(format!(
                 "   {} tok   {}   {} msgs",
                 fmt_tokens(now.total_tokens()),
-                fmt_cost(now.cost_usd()),
+                usd(now.cost_usd()),
                 now.assistant_messages(),
             )),
         ]),
@@ -445,7 +406,7 @@ pub fn draw_now_detail(f: &mut Frame<'_>, now: &crate::now::NowStats) {
     if sessions.is_empty() {
         lines.push(Line::from(Span::styled(
             "waiting for an active session…",
-            Style::default().fg(Color::DarkGray),
+            dim(),
         )));
     } else {
         lines.extend(sessions.iter().map(session_line));
@@ -453,7 +414,7 @@ pub fn draw_now_detail(f: &mut Frame<'_>, now: &crate::now::NowStats) {
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
         format!("tools: {}", tools_text(now)),
-        Style::default().fg(Color::DarkGray),
+        dim(),
     )));
 
     let text_h = u16::try_from(lines.len())
@@ -512,12 +473,5 @@ mod tests {
         let points = [(0.0, 0.0), (1.0, 0.0), (2.0, 0.0)];
         let out = render_to_string(48, 4, &points);
         assert!(out.contains("waiting"));
-    }
-
-    #[test]
-    fn fmt_cost_has_cents() {
-        assert_eq!(fmt_cost(0.0), "$0.00");
-        assert_eq!(fmt_cost(3.4), "$3.40");
-        assert_eq!(fmt_cost(142.5), "$142.50");
     }
 }

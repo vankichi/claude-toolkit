@@ -6,6 +6,5 @@
 
 mod session;
 mod stats;
-mod style;
 mod summary;
 pub mod ui;

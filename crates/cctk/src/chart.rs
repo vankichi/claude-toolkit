@@ -5,6 +5,7 @@
 //! (the chart borrows them) and may further customize the returned chart —
 //! e.g. `.block(..)` for a border/title or `.x_axis(x_axis(..))` to add end labels.
 
+use crate::style::dim;
 use ratatui::style::{Color, Style};
 use ratatui::symbols::Marker;
 use ratatui::text::Line;
@@ -40,7 +41,7 @@ pub fn x_axis<'a>(last_x: f64, left: impl Into<Line<'a>>, right: impl Into<Line<
     Axis::default()
         .bounds([0.0, last_x.max(1.0)])
         .labels([left.into(), right.into()])
-        .style(Style::default().fg(Color::DarkGray))
+        .style(dim())
 }
 
 /// The `[0, y_max]` y-axis labeled `0` and `top`.
@@ -48,7 +49,7 @@ fn y_axis(y_max: f64, top: String) -> Axis<'static> {
     Axis::default()
         .bounds([0.0, y_max.max(1.0)])
         .labels([Line::from("0"), Line::from(top)])
-        .style(Style::default().fg(Color::DarkGray))
+        .style(dim())
 }
 
 /// One colored series for [`braille_multi_line`]. Owns its points so the
@@ -57,6 +58,18 @@ pub struct LineSeries {
     pub points: Vec<(f64, f64)>,
     pub label: String,
     pub color: Color,
+}
+
+/// The highest y over all `series`, at least `1.0` so an all-zero chart still
+/// gets a non-empty y-axis: what callers pass as `y_max` to
+/// [`braille_multi_line`].
+#[must_use]
+pub fn peak(series: &[LineSeries]) -> f64 {
+    series
+        .iter()
+        .flat_map(|s| s.points.iter().map(|&(_, y)| y))
+        .fold(0.0_f64, f64::max)
+        .max(1.0)
 }
 
 /// Build an overlaid multi-series braille line chart sharing one `[0, y_max]`
@@ -153,6 +166,18 @@ mod tests {
         assert!(out.contains("start"));
         assert!(out.contains("now"));
         assert!(out.find("start") < out.find("now"), "left label first");
+    }
+
+    #[test]
+    fn peak_is_the_highest_point_and_at_least_one() {
+        let series = |ys: &[f64]| LineSeries {
+            points: ys.iter().enumerate().map(|(i, &y)| (i as f64, y)).collect(),
+            label: String::new(),
+            color: Color::Cyan,
+        };
+        assert!((peak(&[series(&[1.0, 7.5]), series(&[3.0])]) - 7.5).abs() < f64::EPSILON);
+        assert!((peak(&[series(&[0.0, 0.5])]) - 1.0).abs() < f64::EPSILON);
+        assert!((peak(&[]) - 1.0).abs() < f64::EPSILON);
     }
 
     #[test]

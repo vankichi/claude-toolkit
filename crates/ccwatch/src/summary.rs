@@ -7,14 +7,15 @@
 
 use crate::session::AgentStatusKind;
 use crate::stats::SessionStats;
-use crate::style::{bold, bold_fg, dim};
+use cctk::fmt::usd;
+use cctk::style::{bold, bold_fg, dim, panel, reversed};
 use chrono::{DateTime, Utc};
 use ratatui::{
     Frame,
     layout::{Constraint, Rect},
-    style::{Color, Modifier, Style},
+    style::{Color, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Cell, Paragraph, Row, Table},
+    widgets::{Block, Cell, Paragraph, Row, Table},
 };
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -166,7 +167,7 @@ fn draw_aggregate(f: &mut Frame<'_>, area: Rect, entries: &[EntryView<'_>]) {
         Span::styled(agg.live_count.to_string(), bold()),
         Span::raw("   "),
         Span::styled("total: ", dim()),
-        Span::styled(format!("${:.2}", agg.total_cost_usd), bold_fg(Color::White)),
+        Span::styled(usd(agg.total_cost_usd), bold_fg(Color::White)),
         Span::raw("   "),
         Span::styled("msgs: ", dim()),
         Span::styled(agg.total_msgs.to_string(), bold()),
@@ -181,9 +182,7 @@ fn draw_aggregate(f: &mut Frame<'_>, area: Rect, entries: &[EntryView<'_>]) {
             spans.push(Span::styled(format!(":{count}"), dim()));
         }
     }
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .title(" ccwatch — summary ");
+    let block = panel(" ccwatch — summary ");
     f.render_widget(Paragraph::new(Line::from(spans)).block(block), area);
 }
 
@@ -211,7 +210,7 @@ fn draw_table(f: &mut Frame<'_>, area: Rect, entries: &[EntryView<'_>], selected
                 s.context_pct() * 100.0
             );
             let row_style = if idx == selected {
-                Style::default().add_modifier(Modifier::REVERSED)
+                reversed()
             } else {
                 Style::default()
             };
@@ -249,7 +248,7 @@ fn draw_table(f: &mut Frame<'_>, area: Rect, entries: &[EntryView<'_>], selected
         ],
     )
     .header(header)
-    .block(Block::default().borders(Borders::ALL));
+    .block(Block::bordered());
     f.render_widget(table, area);
 }
 
@@ -275,27 +274,30 @@ fn mode_display(raw: Option<&str>) -> &'static str {
 }
 
 fn draw_footer(f: &mut Frame<'_>, area: Rect) {
-    let spans = vec![
-        Span::raw(" "),
-        Span::styled("q", bold()),
-        Span::styled(" quit", dim()),
-        Span::styled("  ·  ", dim()),
-        Span::styled("↑↓", bold()),
-        Span::styled(" select", dim()),
-        Span::styled("  ·  ", dim()),
-        Span::styled("Enter", bold()),
-        Span::styled(" open", dim()),
-        Span::styled("  ·  ", dim()),
-        Span::styled("s", bold()),
-        Span::styled(" single view", dim()),
-        Span::styled("  ·  ", dim()),
-        Span::styled("R", bold()),
-        Span::styled(" rescan", dim()),
-        Span::styled("  ·  ", dim()),
-        Span::styled("b", bold()),
-        Span::styled(" browser", dim()),
-    ];
-    f.render_widget(Paragraph::new(Line::from(spans)), area);
+    let hints = key_hints(&[
+        ("q", "quit"),
+        ("↑↓", "select"),
+        ("Enter", "open"),
+        ("s", "single view"),
+        ("R", "rescan"),
+        ("b", "browser"),
+    ]);
+    f.render_widget(Paragraph::new(hints), area);
+}
+
+/// A footer line of `(key, description)` pairs: the key bold, the description
+/// dim, the pairs joined by a dim `  ·  `. Shared by the summary and
+/// single-session footers.
+pub(crate) fn key_hints(hints: &[(&str, &str)]) -> Line<'static> {
+    let mut spans: Vec<Span<'static>> = vec![Span::raw(" ")];
+    for (i, (key, desc)) in hints.iter().enumerate() {
+        if i > 0 {
+            spans.push(Span::styled("  ·  ", dim()));
+        }
+        spans.push(Span::styled((*key).to_string(), bold()));
+        spans.push(Span::styled(format!(" {desc}"), dim()));
+    }
+    Line::from(spans)
 }
 
 /// Coarse model family label used for both the aggregate breakdown and
@@ -456,6 +458,22 @@ mod tests {
         ];
         let order = sort_order(&entries);
         assert_eq!(order, vec![1, 0], "event-bearing session comes first");
+    }
+
+    #[test]
+    fn key_hints_bolds_keys_and_dims_descriptions_with_separators() {
+        let spans = key_hints(&[("q", "quit"), ("s", "single view")]).spans;
+        assert_eq!(
+            spans,
+            vec![
+                Span::raw(" "),
+                Span::styled("q", bold()),
+                Span::styled(" quit", dim()),
+                Span::styled("  ·  ", dim()),
+                Span::styled("s", bold()),
+                Span::styled(" single view", dim()),
+            ]
+        );
     }
 
     #[test]

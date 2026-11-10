@@ -1,17 +1,18 @@
 //! The card view for a narrow side pane (`ccfocus tui --tiny`).
 
 use super::{
-    TINY_HELP, View, candidates_height, dim, draw_footer, parallel_style, sparkline, start_label,
-    status_style, task_text,
+    TINY_HELP, View, candidates_height, dim, draw_footer, parallel_style, sessions_suffix,
+    start_label, status_style, task_text, week_span,
 };
 use crate::board::{Row, age};
 use crate::text::{fit, pad, width};
+use cctk::style::{bold, panel};
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
-    style::{Color, Modifier, Style},
+    style::Modifier,
     text::{Line, Span},
-    widgets::{Block, BorderType, Borders, Paragraph},
+    widgets::{BorderType, Paragraph},
 };
 use std::fmt::Write as _;
 
@@ -129,10 +130,7 @@ fn draw_tiny_today(f: &mut Frame<'_>, area: Rect, v: &View) {
             Line::from(fit(&counts, w)),
             Line::from(vec![
                 Span::raw(fit(&par, w)),
-                Span::styled(
-                    fit(&sparkline(&t.week), w.saturating_sub(width(&par))),
-                    Style::default().fg(Color::Cyan),
-                ),
+                week_span(&t.week, w.saturating_sub(width(&par))),
             ]),
         ]),
         area,
@@ -143,7 +141,6 @@ fn draw_tiny_today(f: &mut Frame<'_>, area: Rect, v: &View) {
 /// few only.
 fn draw_tiny_candidates(f: &mut Frame<'_>, area: Rect, v: &View) {
     let w = usize::from(area.width);
-    let bold = Style::default().add_modifier(Modifier::BOLD);
     let Some(cands) = &v.candidates else {
         f.render_widget(
             Paragraph::new(Line::from(Span::styled(fit("to finish …", w), dim()))),
@@ -155,7 +152,7 @@ fn draw_tiny_candidates(f: &mut Frame<'_>, area: Rect, v: &View) {
     if !v.pr_known {
         title.push_str(" · PR?");
     }
-    let mut lines = vec![Line::from(Span::styled(fit(&title, w), bold))];
+    let mut lines = vec![Line::from(Span::styled(fit(&title, w), bold()))];
     for c in cands.iter().take(MAX_TINY_CANDIDATES) {
         let mut tail = format!(" ↑{}", c.ahead);
         if c.behind > 0 {
@@ -168,10 +165,7 @@ fn draw_tiny_candidates(f: &mut Frame<'_>, area: Rect, v: &View) {
             }
             None => tail.push_str(" ?"),
         }
-        if !c.sessions.is_empty() {
-            let nums: Vec<String> = c.sessions.iter().map(u8::to_string).collect();
-            let _ = write!(tail, " [{}]", nums.join(","));
-        }
+        tail.push_str(&sessions_suffix(c));
         // The place gives way first, so the numbers stay readable.
         let place = fit(
             &format!("{}·{}", c.repo, c.worktree),
@@ -194,23 +188,21 @@ fn draw_card(f: &mut Frame<'_>, area: Rect, v: &View, r: &Row, selected: bool, n
     let style = status_style(r.shown);
     let num = r.number.map_or_else(|| "-".to_string(), |n| n.to_string());
     let mark = if next { "▸" } else { "" };
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_type(if selected {
-            BorderType::Thick
-        } else {
-            BorderType::Plain
-        })
-        .border_style(if selected {
-            style.remove_modifier(Modifier::BOLD)
-        } else {
-            dim()
-        })
-        .title(Line::from(vec![
-            Span::raw(format!("{mark}{num} ")),
-            Span::styled(r.shown.label(), style),
-        ]))
-        .title(Line::from(age(v.now - r.updated_at)).right_aligned());
+    let block = panel(Line::from(vec![
+        Span::raw(format!("{mark}{num} ")),
+        Span::styled(r.shown.label(), style),
+    ]))
+    .border_type(if selected {
+        BorderType::Thick
+    } else {
+        BorderType::Plain
+    })
+    .border_style(if selected {
+        style.remove_modifier(Modifier::BOLD)
+    } else {
+        dim()
+    })
+    .title(Line::from(age(v.now - r.updated_at)).right_aligned());
     let inner = block.inner(area);
     f.render_widget(block, area);
     let w = usize::from(inner.width);
@@ -225,10 +217,7 @@ fn draw_card(f: &mut Frame<'_>, area: Rect, v: &View, r: &Row, selected: bool, n
         Span::raw(fit(&r.project, w))
     };
     let mut lines = vec![
-        Line::from(Span::styled(
-            fit(&place, w),
-            Style::default().add_modifier(Modifier::BOLD),
-        )),
+        Line::from(Span::styled(fit(&place, w), bold())),
         Line::from(project),
     ];
     if selected {
@@ -253,6 +242,7 @@ mod tests {
     use super::*;
     use crate::board::Board;
     use crate::ui::test_support::{at, render_with, sample, snapshot, text};
+    use ratatui::style::Color;
 
     #[test]
     fn snapshot_tiny() {

@@ -28,6 +28,7 @@ pub use tiny::draw_tiny;
 use crate::board::{Board, Row, Shown, age};
 use crate::repos::Candidate;
 use crate::text::{fit, pad};
+use cctk::style::{bold_fg, dim, reversed};
 use chrono::{DateTime, FixedOffset};
 use ratatui::{
     Frame,
@@ -97,19 +98,13 @@ pub struct View {
 
 fn status_style(s: Shown) -> Style {
     match s {
-        Shown::Waiting => Style::default()
-            .fg(Color::Yellow)
-            .add_modifier(Modifier::BOLD),
-        Shown::Failed => Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+        Shown::Waiting => bold_fg(Color::Yellow),
+        Shown::Failed => bold_fg(Color::Red),
         Shown::Done => Style::default().fg(Color::Green),
         Shown::Working => Style::default().fg(Color::Cyan),
         Shown::Idle => Style::default().fg(Color::Gray),
-        Shown::Stopped => Style::default().fg(Color::DarkGray),
+        Shown::Stopped => dim(),
     }
-}
-
-fn dim() -> Style {
-    Style::default().fg(Color::DarkGray)
 }
 
 /// `parallel N / L` styled by how it compares with the limit: red over it,
@@ -127,9 +122,7 @@ fn parallel_style(v: &View) -> Style {
             .fg(Color::White)
             .bg(Color::Red)
             .add_modifier(Modifier::BOLD),
-        std::cmp::Ordering::Equal => Style::default()
-            .fg(Color::Yellow)
-            .add_modifier(Modifier::BOLD),
+        std::cmp::Ordering::Equal => bold_fg(Color::Yellow),
         std::cmp::Ordering::Less => Style::default(),
     }
 }
@@ -228,7 +221,7 @@ fn list_line(v: &View, r: &Row, c: &Columns, selected: bool) -> Line<'static> {
     )));
     let mut line = Line::from(spans);
     if selected {
-        line = line.style(Style::default().add_modifier(Modifier::REVERSED));
+        line = line.style(reversed());
     }
     line
 }
@@ -246,6 +239,22 @@ fn task_text(t: TaskCount) -> String {
         TaskCount::Unknown => "n/a".to_string(),
         TaskCount::Known(n) => n.to_string(),
     }
+}
+
+/// ` [1,2]`: the numbers of the sessions working in a candidate, or nothing
+/// when none is.
+fn sessions_suffix(c: &Candidate) -> String {
+    if c.sessions.is_empty() {
+        return String::new();
+    }
+    let nums: Vec<String> = c.sessions.iter().map(u8::to_string).collect();
+    format!(" [{}]", nums.join(","))
+}
+
+/// The week's sparkline in cyan, cut to `max` columns (`usize::MAX` when the
+/// caller has room for all of it).
+fn week_span(week: &[u32], max: usize) -> Span<'static> {
+    Span::styled(fit(&sparkline(week), max), Style::default().fg(Color::Cyan))
 }
 
 /// Eight-level bars, scaled to the week's busiest day.
@@ -274,5 +283,28 @@ mod tests {
         assert_eq!(sparkline(&[0, 7, 14]), "▁▄█");
         assert_eq!(sparkline(&[0, 0]), "▁▁");
         assert_eq!(sparkline(&[]), "");
+    }
+
+    #[test]
+    fn sessions_suffix_lists_numbers_or_nothing() {
+        let mut c = Candidate {
+            repo: "r".into(),
+            worktree: "w".into(),
+            ahead: 1,
+            behind: 0,
+            dirty: None,
+            sessions: vec![],
+        };
+        assert_eq!(sessions_suffix(&c), "");
+        c.sessions = vec![1, 2];
+        assert_eq!(sessions_suffix(&c), " [1,2]");
+    }
+
+    #[test]
+    fn week_span_is_cyan_and_cut_to_the_room() {
+        let week = [0, 7, 14, 0, 0, 0, 0];
+        let cyan = Style::default().fg(Color::Cyan);
+        assert_eq!(week_span(&week, usize::MAX), Span::styled("▁▄█▁▁▁▁", cyan));
+        assert_eq!(week_span(&week, 3), Span::styled("▁▄…", cyan));
     }
 }

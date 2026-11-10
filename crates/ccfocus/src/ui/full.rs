@@ -2,17 +2,17 @@
 
 use super::{
     HELP, NUM_W, REPO_W, START_W, STATUS_W, Today, UPDATED_W, View, WORKTREE_W, candidates_height,
-    columns, dim, draw_footer, list_line, parallel_span, round_text, sparkline, status_style,
-    summary, task_text,
+    columns, dim, draw_footer, list_line, parallel_span, round_text, sessions_suffix, status_style,
+    summary, task_text, week_span,
 };
 use crate::board::age;
 use crate::text::{fit, pad, pad_left, width};
+use cctk::style::{bold, panel};
 use ratatui::{
     Frame,
     layout::{Alignment, Constraint, Layout, Rect},
-    style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph},
+    widgets::Paragraph,
 };
 use std::fmt::Write as _;
 
@@ -74,10 +74,7 @@ fn draw_header(f: &mut Frame<'_>, area: Rect, v: &View) {
         right.push(Span::raw(format!(" · {r}")));
     }
     f.render_widget(
-        Paragraph::new(Line::from(Span::styled(
-            v.title.clone(),
-            Style::default().add_modifier(Modifier::BOLD),
-        ))),
+        Paragraph::new(Line::from(Span::styled(v.title.clone(), bold()))),
         area,
     );
     f.render_widget(
@@ -96,16 +93,13 @@ fn draw_next(f: &mut Frame<'_>, area: Rect, v: &View) {
         ]),
         None => Line::from(" next up "),
     };
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(dim())
-        .title(title);
+    let block = panel(title).border_style(dim());
     let inner = block.inner(area);
     f.render_widget(block, area);
     let body = match next {
         Some(r) => Line::from(Span::styled(
             fit(&summary(r), usize::from(inner.width)),
-            Style::default().add_modifier(Modifier::BOLD),
+            bold(),
         )),
         None => Line::from(Span::styled("none", dim())),
     };
@@ -168,7 +162,6 @@ fn draw_list(f: &mut Frame<'_>, area: Rect, v: &View) {
 
 fn draw_candidates(f: &mut Frame<'_>, area: Rect, v: &View) {
     let w = usize::from(area.width);
-    let bold = Style::default().add_modifier(Modifier::BOLD);
     let Some(cands) = &v.candidates else {
         f.render_widget(
             Paragraph::new(Line::from(Span::styled("to finish: checking…", dim()))),
@@ -183,7 +176,7 @@ fn draw_candidates(f: &mut Frame<'_>, area: Rect, v: &View) {
     if cands.is_empty() {
         title = "to finish: none".to_string();
     }
-    let mut lines = vec![Line::from(Span::styled(fit(&title, w), bold))];
+    let mut lines = vec![Line::from(Span::styled(fit(&title, w), bold()))];
     for c in cands.iter().take(MAX_CANDIDATES) {
         let state = match c.dirty {
             Some(0) => "clean".to_string(),
@@ -197,10 +190,7 @@ fn draw_candidates(f: &mut Frame<'_>, area: Rect, v: &View) {
             c.ahead,
             c.behind
         );
-        if !c.sessions.is_empty() {
-            let nums: Vec<String> = c.sessions.iter().map(u8::to_string).collect();
-            let _ = write!(text, " [{}]", nums.join(","));
-        }
+        text.push_str(&sessions_suffix(c));
         lines.push(Line::from(fit(&text, w)));
     }
     if cands.len() > MAX_CANDIDATES {
@@ -217,10 +207,7 @@ fn parallel_text(t: &Today) -> String {
 }
 
 fn draw_today_box(f: &mut Frame<'_>, area: Rect, v: &View) {
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(dim())
-        .title(" today ");
+    let block = panel(" today ").border_style(dim());
     let inner = block.inner(area);
     f.render_widget(block, area);
     let t = &v.today;
@@ -233,10 +220,7 @@ fn draw_today_box(f: &mut Frame<'_>, area: Rect, v: &View) {
         row("yesterday", t.yesterday_switches.to_string()),
         row("parallel avg/max", parallel_text(t)),
         Line::from(Span::styled("week (switches/day)", dim())),
-        Line::from(Span::styled(
-            sparkline(&t.week),
-            Style::default().fg(Color::Cyan),
-        )),
+        Line::from(week_span(&t.week, usize::MAX)),
     ];
     f.render_widget(Paragraph::new(lines), inner);
 }
@@ -251,21 +235,15 @@ fn today_line(v: &View, w: usize) -> Line<'static> {
         parallel_text(t)
     );
     let room = w.saturating_sub(width(&text));
-    Line::from(vec![
-        Span::raw(fit(&text, w)),
-        Span::styled(
-            fit(&sparkline(&t.week), room),
-            Style::default().fg(Color::Cyan),
-        ),
-    ])
+    Line::from(vec![Span::raw(fit(&text, w)), week_span(&t.week, room)])
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use crate::board::{Board, Shown};
     use crate::ui::TaskCount;
     use crate::ui::test_support::{find, render, sample, snapshot, text};
+    use ratatui::style::Color;
 
     #[test]
     fn snapshot_width_80() {
