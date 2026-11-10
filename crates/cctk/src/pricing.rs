@@ -123,7 +123,7 @@ impl Pricing {
     /// Splits cache-creation tokens into 5min vs 1hr buckets when the breakdown
     /// is present (Anthropic charges 1hr writes at 2× input vs 1.25× for 5min).
     #[must_use]
-    #[allow(clippy::similar_names)] // 5m / 1h pair is the natural cache TTL distinction
+    #[expect(clippy::similar_names)] // 5m / 1h pair is the natural cache TTL distinction
     pub fn cost_usd(&self, u: &Usage) -> f64 {
         const M: f64 = 1_000_000.0;
         let (write_5m, write_1h) = u.cache_creation_split();

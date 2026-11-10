@@ -51,7 +51,7 @@ struct Cli {
 // `projects_dir` (~/.claude/projects, session logs) and `project_dir` (the
 // cwd scanned for .claude/.mcp.json) are established, distinct domain terms
 // carried over from ccwatch/ccmap; the similarity is intentional.
-#[allow(clippy::similar_names)]
+#[expect(clippy::similar_names)]
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();

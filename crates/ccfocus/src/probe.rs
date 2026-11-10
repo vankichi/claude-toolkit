@@ -159,7 +159,7 @@ fn parse_rev_parse(out: &str) -> GitInfo {
         // `<checkout>/.git` → `<checkout>`; a bare repo's dir is the repo.
         if p.file_name().is_some_and(|n| n == ".git") {
             p.parent()
-                .map_or(c.clone(), |parent| parent.to_string_lossy().into_owned())
+                .map_or_else(|| c.clone(), |parent| parent.to_string_lossy().into_owned())
         } else {
             c
         }

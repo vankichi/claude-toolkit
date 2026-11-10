@@ -22,7 +22,7 @@ const SPINNER: [char; 10] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '�
 /// The spinner glyph for animation `tick` (wraps around the frame set).
 #[must_use]
 pub fn spinner_frame(tick: u64) -> char {
-    #[allow(clippy::cast_possible_truncation)]
+    #[expect(clippy::cast_possible_truncation)]
     let idx = (tick % SPINNER.len() as u64) as usize;
     SPINNER[idx]
 }

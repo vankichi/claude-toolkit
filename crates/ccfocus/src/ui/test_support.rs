@@ -13,7 +13,7 @@ pub(super) fn at(s: &str) -> DateTime<FixedOffset> {
     DateTime::parse_from_rfc3339(s).unwrap()
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 pub(super) fn row(
     number: Option<u8>,
     shown: Shown,

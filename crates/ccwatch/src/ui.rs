@@ -2,7 +2,7 @@
 //!
 //! Owns the terminal lifecycle (`ratatui::try_init` / `restore`), drives a
 //! `tokio::select!` loop over render-tick / watcher-events / keyboard input,
-//! and dispatches per-session events to the matching [`SessionEntry`].
+//! and dispatches per-session events to the matching `SessionEntry`.
 //!
 //! Two view modes:
 //! - `Summary` (default): table of every discovered session, with an
@@ -386,9 +386,9 @@ fn step_in_order(order: &[usize], current: usize, delta: isize) -> usize {
     // always a valid selection so it appears in `order`; the fallback keeps us
     // on the first visible row if it somehow doesn't.
     let pos = order.iter().position(|&i| i == current).unwrap_or(0);
-    #[allow(clippy::cast_possible_wrap)]
+    #[expect(clippy::cast_possible_wrap)]
     let n = order.len() as isize;
-    #[allow(clippy::cast_possible_wrap, clippy::cast_sign_loss)]
+    #[expect(clippy::cast_possible_wrap)]
     let new_pos = (pos as isize + delta).rem_euclid(n) as usize;
     order[new_pos]
 }
@@ -552,7 +552,7 @@ fn draw_ctx_gauge(f: &mut Frame<'_>, area: Rect, s: &SessionStats) {
     let label_cells = u16::try_from(label.chars().count()).unwrap_or(u16::MAX);
     let bars_cells = inner_width.saturating_sub(label_cells);
     let bar_count = (bars_cells / 2) as usize;
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    #[expect(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     let filled = ((pct * bar_count as f64).round() as usize).min(bar_count);
 
     let mut spans: Vec<Span<'_>> = Vec::with_capacity(bar_count * 2 + 1);

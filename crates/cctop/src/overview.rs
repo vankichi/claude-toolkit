@@ -182,7 +182,7 @@ fn draw_now(f: &mut Frame<'_>, area: Rect, dash: &Dashboard, app: &App) {
         )));
     }
 
-    #[allow(clippy::cast_possible_truncation)] // lines.len() is 1 or 2
+    #[expect(clippy::cast_possible_truncation)] // lines.len() is 1 or 2
     let list_h = (lines.len() as u16).max(1);
     let parts = Layout::vertical([Constraint::Length(list_h), Constraint::Min(0)]).split(inner);
     f.render_widget(Paragraph::new(lines), parts[0]);
@@ -227,7 +227,7 @@ fn draw_rate_chart(f: &mut Frame<'_>, area: Rect, points: &[(f64, f64)]) {
 
     // `peak` is tokens/minute (from non-negative token counts), so the
     // round-trip cast for the axis label cannot truncate or lose a sign.
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    #[expect(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     let peak_label = format!("{}/m", fmt_tokens(peak.round() as u64));
     let last_x = points.last().map_or(1.0, |&(x, _)| x).max(1.0);
 
@@ -286,7 +286,7 @@ fn draw_usage(f: &mut Frame<'_>, area: Rect, dash: &Dashboard, app: &App) {
         .collect();
     let max_rows = usize::from(inner.height).saturating_sub(2).max(1);
     let legend = pack_legend(&legend_entries, usize::from(inner.width), max_rows);
-    #[allow(clippy::cast_possible_truncation)] // rows bounded by max_rows (<= height)
+    #[expect(clippy::cast_possible_truncation)] // rows bounded by max_rows (<= height)
     let legend_h = (legend.len() as u16).max(1);
     let parts = Layout::vertical([Constraint::Length(legend_h), Constraint::Min(0)]).split(inner);
     f.render_widget(Paragraph::new(legend), parts[0]);
@@ -296,7 +296,7 @@ fn draw_usage(f: &mut Frame<'_>, area: Rect, dash: &Dashboard, app: &App) {
         .flat_map(|s| s.points.iter().map(|&(_, y)| y))
         .fold(0.0_f64, f64::max)
         .max(1.0);
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    #[expect(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     let y_label = if is_model {
         format!("{}/m", fmt_tokens(y_max.round() as u64))
     } else {
