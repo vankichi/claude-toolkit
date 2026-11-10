@@ -59,6 +59,21 @@ pub struct Item {
 }
 
 impl Item {
+    /// An item with no description, path, extra fields or plugin state; set
+    /// those with struct update syntax when needed.
+    #[must_use]
+    pub fn new(kind: Kind, name: impl Into<String>, source: Source) -> Self {
+        Self {
+            kind,
+            name: name.into(),
+            description: String::new(),
+            source,
+            path: None,
+            extra: Vec::new(),
+            plugin_state: None,
+        }
+    }
+
     /// Renders how a user would invoke this item: a slash command for
     /// skills/commands, the bare name for agents/MCP servers, and a
     /// `plugin@marketplace` identifier for plugins.
@@ -102,15 +117,7 @@ mod tests {
 
     #[test]
     fn invocation_string_covers_each_kind() {
-        let user_skill = Item {
-            kind: Kind::Skill,
-            name: "api-design-review".into(),
-            description: String::new(),
-            source: Source::User,
-            path: None,
-            extra: vec![],
-            plugin_state: None,
-        };
+        let user_skill = Item::new(Kind::Skill, "api-design-review", Source::User);
         assert_eq!(user_skill.invocation_string(), "/api-design-review");
 
         let plugin_skill = Item {
@@ -156,15 +163,7 @@ mod tests {
 
     #[test]
     fn provenance_classifies_each_source_variant() {
-        let user = Item {
-            kind: Kind::Skill,
-            name: "demo".into(),
-            description: String::new(),
-            source: Source::User,
-            path: None,
-            extra: vec![],
-            plugin_state: None,
-        };
+        let user = Item::new(Kind::Skill, "demo", Source::User);
         assert_eq!(user.provenance(), Provenance::Local);
 
         let project = Item {

@@ -86,13 +86,8 @@ fn read_or_default<T: DeserializeOwned + Default>(path: &Path) -> T {
 /// state in `extra` since MCP servers have no [`crate::model::PluginState`].
 fn mcp_item(name: &str, source: Source, state: &str) -> Item {
     Item {
-        kind: Kind::Mcp,
-        name: name.to_string(),
-        description: String::new(),
-        source,
-        path: None,
         extra: vec![("state".to_string(), state.to_string())],
-        plugin_state: None,
+        ..Item::new(Kind::Mcp, name, source)
     }
 }
 

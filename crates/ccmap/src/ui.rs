@@ -605,13 +605,8 @@ mod tests {
 
     fn item(kind: Kind, name: &str, description: &str) -> Item {
         Item {
-            kind,
-            name: name.to_string(),
             description: description.to_string(),
-            source: Source::User,
-            path: None,
-            extra: Vec::new(),
-            plugin_state: None,
+            ..Item::new(kind, name, Source::User)
         }
     }
 
