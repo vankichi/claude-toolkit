@@ -1,6 +1,6 @@
 [package]
 name = "cctk"
-version = "0.3.4"
+version.workspace = true
 description = "Shared core for the claude-toolkit tools (JSONL schema, pricing, path/tail helpers)"
 edition.workspace = true
 rust-version.workspace = true
