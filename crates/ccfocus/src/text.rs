@@ -100,9 +100,7 @@ pub fn pad_left(s: &str, cols: usize) -> String {
 /// has none.
 #[must_use]
 pub fn base_name(path: &str) -> String {
-    let trimmed = path.trim_end_matches(['/', '\\']);
-    let last = trimmed.rsplit(['/', '\\']).next().unwrap_or(trimmed);
-    clean(if last.is_empty() { path } else { last })
+    clean(cctk::paths::cwd_basename(path).unwrap_or(path))
 }
 
 #[cfg(test)]
@@ -140,5 +138,7 @@ mod tests {
         assert_eq!(base_name("/work/re\u{202E}po"), "repo");
         assert_eq!(base_name("C:\\work\\repo-b"), "repo-b");
         assert_eq!(base_name("/"), "/");
+        assert_eq!(base_name(""), "");
+        assert_eq!(base_name("/work//repo-c//"), "repo-c");
     }
 }
