@@ -12,17 +12,15 @@ use std::path::PathBuf;
     about = "Real-time terminal monitor for Claude Code session usage"
 )]
 struct Cli {
-    /// Override Claude projects directory (default: ~/.claude/projects)
-    #[arg(long)]
-    projects_dir: Option<PathBuf>,
+    #[command(flatten)]
+    projects: cctk::cli::ProjectsDir,
 
     /// Watch a specific session JSONL file instead of auto-detecting
     #[arg(long)]
     session: Option<PathBuf>,
 
-    /// Refresh interval in milliseconds for UI redraw
-    #[arg(long, default_value_t = 250)]
-    refresh_ms: u64,
+    #[command(flatten)]
+    refresh: cctk::cli::Refresh,
 
     /// Override the context window size (e.g. 200000 to opt down from the
     /// 1M default). Falls back to the `CCWATCH_CONTEXT_WINDOW` env var.
@@ -58,10 +56,7 @@ struct Cli {
 async fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    let projects_dir = match cli.projects_dir {
-        Some(p) => p,
-        None => cctk::paths::default_projects_dir()?,
-    };
+    let projects_dir = cli.projects.resolve()?;
 
     // Zero is treated the same as absent — guards `tokio::time::interval(0)`
     // which panics, and gives users a way to disable via `--watch 0`.
@@ -73,7 +68,7 @@ async fn main() -> Result<()> {
     ui::run(ui::Config {
         projects_dir,
         explicit_session: cli.session,
-        refresh_ms: cli.refresh_ms.max(16),
+        refresh_ms: cli.refresh.millis(),
         context_window_override: cli.context_window,
         days: cli.days,
         watch_interval,

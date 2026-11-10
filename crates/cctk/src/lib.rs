@@ -6,6 +6,8 @@
 //! share one core instead of maintaining parallel copies.
 
 pub mod chart;
+#[cfg(feature = "cli")]
+pub mod cli;
 pub mod cycle;
 pub mod fmt;
 pub mod focus;

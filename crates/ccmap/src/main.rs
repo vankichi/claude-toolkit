@@ -5,7 +5,6 @@ use anyhow::{Context, Result};
 use ccmap::discover;
 use ccmap::ui::{self, UiConfig};
 use clap::Parser;
-use std::path::PathBuf;
 
 #[derive(Parser, Debug)]
 #[command(
@@ -14,14 +13,11 @@ use std::path::PathBuf;
     about = "Terminal explorer for Claude Code agents, skills, commands, plugins, and MCP servers"
 )]
 struct Cli {
-    /// Override the Claude config directory (default: ~/.claude)
-    #[arg(long)]
-    claude_dir: Option<PathBuf>,
+    #[command(flatten)]
+    claude: cctk::cli::ClaudeDir,
 
-    /// Override the project directory to scan for `.claude` and `.mcp.json`
-    /// (default: the current working directory)
-    #[arg(long)]
-    project_dir: Option<PathBuf>,
+    #[command(flatten)]
+    project: cctk::cli::ProjectDir,
 }
 
 /// Binary entry point. Parses CLI args, resolves the discovery roots, then
@@ -30,12 +26,9 @@ struct Cli {
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    let claude_dir = match cli.claude_dir {
-        Some(dir) => dir,
-        None => cctk::paths::default_claude_dir()?,
-    };
+    let claude_dir = cli.claude.resolve()?;
 
-    let project_dir = match cli.project_dir {
+    let project_dir = match cli.project.project_dir {
         Some(dir) => dir,
         None => std::env::current_dir().context("could not determine current directory")?,
     };

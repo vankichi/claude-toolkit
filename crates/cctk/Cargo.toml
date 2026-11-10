@@ -17,10 +17,14 @@ publish.workspace = true
 # depend on cctk with default features and never pull in tokio.
 default = []
 tail = ["dep:tokio", "dep:futures"]
+# `cli` adds the clap flag structs the binaries share (`cctk::cli`). ccfocus
+# does not need it, and its hook stays free of the shared flags.
+cli = ["dep:clap"]
 
 [dependencies]
 anyhow.workspace = true
 chrono.workspace = true
+clap = { workspace = true, optional = true }
 ratatui.workspace = true
 serde.workspace = true
 serde_json.workspace = true
