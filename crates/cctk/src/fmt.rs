@@ -14,7 +14,7 @@ pub fn tokens(n: u64) -> String {
 }
 
 /// [`tokens`] of a rate or peak held as `f64`, rounded to the nearest whole
-/// token.
+/// token. Negative and NaN values read as 0 (the cast saturates).
 #[must_use]
 pub fn tokens_f64(v: f64) -> String {
     // The callers' values come from non-negative token counts, so the cast can

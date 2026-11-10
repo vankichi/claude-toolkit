@@ -15,7 +15,7 @@ use ratatui::{
     layout::{Constraint, Rect},
     style::{Color, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Cell, Paragraph, Row, Table},
+    widgets::{Block, Cell, Paragraph, Row, Table},
 };
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -248,7 +248,7 @@ fn draw_table(f: &mut Frame<'_>, area: Rect, entries: &[EntryView<'_>], selected
         ],
     )
     .header(header)
-    .block(Block::default().borders(Borders::ALL));
+    .block(Block::bordered());
     f.render_widget(table, area);
 }
 

@@ -14,7 +14,7 @@ use crossterm::event::{Event as CtEvent, KeyCode, KeyEventKind};
 use ratatui::{
     DefaultTerminal, Frame,
     layout::{Constraint, Direction, Layout, Rect},
-    style::{Color, Modifier, Style},
+    style::{Color, Style},
     text::{Line, Span},
     widgets::{List, ListItem, ListState, Paragraph, Tabs, Wrap},
 };
@@ -413,12 +413,9 @@ fn draw_list(f: &mut Frame<'_>, area: Rect, state: &AppState) {
         format!(" {}  filter: {} ", tab_title(state.tab), state.filter)
     };
 
-    let list = List::new(items).block(panel(title)).highlight_style(
-        Style::default()
-            .bg(Color::Green)
-            .fg(Color::Black)
-            .add_modifier(Modifier::BOLD),
-    );
+    let list = List::new(items)
+        .block(panel(title))
+        .highlight_style(cctk::style::highlight());
     f.render_stateful_widget(list, area, &mut list_state);
 }
 

@@ -12,7 +12,7 @@ use chrono::{Duration, NaiveDate};
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout, Rect},
-    style::{Color, Modifier, Style},
+    style::{Color, Style},
     text::{Line, Span},
     widgets::{Axis, Clear, List, ListItem, ListState, Paragraph, Tabs, Wrap},
 };
@@ -307,12 +307,9 @@ fn draw_list(f: &mut Frame<'_>, area: Rect, state: &AppState) {
         format!(" {}  filter: {} ", state.tab.title(), state.filter)
     };
 
-    let list = List::new(items).block(panel(title)).highlight_style(
-        Style::default()
-            .bg(Color::Green)
-            .fg(Color::Black)
-            .add_modifier(Modifier::BOLD),
-    );
+    let list = List::new(items)
+        .block(panel(title))
+        .highlight_style(cctk::style::highlight());
     f.render_stateful_widget(list, area, &mut list_state);
 }
 
@@ -381,12 +378,7 @@ fn draw_project_picker(f: &mut Frame<'_>, area: Rect, state: &AppState) {
     f.render_widget(Clear, popup);
     let list = List::new(items)
         .block(panel(" select project "))
-        .highlight_style(
-            Style::default()
-                .bg(Color::Green)
-                .fg(Color::Black)
-                .add_modifier(Modifier::BOLD),
-        );
+        .highlight_style(cctk::style::highlight());
     f.render_stateful_widget(list, popup, &mut ls);
 }
 

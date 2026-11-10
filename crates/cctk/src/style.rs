@@ -29,6 +29,15 @@ pub fn bold_fg(c: Color) -> Style {
     Style::default().fg(c).add_modifier(Modifier::BOLD)
 }
 
+/// Black bold text on green: the selected row of a list.
+#[must_use]
+pub fn highlight() -> Style {
+    Style::default()
+        .bg(Color::Green)
+        .fg(Color::Black)
+        .add_modifier(Modifier::BOLD)
+}
+
 /// Reverse-video, used to mark the selected row.
 #[must_use]
 pub fn reversed() -> Style {
@@ -41,6 +50,7 @@ mod tests {
 
     #[test]
     fn panel_is_a_titled_full_border() {
+        assert_eq!(Block::bordered(), Block::default().borders(Borders::ALL));
         assert_eq!(
             panel(" t "),
             Block::default().borders(Borders::ALL).title(" t ")
@@ -67,6 +77,13 @@ mod tests {
         assert_eq!(
             reversed(),
             Style::default().add_modifier(Modifier::REVERSED)
+        );
+        assert_eq!(
+            highlight(),
+            Style::default()
+                .bg(Color::Green)
+                .fg(Color::Black)
+                .add_modifier(Modifier::BOLD)
         );
     }
 }
