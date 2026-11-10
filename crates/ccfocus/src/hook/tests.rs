@@ -7,16 +7,16 @@ use std::path::PathBuf;
 
 const SID: &str = "00000000-0000-4000-8000-000000000001";
 
-const START: &str = include_str!("../tests/fixtures/session_start.json");
-const RESUME: &str = include_str!("../tests/fixtures/session_start_resume.json");
-const PROMPT: &str = include_str!("../tests/fixtures/user_prompt_submit.json");
-const PERMISSION: &str = include_str!("../tests/fixtures/notification_permission.json");
-const IDLE: &str = include_str!("../tests/fixtures/notification_idle.json");
-const STOP: &str = include_str!("../tests/fixtures/stop.json");
-const END: &str = include_str!("../tests/fixtures/session_end.json");
-const URL: &str = include_str!("../tests/fixtures/notification_url.json");
-const BATCH: &str = include_str!("../tests/fixtures/post_tool_batch.json");
-const FAILURE: &str = include_str!("../tests/fixtures/stop_failure.json");
+const START: &str = include_str!("../../tests/fixtures/session_start.json");
+const RESUME: &str = include_str!("../../tests/fixtures/session_start_resume.json");
+const PROMPT: &str = include_str!("../../tests/fixtures/user_prompt_submit.json");
+const PERMISSION: &str = include_str!("../../tests/fixtures/notification_permission.json");
+const IDLE: &str = include_str!("../../tests/fixtures/notification_idle.json");
+const STOP: &str = include_str!("../../tests/fixtures/stop.json");
+const END: &str = include_str!("../../tests/fixtures/session_end.json");
+const URL: &str = include_str!("../../tests/fixtures/notification_url.json");
+const BATCH: &str = include_str!("../../tests/fixtures/post_tool_batch.json");
+const FAILURE: &str = include_str!("../../tests/fixtures/stop_failure.json");
 
 /// Reports `CCFOCUS_HOST_PANE` as set on either side, so a test can tell
 /// that the hook ignores it on the host.
