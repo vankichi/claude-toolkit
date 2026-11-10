@@ -5,8 +5,8 @@ use super::SessionEntry;
 use super::format::{fmt_int, format_duration, threshold_color, tool_color, value_span};
 use super::state::{ViewMode, build_views, display_order};
 use crate::stats::SessionStats;
-use crate::style::{bold, bold_fg, dim};
 use crate::summary;
+use cctk::style::{bold, bold_fg, dim};
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout, Rect},

@@ -7,12 +7,12 @@
 
 use crate::session::AgentStatusKind;
 use crate::stats::SessionStats;
-use crate::style::{bold, bold_fg, dim};
+use cctk::style::{bold, bold_fg, dim, reversed};
 use chrono::{DateTime, Utc};
 use ratatui::{
     Frame,
     layout::{Constraint, Rect},
-    style::{Color, Modifier, Style},
+    style::{Color, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Cell, Paragraph, Row, Table},
 };
@@ -211,7 +211,7 @@ fn draw_table(f: &mut Frame<'_>, area: Rect, entries: &[EntryView<'_>], selected
                 s.context_pct() * 100.0
             );
             let row_style = if idx == selected {
-                Style::default().add_modifier(Modifier::REVERSED)
+                reversed()
             } else {
                 Style::default()
             };

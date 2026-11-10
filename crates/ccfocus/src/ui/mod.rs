@@ -28,6 +28,7 @@ pub use tiny::draw_tiny;
 use crate::board::{Board, Row, Shown, age};
 use crate::repos::Candidate;
 use crate::text::{fit, pad};
+use cctk::style::{bold_fg, dim, reversed};
 use chrono::{DateTime, FixedOffset};
 use ratatui::{
     Frame,
@@ -97,19 +98,13 @@ pub struct View {
 
 fn status_style(s: Shown) -> Style {
     match s {
-        Shown::Waiting => Style::default()
-            .fg(Color::Yellow)
-            .add_modifier(Modifier::BOLD),
-        Shown::Failed => Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+        Shown::Waiting => bold_fg(Color::Yellow),
+        Shown::Failed => bold_fg(Color::Red),
         Shown::Done => Style::default().fg(Color::Green),
         Shown::Working => Style::default().fg(Color::Cyan),
         Shown::Idle => Style::default().fg(Color::Gray),
-        Shown::Stopped => Style::default().fg(Color::DarkGray),
+        Shown::Stopped => dim(),
     }
-}
-
-fn dim() -> Style {
-    Style::default().fg(Color::DarkGray)
 }
 
 /// `parallel N / L` styled by how it compares with the limit: red over it,
@@ -127,9 +122,7 @@ fn parallel_style(v: &View) -> Style {
             .fg(Color::White)
             .bg(Color::Red)
             .add_modifier(Modifier::BOLD),
-        std::cmp::Ordering::Equal => Style::default()
-            .fg(Color::Yellow)
-            .add_modifier(Modifier::BOLD),
+        std::cmp::Ordering::Equal => bold_fg(Color::Yellow),
         std::cmp::Ordering::Less => Style::default(),
     }
 }
@@ -228,7 +221,7 @@ fn list_line(v: &View, r: &Row, c: &Columns, selected: bool) -> Line<'static> {
     )));
     let mut line = Line::from(spans);
     if selected {
-        line = line.style(Style::default().add_modifier(Modifier::REVERSED));
+        line = line.style(reversed());
     }
     line
 }

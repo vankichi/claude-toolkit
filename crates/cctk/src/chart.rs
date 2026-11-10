@@ -5,6 +5,7 @@
 //! (the chart borrows them) and may further customize the returned chart —
 //! e.g. `.block(..)` for a border/title or `.x_axis(x_axis(..))` to add end labels.
 
+use crate::style::dim;
 use ratatui::style::{Color, Style};
 use ratatui::symbols::Marker;
 use ratatui::text::Line;
@@ -40,7 +41,7 @@ pub fn x_axis<'a>(last_x: f64, left: impl Into<Line<'a>>, right: impl Into<Line<
     Axis::default()
         .bounds([0.0, last_x.max(1.0)])
         .labels([left.into(), right.into()])
-        .style(Style::default().fg(Color::DarkGray))
+        .style(dim())
 }
 
 /// The `[0, y_max]` y-axis labeled `0` and `top`.
@@ -48,7 +49,7 @@ fn y_axis(y_max: f64, top: String) -> Axis<'static> {
     Axis::default()
         .bounds([0.0, y_max.max(1.0)])
         .labels([Line::from("0"), Line::from(top)])
-        .style(Style::default().fg(Color::DarkGray))
+        .style(dim())
 }
 
 /// One colored series for [`braille_multi_line`]. Owns its points so the

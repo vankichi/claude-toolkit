@@ -7,6 +7,7 @@ use super::format::{
 };
 use crate::model::{Category, ProjectFilter};
 use crate::usage::{GraphMetric, TREND_DAYS};
+use cctk::style::{bold_fg, dim};
 use chrono::{Duration, NaiveDate};
 use ratatui::{
     Frame,
@@ -107,7 +108,7 @@ fn draw_trends(f: &mut Frame<'_>, area: Rect, state: &AppState) {
     let metric = state.graph_metric;
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::DarkGray))
+        .border_style(dim())
         .title(format!(
             " Trends · {} · top {} · window {} · (m: metric) ",
             metric.label(),
@@ -120,10 +121,7 @@ fn draw_trends(f: &mut Frame<'_>, area: Rect, state: &AppState) {
     let series = trends_series(state);
     if series.is_empty() || inner.height < 2 {
         f.render_widget(
-            Paragraph::new(Span::styled(
-                "no data in the selected window",
-                Style::default().fg(Color::DarkGray),
-            )),
+            Paragraph::new(Span::styled("no data in the selected window", dim())),
             inner,
         );
         return;
@@ -180,14 +178,9 @@ fn metric_top_label(metric: GraphMetric, y_max: f64) -> String {
 /// `○` when idle) followed by the running-item names and live-session count.
 fn draw_running(f: &mut Frame<'_>, area: Rect, state: &AppState) {
     let (glyph, glyph_style) = if state.has_active() {
-        (
-            state.spinner_char(),
-            Style::default()
-                .fg(Color::Green)
-                .add_modifier(Modifier::BOLD),
-        )
+        (state.spinner_char(), bold_fg(Color::Green))
     } else {
-        ('○', Style::default().fg(Color::DarkGray))
+        ('○', dim())
     };
     let line = Line::from(vec![
         Span::styled(format!(" {glyph} "), glyph_style),
@@ -215,11 +208,7 @@ fn draw_tabs(f: &mut Frame<'_>, area: Rect, state: &AppState) {
     );
     let tabs = Tabs::new(titles)
         .block(Block::default().borders(Borders::ALL).title(title))
-        .highlight_style(
-            Style::default()
-                .fg(Color::Yellow)
-                .add_modifier(Modifier::BOLD),
-        )
+        .highlight_style(bold_fg(Color::Yellow))
         .select(selected);
     f.render_widget(tabs, area);
 }
@@ -299,12 +288,7 @@ fn draw_list(f: &mut Frame<'_>, area: Rect, state: &AppState) {
                 } else {
                     ' '
                 };
-                let spin_span = Span::styled(
-                    spin.to_string(),
-                    Style::default()
-                        .fg(Color::Green)
-                        .add_modifier(Modifier::BOLD),
-                );
+                let spin_span = Span::styled(spin.to_string(), bold_fg(Color::Green));
                 let rest = Span::styled(
                     format!(" {:>6}  {}  {}", r.count, bar, r.name),
                     Style::default().fg(color),

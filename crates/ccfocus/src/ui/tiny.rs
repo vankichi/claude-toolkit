@@ -6,6 +6,7 @@ use super::{
 };
 use crate::board::{Row, age};
 use crate::text::{fit, pad, width};
+use cctk::style::bold;
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
@@ -143,7 +144,6 @@ fn draw_tiny_today(f: &mut Frame<'_>, area: Rect, v: &View) {
 /// few only.
 fn draw_tiny_candidates(f: &mut Frame<'_>, area: Rect, v: &View) {
     let w = usize::from(area.width);
-    let bold = Style::default().add_modifier(Modifier::BOLD);
     let Some(cands) = &v.candidates else {
         f.render_widget(
             Paragraph::new(Line::from(Span::styled(fit("to finish …", w), dim()))),
@@ -155,7 +155,7 @@ fn draw_tiny_candidates(f: &mut Frame<'_>, area: Rect, v: &View) {
     if !v.pr_known {
         title.push_str(" · PR?");
     }
-    let mut lines = vec![Line::from(Span::styled(fit(&title, w), bold))];
+    let mut lines = vec![Line::from(Span::styled(fit(&title, w), bold()))];
     for c in cands.iter().take(MAX_TINY_CANDIDATES) {
         let mut tail = format!(" ↑{}", c.ahead);
         if c.behind > 0 {
@@ -225,10 +225,7 @@ fn draw_card(f: &mut Frame<'_>, area: Rect, v: &View, r: &Row, selected: bool, n
         Span::raw(fit(&r.project, w))
     };
     let mut lines = vec![
-        Line::from(Span::styled(
-            fit(&place, w),
-            Style::default().add_modifier(Modifier::BOLD),
-        )),
+        Line::from(Span::styled(fit(&place, w), bold())),
         Line::from(project),
     ];
     if selected {

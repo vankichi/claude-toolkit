@@ -11,12 +11,13 @@ use crate::store::Dashboard;
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
-    style::{Color, Modifier, Style},
+    style::{Color, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph},
 };
 
 use cctk::fmt::tokens as fmt_tokens;
+use cctk::style::{bold, bold_fg, dim};
 
 /// Dollar cost with cents.
 #[must_use]
@@ -27,9 +28,7 @@ fn fmt_cost(cost: f64) -> String {
 fn panel_block(title: &str, panel: Panel, app: &App) -> Block<'static> {
     let selected = app.mode == Mode::Overview && app.selected == panel;
     if selected {
-        let accent = Style::default()
-            .fg(Color::Yellow)
-            .add_modifier(Modifier::BOLD);
+        let accent = bold_fg(Color::Yellow);
         Block::default()
             .borders(Borders::ALL)
             .border_style(accent)
@@ -37,7 +36,7 @@ fn panel_block(title: &str, panel: Panel, app: &App) -> Block<'static> {
     } else {
         Block::default()
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::DarkGray))
+            .border_style(dim())
             .title(format!("   {title} "))
     }
 }
@@ -96,7 +95,7 @@ fn session_line(s: &crate::now::SessionView) -> Line<'static> {
     Line::from(vec![
         Span::styled(project, Style::default().fg(Color::Cyan)),
         Span::raw(" · "),
-        Span::styled(name, Style::default().add_modifier(Modifier::BOLD)),
+        Span::styled(name, bold()),
         Span::raw(format!(
             "   {}   {} tok   {}   ctx {:.0}%",
             s.model,
@@ -156,7 +155,7 @@ fn draw_now(f: &mut Frame<'_>, area: Rect, dash: &Dashboard, app: &App) {
     if n == 0 {
         lines.push(Line::from(Span::styled(
             "waiting for an active session…",
-            Style::default().fg(Color::DarkGray),
+            dim(),
         )));
     } else {
         let projects = now.projects();
@@ -165,12 +164,7 @@ fn draw_now(f: &mut Frame<'_>, area: Rect, dash: &Dashboard, app: &App) {
         } else {
             format!("{n} sessions · {}", project_label(&projects))
         };
-        lines.push(Line::from(Span::styled(
-            head,
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        )));
+        lines.push(Line::from(Span::styled(head, bold_fg(Color::Cyan))));
         lines.push(Line::from(Span::styled(
             format!(
                 "{} tok   {}   ctx≤{:.0}%   (Enter for per-session)",
@@ -178,7 +172,7 @@ fn draw_now(f: &mut Frame<'_>, area: Rect, dash: &Dashboard, app: &App) {
                 fmt_cost(now.cost_usd()),
                 now.context_pct() * 100.0,
             ),
-            Style::default().fg(Color::DarkGray),
+            dim(),
         )));
     }
 
@@ -218,7 +212,7 @@ fn draw_rate_chart(f: &mut Frame<'_>, area: Rect, points: &[(f64, f64)]) {
         f.render_widget(
             Paragraph::new(Line::from(Span::styled(
                 "token rate — waiting for activity…",
-                Style::default().fg(Color::DarkGray),
+                dim(),
             ))),
             area,
         );
@@ -254,7 +248,7 @@ fn draw_usage(f: &mut Frame<'_>, area: Rect, dash: &Dashboard, app: &App) {
         f.render_widget(
             Paragraph::new(Span::styled(
                 format!("no active {} usage", category.title().to_lowercase()),
-                Style::default().fg(Color::DarkGray),
+                dim(),
             )),
             inner,
         );
@@ -337,16 +331,11 @@ fn draw_map(f: &mut Frame<'_>, area: Rect, dash: &Dashboard, app: &App) {
         .collect();
 
     if running.is_empty() {
-        lines.push(Line::from(Span::styled(
-            "running now: idle",
-            Style::default().fg(Color::DarkGray),
-        )));
+        lines.push(Line::from(Span::styled("running now: idle", dim())));
     } else {
         lines.push(Line::from(Span::styled(
             format!("running now ({})", running.len()),
-            Style::default()
-                .fg(Color::Green)
-                .add_modifier(Modifier::BOLD),
+            bold_fg(Color::Green),
         )));
         let cap = usize::from(inner.height).saturating_sub(lines.len()).max(1);
         for (tag, name) in running.iter().take(cap) {
@@ -358,7 +347,7 @@ fn draw_map(f: &mut Frame<'_>, area: Rect, dash: &Dashboard, app: &App) {
         if running.len() > cap {
             lines.push(Line::from(Span::styled(
                 format!("  +{} more", running.len() - cap),
-                Style::default().fg(Color::DarkGray),
+                dim(),
             )));
         }
     }
@@ -386,7 +375,7 @@ fn draw_recent(f: &mut Frame<'_>, area: Rect, dash: &Dashboard, app: &App) {
     };
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::DarkGray))
+        .border_style(dim())
         .title(format!(" {title} "));
     let inner = block.inner(area);
     f.render_widget(block, area);
@@ -429,10 +418,7 @@ pub fn draw_now_detail(f: &mut Frame<'_>, now: &crate::now::NowStats) {
 
     let mut lines: Vec<Line> = vec![
         Line::from(vec![
-            Span::styled(
-                format!("{} session(s)", now.session_count()),
-                Style::default().add_modifier(Modifier::BOLD),
-            ),
+            Span::styled(format!("{} session(s)", now.session_count()), bold()),
             Span::raw(format!(
                 "   {} tok   {}   {} msgs",
                 fmt_tokens(now.total_tokens()),
@@ -445,7 +431,7 @@ pub fn draw_now_detail(f: &mut Frame<'_>, now: &crate::now::NowStats) {
     if sessions.is_empty() {
         lines.push(Line::from(Span::styled(
             "waiting for an active session…",
-            Style::default().fg(Color::DarkGray),
+            dim(),
         )));
     } else {
         lines.extend(sessions.iter().map(session_line));
@@ -453,7 +439,7 @@ pub fn draw_now_detail(f: &mut Frame<'_>, now: &crate::now::NowStats) {
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
         format!("tools: {}", tools_text(now)),
-        Style::default().fg(Color::DarkGray),
+        dim(),
     )));
 
     let text_h = u16::try_from(lines.len())

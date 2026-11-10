@@ -7,10 +7,11 @@ use super::{
 };
 use crate::board::age;
 use crate::text::{fit, pad, pad_left, width};
+use cctk::style::bold;
 use ratatui::{
     Frame,
     layout::{Alignment, Constraint, Layout, Rect},
-    style::{Color, Modifier, Style},
+    style::{Color, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph},
 };
@@ -74,10 +75,7 @@ fn draw_header(f: &mut Frame<'_>, area: Rect, v: &View) {
         right.push(Span::raw(format!(" · {r}")));
     }
     f.render_widget(
-        Paragraph::new(Line::from(Span::styled(
-            v.title.clone(),
-            Style::default().add_modifier(Modifier::BOLD),
-        ))),
+        Paragraph::new(Line::from(Span::styled(v.title.clone(), bold()))),
         area,
     );
     f.render_widget(
@@ -105,7 +103,7 @@ fn draw_next(f: &mut Frame<'_>, area: Rect, v: &View) {
     let body = match next {
         Some(r) => Line::from(Span::styled(
             fit(&summary(r), usize::from(inner.width)),
-            Style::default().add_modifier(Modifier::BOLD),
+            bold(),
         )),
         None => Line::from(Span::styled("none", dim())),
     };
@@ -168,7 +166,6 @@ fn draw_list(f: &mut Frame<'_>, area: Rect, v: &View) {
 
 fn draw_candidates(f: &mut Frame<'_>, area: Rect, v: &View) {
     let w = usize::from(area.width);
-    let bold = Style::default().add_modifier(Modifier::BOLD);
     let Some(cands) = &v.candidates else {
         f.render_widget(
             Paragraph::new(Line::from(Span::styled("to finish: checking…", dim()))),
@@ -183,7 +180,7 @@ fn draw_candidates(f: &mut Frame<'_>, area: Rect, v: &View) {
     if cands.is_empty() {
         title = "to finish: none".to_string();
     }
-    let mut lines = vec![Line::from(Span::styled(fit(&title, w), bold))];
+    let mut lines = vec![Line::from(Span::styled(fit(&title, w), bold()))];
     for c in cands.iter().take(MAX_CANDIDATES) {
         let state = match c.dirty {
             Some(0) => "clean".to_string(),

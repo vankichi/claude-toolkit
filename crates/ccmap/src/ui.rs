@@ -9,6 +9,7 @@
 
 use crate::discover::{self, discover_all};
 use crate::model::{Item, Kind, PluginState, Provenance, Source};
+use cctk::style::{bold_fg, dim};
 use crossterm::event::{Event as CtEvent, KeyCode, KeyEventKind};
 use ratatui::{
     DefaultTerminal, Frame,
@@ -366,11 +367,7 @@ fn draw_tabs(f: &mut Frame<'_>, area: Rect, active: Kind) {
     let selected = TABS.iter().position(|&kind| kind == active).unwrap_or(0);
     let tabs = Tabs::new(titles)
         .block(Block::default().borders(Borders::ALL).title(" ccmap "))
-        .highlight_style(
-            Style::default()
-                .fg(Color::Yellow)
-                .add_modifier(Modifier::BOLD),
-        )
+        .highlight_style(bold_fg(Color::Yellow))
         .select(selected);
     f.render_widget(tabs, area);
 }
@@ -446,14 +443,9 @@ fn draw_provenance(f: &mut Frame<'_>, area: Rect, state: &AppState) {
                 provenance_icon(provenance),
                 provenance_label(provenance)
             ),
-            Style::default()
-                .fg(provenance_color(provenance))
-                .add_modifier(Modifier::BOLD),
+            bold_fg(provenance_color(provenance)),
         )),
-        Line::from(Span::styled(
-            provenance_detail(&item.source),
-            Style::default().fg(Color::DarkGray),
-        )),
+        Line::from(Span::styled(provenance_detail(&item.source), dim())),
     ];
     f.render_widget(Paragraph::new(lines).block(block), area);
 }
