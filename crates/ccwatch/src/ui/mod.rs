@@ -102,8 +102,8 @@ async fn run_inner(terminal: &mut DefaultTerminal, cfg: Config) -> Result<()> {
     });
     let mut events = EventStream::new();
 
-    // A failed manual rescan, shown on the bottom row until the next key or
-    // a later rescan succeeds.
+    // A failed manual rescan, shown on the bottom row until the next key
+    // that does something (a later `R` included).
     let mut notice: Option<String> = None;
 
     loop {
@@ -123,9 +123,7 @@ async fn run_inner(terminal: &mut DefaultTerminal, cfg: Config) -> Result<()> {
                 // Auto-refresh is best-effort: if `claude agents --json`
                 // hiccups (CLI crashed, slow, network), we keep the current
                 // view. Manual `R` shows the error on the bottom row.
-                if rescan(&mut entries, &event_tx, &cfg, &mut selected).await.is_ok() {
-                    notice = None;
-                }
+                let _ = rescan(&mut entries, &event_tx, &cfg, &mut selected).await;
             }
             n = event_rx.recv_many(&mut event_buf, EVENT_DRAIN_BATCH) => {
                 if n == 0 {
@@ -141,8 +139,11 @@ async fn run_inner(terminal: &mut DefaultTerminal, cfg: Config) -> Result<()> {
                 if let CtEvent::Key(k) = ct_ev
                     && k.kind == KeyEventKind::Press
                 {
-                    notice = None;
-                    match classify_key(k.code, mode, pinned) {
+                    let action = classify_key(k.code, mode, pinned);
+                    if action != KeyAction::Ignore {
+                        notice = None;
+                    }
+                    match action {
                         KeyAction::Quit => return Ok(()),
                         KeyAction::OpenBrowser => open_in_browser(USAGE_DASHBOARD_URL),
                         KeyAction::ResetCurrent => {
@@ -279,18 +280,16 @@ fn name_and_status(d: &DiscoveredSession) -> (Option<String>, AgentStatus) {
 }
 
 /// The bottom-row message for a failed manual rescan: the error chain's
-/// first line, with control characters dropped (the text can carry the
-/// `claude` CLI's stderr, which must not drive the terminal).
+/// first line with any text, control characters dropped (the text can
+/// carry the `claude` CLI's stderr, which must not drive the terminal).
 fn rescan_failed(e: &anyhow::Error) -> String {
     let text = format!("{e:#}");
-    let first: String = text
+    let first = text
         .lines()
-        .next()
-        .unwrap_or_default()
-        .chars()
-        .filter(|c| !c.is_control())
-        .collect();
-    format!("rescan failed: {first}")
+        .map(|l| l.chars().filter(|c| !c.is_control()).collect::<String>())
+        .find(|l| !l.trim().is_empty())
+        .unwrap_or_default();
+    format!("rescan failed: {}", first.trim())
 }
 
 /// Re-discover sessions and reconcile against the running watcher set:
@@ -374,6 +373,9 @@ mod tests {
             rescan_failed(&e),
             "rescan failed: claude agents --json: boom[31m"
         );
+        // A blank or control-only first line is skipped for the real cause.
+        let e = anyhow::anyhow!("\n\u{7}\u{1b}\n  real cause  ");
+        assert_eq!(rescan_failed(&e), "rescan failed: real cause");
     }
 
     #[test]
