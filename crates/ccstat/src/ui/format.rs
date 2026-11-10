@@ -22,17 +22,11 @@ pub fn format_recency(last_used: Option<NaiveDate>, today: NaiveDate) -> String 
     }
 }
 
-/// Row color for a provenance (mirrors ccmap's provenance palette); `None`
+/// Row color for a provenance (ccmap's provenance palette); `None`
 /// (built-in / undiscovered) is dim gray.
 #[must_use]
 pub(super) fn provenance_color(provenance: Option<Provenance>) -> Color {
-    match provenance {
-        Some(Provenance::Local) => Color::White,
-        Some(Provenance::Project) => Color::Cyan,
-        Some(Provenance::Official) => Color::Yellow,
-        Some(Provenance::Community) => Color::Magenta,
-        None => Color::DarkGray,
-    }
+    provenance.map_or(Color::DarkGray, ccmap::ui::provenance_color)
 }
 
 /// Human-readable source label for the detail pane.

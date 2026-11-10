@@ -13,7 +13,7 @@ use ratatui::{
     layout::{Constraint, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Axis, Block, Borders, Paragraph},
+    widgets::{Block, Borders, Paragraph},
 };
 
 use cctk::fmt::tokens as fmt_tokens;
@@ -231,12 +231,8 @@ fn draw_rate_chart(f: &mut Frame<'_>, area: Rect, points: &[(f64, f64)]) {
     let peak_label = format!("{}/m", fmt_tokens(peak.round() as u64));
     let last_x = points.last().map_or(1.0, |&(x, _)| x).max(1.0);
 
-    let chart = cctk::chart::braille_line(points, peak, peak_label, Color::Cyan).x_axis(
-        Axis::default()
-            .bounds([0.0, last_x])
-            .labels([Line::from(RATE_LEFT_LABEL), Line::from("now")])
-            .style(Style::default().fg(Color::DarkGray)),
-    );
+    let chart = cctk::chart::braille_line(points, peak, peak_label, Color::Cyan)
+        .x_axis(cctk::chart::x_axis(last_x, RATE_LEFT_LABEL, "now"));
     f.render_widget(chart, area);
 }
 
@@ -308,12 +304,8 @@ fn draw_usage(f: &mut Frame<'_>, area: Rect, dash: &Dashboard, app: &App) {
     };
     let last_x = (RATE_BINS.saturating_sub(1)).max(1) as f64;
 
-    let chart = cctk::chart::braille_multi_line(&series, y_max, y_label).x_axis(
-        Axis::default()
-            .bounds([0.0, last_x])
-            .labels([Line::from(RATE_LEFT_LABEL), Line::from("now")])
-            .style(Style::default().fg(Color::DarkGray)),
-    );
+    let chart = cctk::chart::braille_multi_line(&series, y_max, y_label)
+        .x_axis(cctk::chart::x_axis(last_x, RATE_LEFT_LABEL, "now"));
     f.render_widget(chart, parts[1]);
 }
 
