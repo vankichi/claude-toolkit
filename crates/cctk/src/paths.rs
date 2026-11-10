@@ -33,7 +33,7 @@ pub fn default_projects_dir() -> io::Result<PathBuf> {
 /// written while a Task/Agent subagent runs). Recurses into real subdirectories
 /// only — symlinked files and directories are never collected or followed, so
 /// the read-only contract can't be tricked into leaving the tree — and is
-/// bounded to [`MAX_SESSION_DEPTH`] as a loop guard. Returns an empty Vec when
+/// bounded to `MAX_SESSION_DEPTH` as a loop guard. Returns an empty Vec when
 /// `projects_dir` is missing or unreadable.
 #[must_use]
 pub fn session_files(projects_dir: &Path) -> Vec<PathBuf> {

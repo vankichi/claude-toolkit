@@ -4,7 +4,7 @@
 //! `args`/`env` values, none of which this module may ever materialize or
 //! print. See the `ClaudeJson`/`ProjectEntry`/`McpJson` shapes below: every
 //! `mcpServers` object is collected into a `BTreeSet<String>` of its keys via
-//! the [`map_keys`] deserializer, which discards each value through
+//! the `map_keys` deserializer, which discards each value through
 //! [`serde::de::IgnoredAny`] — serde parses far enough to keep the
 //! server-name keys but never builds a `String`/`Value` out of the value
 //! bytes. Fields this module has no use for (notably `oauthAccount`) are

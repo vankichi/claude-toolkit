@@ -2,7 +2,7 @@
 //!
 //! Owns the terminal lifecycle (`ratatui::try_init` / `restore`), drives a
 //! `tokio::select!` loop over render-tick / watcher-events / keyboard input,
-//! and dispatches per-session events to the matching [`SessionEntry`].
+//! and dispatches per-session events to the matching `SessionEntry`.
 //!
 //! Two view modes:
 //! - `Summary` (default): table of every discovered session, with an
