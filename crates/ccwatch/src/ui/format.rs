@@ -1,4 +1,4 @@
-//! Span / color / number helpers (shared styles live in `style`).
+//! Span / color / number helpers (shared styles live in `cctk::style`).
 
 use cctk::style::bold_fg;
 use ratatui::{style::Color, text::Span};
