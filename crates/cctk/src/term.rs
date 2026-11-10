@@ -5,8 +5,9 @@ use ratatui::DefaultTerminal;
 use ratatui::crossterm::event::{Event, KeyCode, KeyEventKind};
 use std::ops::{Deref, DerefMut};
 
-/// The TUI's terminal, restored when dropped: on return, on `?` and on
-/// unwinding. Drop it explicitly where work must run after the restore.
+/// The TUI's terminal, restored when dropped (on return and on `?`). Drop
+/// it explicitly where work must run after the restore. A panic is left to
+/// the hook `ratatui::try_init` installs, which restores before printing.
 pub struct Tui(DefaultTerminal);
 
 impl Tui {
@@ -37,7 +38,9 @@ impl DerefMut for Tui {
 
 impl Drop for Tui {
     fn drop(&mut self) {
-        ratatui::restore();
+        if !std::thread::panicking() {
+            ratatui::restore();
+        }
     }
 }
 

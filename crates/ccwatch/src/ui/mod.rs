@@ -1,6 +1,6 @@
 //! TUI rendering and event loop.
 //!
-//! Owns the terminal lifecycle (`ratatui::try_init` / `restore`), drives a
+//! Holds the terminal for the session (`cctk::term::Tui`), drives a
 //! `tokio::select!` loop over render-tick / watcher-events / keyboard input,
 //! and dispatches per-session events to the matching `SessionEntry`.
 //!
