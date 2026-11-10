@@ -1,7 +1,7 @@
 //! ccmap — terminal explorer for Claude Code agents, skills, commands,
 //! plugins, and MCP servers.
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use ccmap::discover;
 use ccmap::ui::{self, UiConfig};
 use clap::Parser;
@@ -28,10 +28,7 @@ fn main() -> Result<()> {
 
     let claude_dir = cli.claude.resolve()?;
 
-    let project_dir = match cli.project.project_dir {
-        Some(dir) => dir,
-        None => std::env::current_dir().context("could not determine current directory")?,
-    };
+    let project_dir = cli.project.resolve()?;
 
     ui::run(UiConfig {
         ctx: discover::Context {

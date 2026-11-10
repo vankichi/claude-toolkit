@@ -52,16 +52,31 @@ pub struct ProjectDir {
     pub project_dir: Option<PathBuf>,
 }
 
+impl ProjectDir {
+    /// The flag's value, else the current working directory.
+    ///
+    /// # Errors
+    /// When the flag is absent and the current directory can't be read.
+    pub fn resolve(self) -> anyhow::Result<PathBuf> {
+        use anyhow::Context;
+        match self.project_dir {
+            Some(dir) => Ok(dir),
+            None => std::env::current_dir().context("could not determine current directory"),
+        }
+    }
+}
+
 /// The lowest `--refresh-ms` honoured: smaller values, 0 included, are
 /// raised to it (a zero period would panic the redraw timer).
 pub const MIN_REFRESH_MS: u64 = 16;
 
-/// `--refresh-ms`: how often the TUI redraws.
+/// `--refresh-ms`: how often the TUI redraws. Read it through
+/// [`Refresh::millis`] / [`Refresh::interval`], which apply the floor.
 #[derive(clap::Args, Debug, Clone)]
 pub struct Refresh {
     /// UI redraw interval in milliseconds (minimum 16)
     #[arg(long, default_value_t = 250)]
-    pub refresh_ms: u64,
+    refresh_ms: u64,
 }
 
 impl Refresh {

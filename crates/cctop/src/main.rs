@@ -13,7 +13,7 @@ mod overview;
 mod run;
 mod store;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use clap::Parser;
 use std::time::Duration;
 
@@ -51,10 +51,7 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
     let projects_dir = cli.projects.resolve()?;
     let claude_dir = cli.claude.resolve()?;
-    let project_dir = match cli.project.project_dir {
-        Some(p) => p,
-        None => std::env::current_dir().context("could not determine current directory")?,
-    };
+    let project_dir = cli.project.resolve()?;
 
     // Where the hook writes (`$CCFOCUS_STATE_DIR`, else ~/.claude/focus);
     // `--claude-dir` does not move it.

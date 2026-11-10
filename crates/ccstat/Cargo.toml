@@ -18,7 +18,7 @@ path = "src/main.rs"
 
 [dependencies]
 anyhow.workspace = true
-ccmap = { workspace = true }
+ccmap.workspace = true
 cctk = { workspace = true, features = ["cli"] }
 chrono.workspace = true
 clap.workspace = true
