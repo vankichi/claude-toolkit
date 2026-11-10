@@ -357,16 +357,26 @@ const GIT_TIMEOUT: Duration = Duration::from_secs(3);
 /// own git work). `core.fsmonitor` is off: it runs a configured command on
 /// `status`, and `dir` comes from a state file.
 pub(crate) fn git(dir: &Path, args: &[&str]) -> Option<String> {
-    let mut cmd = Command::new("git");
-    cmd.args(["-c", "core.fsmonitor=false", "-C"])
-        .arg(dir)
-        .args(args)
-        .env_remove("GIT_DIR")
-        .env_remove("GIT_WORK_TREE")
-        .env("GIT_OPTIONAL_LOCKS", "0");
+    let mut cmd = git_command(dir, &["-c", "core.fsmonitor=false"]);
+    cmd.args(args);
     run(cmd, GIT_TIMEOUT)
         .filter(|o| o.success)
         .map(|o| o.stdout)
+}
+
+/// `git <global> -C <dir>`, ready for its subcommand: it resolves the repo
+/// from `dir` only (`GIT_DIR` / `GIT_WORK_TREE` removed) and never takes
+/// optional locks, so neither the hook's probe nor the board contends with
+/// the session's own git work.
+pub(crate) fn git_command(dir: &Path, global: &[&str]) -> Command {
+    let mut cmd = Command::new("git");
+    cmd.args(global)
+        .arg("-C")
+        .arg(dir)
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .env("GIT_OPTIONAL_LOCKS", "0");
+    cmd
 }
 
 /// First line of a failed command's stderr, cleaned for display.

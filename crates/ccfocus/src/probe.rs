@@ -114,15 +114,8 @@ impl Probe for SystemProbe {
 
     fn git(&self, cwd: &Path) -> GitInfo {
         let rev_parse = |args: &[&str]| {
-            let mut cmd = Command::new("git");
-            cmd.arg("-C")
-                .arg(cwd)
-                .args(["rev-parse", "--path-format=absolute"])
-                .args(args)
-                // Resolve from cwd only, and never take optional locks.
-                .env_remove("GIT_DIR")
-                .env_remove("GIT_WORK_TREE")
-                .env("GIT_OPTIONAL_LOCKS", "0");
+            let mut cmd = crate::cmd::git_command(cwd, &[]);
+            cmd.args(["rev-parse", "--path-format=absolute"]).args(args);
             self.run(cmd)
         };
         // Usually one call. An unborn branch makes `HEAD` ambiguous, and a bare
