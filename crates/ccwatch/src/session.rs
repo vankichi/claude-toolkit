@@ -48,11 +48,6 @@ pub(crate) fn short_id(path: &Path) -> String {
     )
 }
 
-/// Hard cap on how long we wait for `claude agents --json` before giving up.
-/// `claude agents --json` is normally instantaneous (reads local state); the
-/// timeout is just a safety net against a hung child stalling the TUI.
-const LIVE_AGENTS_TIMEOUT: Duration = Duration::from_secs(5);
-
 /// Status reported by `claude agents --json` for a live agent.
 /// Sessions absent from that list map to [`AgentStatus::Offline`] elsewhere.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -101,40 +96,12 @@ pub(crate) struct DiscoveredSession {
 /// we keep the bits we render (name + status) and ignore the rest.
 ///
 /// Errors surface a friendly message for the common cases: `claude` not on
-/// PATH, non-zero exit, JSON parse failure, or the timeout firing.
+/// PATH, non-zero exit, JSON parse failure, or the timeout firing
+/// (see [`cctk::agents::json`]).
 pub(crate) async fn live_agent_info_map() -> Result<HashMap<String, AgentInfo>> {
-    let fut = tokio::process::Command::new("claude")
-        .args(["agents", "--json"])
-        .stdin(std::process::Stdio::null())
-        // On a timeout the future is dropped; without this the CLI runs on.
-        .kill_on_drop(true)
-        .output();
-
-    let output = match tokio::time::timeout(LIVE_AGENTS_TIMEOUT, fut).await {
-        Ok(Ok(o)) => o,
-        Ok(Err(e)) if e.kind() == std::io::ErrorKind::NotFound => {
-            anyhow::bail!(
-                "could not run `claude agents --json`: the `claude` CLI was not found on PATH"
-            );
-        }
-        Ok(Err(e)) => return Err(e).context("spawning `claude agents --json`"),
-        Err(_) => anyhow::bail!(
-            "`claude agents --json` timed out after {}s",
-            LIVE_AGENTS_TIMEOUT.as_secs()
-        ),
-    };
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        anyhow::bail!(
-            "`claude agents --json` exited with {}: {}",
-            output.status,
-            stderr.trim()
-        );
-    }
-
+    let stdout = cctk::agents::json().await?;
     let entries: Vec<AgentEntry> =
-        serde_json::from_slice(&output.stdout).context("parsing `claude agents --json` output")?;
+        serde_json::from_slice(&stdout).context("parsing `claude agents --json` output")?;
     Ok(entries
         .into_iter()
         .map(|e| {

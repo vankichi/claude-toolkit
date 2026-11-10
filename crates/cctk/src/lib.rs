@@ -5,6 +5,8 @@
 //! fuzzy matching, so `ccwatch`, `ccstat`, `ccmap`, `cctop` and `ccfocus`
 //! share one core instead of maintaining parallel copies.
 
+#[cfg(feature = "tail")]
+pub mod agents;
 pub mod chart;
 #[cfg(feature = "cli")]
 pub mod cli;
