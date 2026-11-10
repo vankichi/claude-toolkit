@@ -140,11 +140,7 @@ fn draw_trends(f: &mut Frame<'_>, area: Rect, state: &AppState) {
         .collect();
     f.render_widget(Paragraph::new(Line::from(legend)), parts[0]);
 
-    let y_max = series
-        .iter()
-        .flat_map(|s| s.points.iter().map(|&(_, y)| y))
-        .fold(0.0_f64, f64::max)
-        .max(1.0);
+    let y_max = cctk::chart::peak(&series);
 
     let chart = cctk::chart::braille_multi_line(&series, y_max, metric_top_label(metric, y_max))
         .x_axis(date_axis(state.today_for_rescan(), state.graph_span()));

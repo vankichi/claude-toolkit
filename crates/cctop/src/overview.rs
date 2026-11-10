@@ -270,11 +270,7 @@ fn draw_usage(f: &mut Frame<'_>, area: Rect, dash: &Dashboard, app: &App) {
     let parts = Layout::vertical([Constraint::Length(legend_h), Constraint::Min(0)]).split(inner);
     f.render_widget(Paragraph::new(legend), parts[0]);
 
-    let y_max = series
-        .iter()
-        .flat_map(|s| s.points.iter().map(|&(_, y)| y))
-        .fold(0.0_f64, f64::max)
-        .max(1.0);
+    let y_max = cctk::chart::peak(&series);
     let y_label = if is_model {
         format!("{}/m", tokens_f64(y_max))
     } else {

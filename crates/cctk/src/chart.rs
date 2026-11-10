@@ -60,6 +60,18 @@ pub struct LineSeries {
     pub color: Color,
 }
 
+/// The highest y over all `series`, at least `1.0` so an all-zero chart still
+/// gets a non-empty y-axis: what callers pass as `y_max` to
+/// [`braille_multi_line`].
+#[must_use]
+pub fn peak(series: &[LineSeries]) -> f64 {
+    series
+        .iter()
+        .flat_map(|s| s.points.iter().map(|&(_, y)| y))
+        .fold(0.0_f64, f64::max)
+        .max(1.0)
+}
+
 /// Build an overlaid multi-series braille line chart sharing one `[0, y_max]`
 /// y-axis. Each series draws in its own color and contributes its label to the
 /// auto-rendered legend. The x-axis spans `[0, max last x]` with no labels.
@@ -154,6 +166,18 @@ mod tests {
         assert!(out.contains("start"));
         assert!(out.contains("now"));
         assert!(out.find("start") < out.find("now"), "left label first");
+    }
+
+    #[test]
+    fn peak_is_the_highest_point_and_at_least_one() {
+        let series = |ys: &[f64]| LineSeries {
+            points: ys.iter().enumerate().map(|(i, &y)| (i as f64, y)).collect(),
+            label: String::new(),
+            color: Color::Cyan,
+        };
+        assert!((peak(&[series(&[1.0, 7.5]), series(&[3.0])]) - 7.5).abs() < f64::EPSILON);
+        assert!((peak(&[series(&[0.0, 0.5])]) - 1.0).abs() < f64::EPSILON);
+        assert!((peak(&[]) - 1.0).abs() < f64::EPSILON);
     }
 
     #[test]
