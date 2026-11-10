@@ -102,8 +102,12 @@ async fn run_inner(terminal: &mut DefaultTerminal, cfg: Config) -> Result<()> {
     });
     let mut events = EventStream::new();
 
+    // A failed manual rescan, shown on the bottom row until the next key or
+    // a later rescan succeeds.
+    let mut notice: Option<String> = None;
+
     loop {
-        terminal.draw(|f| draw_frame(f, &entries, selected, mode))?;
+        terminal.draw(|f| draw_frame(f, &entries, selected, mode, notice.as_deref()))?;
 
         let watch_fut = async {
             if let Some(t) = watch_tick.as_mut() {
@@ -118,9 +122,10 @@ async fn run_inner(terminal: &mut DefaultTerminal, cfg: Config) -> Result<()> {
             () = watch_fut, if !pinned => {
                 // Auto-refresh is best-effort: if `claude agents --json`
                 // hiccups (CLI crashed, slow, network), we keep the current
-                // view rather than tearing down the TUI. Manual `R` still
-                // surfaces the error to the user.
-                let _ = rescan(&mut entries, &event_tx, &cfg, &mut selected).await;
+                // view. Manual `R` shows the error on the bottom row.
+                if rescan(&mut entries, &event_tx, &cfg, &mut selected).await.is_ok() {
+                    notice = None;
+                }
             }
             n = event_rx.recv_many(&mut event_buf, EVENT_DRAIN_BATCH) => {
                 if n == 0 {
@@ -136,6 +141,7 @@ async fn run_inner(terminal: &mut DefaultTerminal, cfg: Config) -> Result<()> {
                 if let CtEvent::Key(k) = ct_ev
                     && k.kind == KeyEventKind::Press
                 {
+                    notice = None;
                     match classify_key(k.code, mode, pinned) {
                         KeyAction::Quit => return Ok(()),
                         KeyAction::OpenBrowser => open_in_browser(USAGE_DASHBOARD_URL),
@@ -153,12 +159,11 @@ async fn run_inner(terminal: &mut DefaultTerminal, cfg: Config) -> Result<()> {
                         KeyAction::OpenSelected => mode = ViewMode::Single,
                         KeyAction::ToggleView => mode = ViewMode::Summary,
                         KeyAction::Rescan => {
-                            rescan(
-                                &mut entries,
-                                &event_tx,
-                                &cfg,
-                                &mut selected,
-                            ).await?;
+                            if let Err(e) =
+                                rescan(&mut entries, &event_tx, &cfg, &mut selected).await
+                            {
+                                notice = Some(rescan_failed(&e));
+                            }
                         }
                         KeyAction::Ignore => {}
                     }
@@ -273,6 +278,21 @@ fn name_and_status(d: &DiscoveredSession) -> (Option<String>, AgentStatus) {
     }
 }
 
+/// The bottom-row message for a failed manual rescan: the error chain's
+/// first line, with control characters dropped (the text can carry the
+/// `claude` CLI's stderr, which must not drive the terminal).
+fn rescan_failed(e: &anyhow::Error) -> String {
+    let text = format!("{e:#}");
+    let first: String = text
+        .lines()
+        .next()
+        .unwrap_or_default()
+        .chars()
+        .filter(|c| !c.is_control())
+        .collect();
+    format!("rescan failed: {first}")
+}
+
 /// Re-discover sessions and reconcile against the running watcher set:
 /// keep entries whose `session_id` still appears, abort + drop the rest,
 /// spawn watchers for newly-added sessions. Preserves selection by id.
@@ -346,6 +366,15 @@ fn open_in_browser(url: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_failed_rescan_shows_one_clean_line() {
+        let e = anyhow::anyhow!("boom\u{1b}[31m\nsecond line").context("claude agents --json");
+        assert_eq!(
+            rescan_failed(&e),
+            "rescan failed: claude agents --json: boom[31m"
+        );
+    }
 
     #[test]
     fn name_and_status_follow_the_agent_listing() {
