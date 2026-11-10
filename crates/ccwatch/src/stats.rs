@@ -193,7 +193,7 @@ impl SessionStats {
             .iter()
             .map(|(k, v)| (k.as_str(), *v))
             .collect();
-        items.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(b.0)));
+        cctk::session::sort_by_count(&mut items);
         items
     }
 

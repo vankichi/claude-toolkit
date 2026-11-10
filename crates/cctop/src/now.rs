@@ -212,7 +212,7 @@ impl NowStats {
             }
         }
         let mut out: Vec<(&str, u64)> = agg.into_iter().collect();
-        out.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(b.0)));
+        cctk::session::sort_by_count(&mut out);
         out
     }
 

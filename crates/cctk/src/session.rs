@@ -107,9 +107,22 @@ impl SessionTotals {
     }
 }
 
+/// Sort `(name, count)` pairs most-counted first, ties by name ascending —
+/// the order every tool-count and project-count list is shown in.
+pub fn sort_by_count<K: Ord>(items: &mut [(K, u64)]) {
+    items.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sort_by_count_puts_the_most_first_then_names_in_order() {
+        let mut items = vec![("b", 1), ("c", 3), ("a", 1)];
+        sort_by_count(&mut items);
+        assert_eq!(items, [("c", 3), ("a", 1), ("b", 1)]);
+    }
 
     fn line(json: &str) -> Line {
         Line::parse(json).unwrap()

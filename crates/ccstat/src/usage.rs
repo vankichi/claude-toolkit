@@ -392,7 +392,7 @@ impl Default for RowAcc {
 impl RowAcc {
     fn into_row(self, name: String) -> Row {
         let mut by_project: Vec<(String, u64)> = self.by_project.into_iter().collect();
-        by_project.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        cctk::session::sort_by_count(&mut by_project);
         Row {
             name,
             count: self.count,
