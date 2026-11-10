@@ -53,15 +53,13 @@ impl Category {
     /// Next tab, wrapping from `Mcp` back to `Model`.
     #[must_use]
     pub fn next_tab(self) -> Category {
-        let i = Self::ALL.iter().position(|c| *c == self).unwrap_or(0);
-        Self::ALL[(i + 1) % Self::ALL.len()]
+        cctk::cycle::next(&Self::ALL, self)
     }
 
     /// Previous tab, wrapping from `Model` back to `Mcp`.
     #[must_use]
     pub fn prev_tab(self) -> Category {
-        let i = Self::ALL.iter().position(|c| *c == self).unwrap_or(0);
-        Self::ALL[(i + Self::ALL.len() - 1) % Self::ALL.len()]
+        cctk::cycle::prev(&Self::ALL, self)
     }
 }
 
@@ -100,8 +98,7 @@ impl Window {
     /// Next window in cycle order.
     #[must_use]
     pub fn next(self) -> Window {
-        let i = Self::ALL.iter().position(|w| *w == self).unwrap_or(0);
-        Self::ALL[(i + 1) % Self::ALL.len()]
+        cctk::cycle::next(&Self::ALL, self)
     }
 }
 
@@ -127,8 +124,7 @@ impl SortKey {
 
     #[must_use]
     pub fn next(self) -> SortKey {
-        let i = Self::ALL.iter().position(|s| *s == self).unwrap_or(0);
-        Self::ALL[(i + 1) % Self::ALL.len()]
+        cctk::cycle::next(&Self::ALL, self)
     }
 }
 

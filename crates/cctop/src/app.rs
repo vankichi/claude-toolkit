@@ -21,16 +21,12 @@ impl Panel {
     /// Cycle order for j/k navigation.
     const ORDER: [Panel; 4] = [Panel::Now, Panel::Stats, Panel::Map, Panel::Focus];
 
-    fn index(self) -> usize {
-        Self::ORDER.iter().position(|&p| p == self).unwrap_or(0)
-    }
-
     fn next(self) -> Panel {
-        Self::ORDER[(self.index() + 1) % Self::ORDER.len()]
+        cctk::cycle::next(&Self::ORDER, self)
     }
 
     fn prev(self) -> Panel {
-        Self::ORDER[(self.index() + Self::ORDER.len() - 1) % Self::ORDER.len()]
+        cctk::cycle::prev(&Self::ORDER, self)
     }
 }
 

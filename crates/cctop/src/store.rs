@@ -64,7 +64,7 @@ impl MapCounts {
 /// colors. `discover_all` already includes what `discover_extensions` finds,
 /// and `ProvenanceMap::build` skips the plugin and MCP items it adds.
 fn discover_once(ctx: &Context) -> (ProvenanceMap, Vec<Item>) {
-    let items = discover::discover_all(ctx).items;
+    let items = discover::discover_all(ctx);
     (ProvenanceMap::build(&items), items)
 }
 

@@ -1,6 +1,6 @@
 //! ccwatch — real-time terminal monitor for Claude Code session usage.
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use ccwatch::ui;
 use clap::Parser;
 use std::path::PathBuf;
@@ -58,11 +58,9 @@ struct Cli {
 async fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    let projects_dir = if let Some(p) = cli.projects_dir {
-        p
-    } else {
-        let home = std::env::home_dir().context("could not determine home directory")?;
-        home.join(".claude").join("projects")
+    let projects_dir = match cli.projects_dir {
+        Some(p) => p,
+        None => cctk::paths::default_projects_dir()?,
     };
 
     // Zero is treated the same as absent — guards `tokio::time::interval(0)`

@@ -6,6 +6,7 @@
 //! share one core instead of maintaining parallel copies.
 
 pub mod chart;
+pub mod cycle;
 pub mod fmt;
 pub mod focus;
 pub mod fuzzy;

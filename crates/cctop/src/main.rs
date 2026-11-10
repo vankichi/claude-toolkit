@@ -55,21 +55,13 @@ struct Cli {
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
-    let home = std::env::home_dir();
-
     let projects_dir = match cli.projects_dir {
         Some(p) => p,
-        None => home
-            .clone()
-            .context("could not determine home directory")?
-            .join(".claude")
-            .join("projects"),
+        None => cctk::paths::default_projects_dir()?,
     };
     let claude_dir = match cli.claude_dir {
         Some(p) => p,
-        None => home
-            .context("could not determine home directory")?
-            .join(".claude"),
+        None => cctk::paths::default_claude_dir()?,
     };
     let project_dir = match cli.project_dir {
         Some(p) => p,
