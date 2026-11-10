@@ -7,14 +7,14 @@ use super::format::{
 };
 use crate::model::{Category, ProjectFilter};
 use crate::usage::{GraphMetric, TREND_DAYS};
-use cctk::style::{bold_fg, dim};
+use cctk::style::{bold_fg, dim, panel};
 use chrono::{Duration, NaiveDate};
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Axis, Block, Borders, Clear, List, ListItem, ListState, Paragraph, Tabs, Wrap},
+    widgets::{Axis, Clear, List, ListItem, ListState, Paragraph, Tabs, Wrap},
 };
 
 const TABS_H: u16 = 3;
@@ -106,15 +106,13 @@ pub fn trends_series(state: &AppState) -> Vec<cctk::chart::LineSeries> {
 /// x-axis. Model rows are colored by family; other tabs cycle a palette.
 fn draw_trends(f: &mut Frame<'_>, area: Rect, state: &AppState) {
     let metric = state.graph_metric;
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(dim())
-        .title(format!(
-            " Trends · {} · top {} · window {} · (m: metric) ",
-            metric.label(),
-            TRENDS_TOP_N,
-            state.window.label(),
-        ));
+    let block = panel(format!(
+        " Trends · {} · top {} · window {} · (m: metric) ",
+        metric.label(),
+        TRENDS_TOP_N,
+        state.window.label(),
+    ))
+    .border_style(dim());
     let inner = block.inner(area);
     f.render_widget(block, area);
 
@@ -207,7 +205,7 @@ fn draw_tabs(f: &mut Frame<'_>, area: Rect, state: &AppState) {
         state.sort.label(),
     );
     let tabs = Tabs::new(titles)
-        .block(Block::default().borders(Borders::ALL).title(title))
+        .block(panel(title))
         .highlight_style(bold_fg(Color::Yellow))
         .select(selected);
     f.render_widget(tabs, area);
@@ -258,7 +256,7 @@ fn draw_graph(f: &mut Frame<'_>, area: Rect, state: &AppState) {
         metric_top_label(state.graph_metric, peak),
         Color::Green,
     )
-    .block(Block::default().borders(Borders::ALL).title(title))
+    .block(panel(title))
     .x_axis(date_axis(today, span));
     f.render_widget(chart, area);
 }
@@ -314,19 +312,17 @@ fn draw_list(f: &mut Frame<'_>, area: Rect, state: &AppState) {
         format!(" {}  filter: {} ", state.tab.title(), state.filter)
     };
 
-    let list = List::new(items)
-        .block(Block::default().borders(Borders::ALL).title(title))
-        .highlight_style(
-            Style::default()
-                .bg(Color::Green)
-                .fg(Color::Black)
-                .add_modifier(Modifier::BOLD),
-        );
+    let list = List::new(items).block(panel(title)).highlight_style(
+        Style::default()
+            .bg(Color::Green)
+            .fg(Color::Black)
+            .add_modifier(Modifier::BOLD),
+    );
     f.render_stateful_widget(list, area, &mut list_state);
 }
 
 fn draw_detail(f: &mut Frame<'_>, area: Rect, state: &AppState) {
-    let block = Block::default().borders(Borders::ALL).title(" detail ");
+    let block = panel(" detail ");
     let Some(row) = state.selected_row() else {
         f.render_widget(Paragraph::new("(no matching items)").block(block), area);
         return;
@@ -389,11 +385,7 @@ fn draw_project_picker(f: &mut Frame<'_>, area: Rect, state: &AppState) {
 
     f.render_widget(Clear, popup);
     let list = List::new(items)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(" select project "),
-        )
+        .block(panel(" select project "))
         .highlight_style(
             Style::default()
                 .bg(Color::Green)

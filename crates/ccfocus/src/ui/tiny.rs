@@ -6,13 +6,13 @@ use super::{
 };
 use crate::board::{Row, age};
 use crate::text::{fit, pad, width};
-use cctk::style::bold;
+use cctk::style::{bold, panel};
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, BorderType, Borders, Paragraph},
+    widgets::{BorderType, Paragraph},
 };
 use std::fmt::Write as _;
 
@@ -194,23 +194,21 @@ fn draw_card(f: &mut Frame<'_>, area: Rect, v: &View, r: &Row, selected: bool, n
     let style = status_style(r.shown);
     let num = r.number.map_or_else(|| "-".to_string(), |n| n.to_string());
     let mark = if next { "▸" } else { "" };
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_type(if selected {
-            BorderType::Thick
-        } else {
-            BorderType::Plain
-        })
-        .border_style(if selected {
-            style.remove_modifier(Modifier::BOLD)
-        } else {
-            dim()
-        })
-        .title(Line::from(vec![
-            Span::raw(format!("{mark}{num} ")),
-            Span::styled(r.shown.label(), style),
-        ]))
-        .title(Line::from(age(v.now - r.updated_at)).right_aligned());
+    let block = panel(Line::from(vec![
+        Span::raw(format!("{mark}{num} ")),
+        Span::styled(r.shown.label(), style),
+    ]))
+    .border_type(if selected {
+        BorderType::Thick
+    } else {
+        BorderType::Plain
+    })
+    .border_style(if selected {
+        style.remove_modifier(Modifier::BOLD)
+    } else {
+        dim()
+    })
+    .title(Line::from(age(v.now - r.updated_at)).right_aligned());
     let inner = block.inner(area);
     f.render_widget(block, area);
     let w = usize::from(inner.width);

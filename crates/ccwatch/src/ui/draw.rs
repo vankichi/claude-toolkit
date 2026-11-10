@@ -6,13 +6,13 @@ use super::format::{fmt_int, format_duration, threshold_color, tool_color, value
 use super::state::{ViewMode, build_views, display_order};
 use crate::stats::SessionStats;
 use crate::summary;
-use cctk::style::{bold, bold_fg, dim};
+use cctk::style::{bold, bold_fg, dim, panel};
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Style},
     text::{Line, Span},
-    widgets::{Bar, BarChart, BarGroup, Block, Borders, Paragraph, Wrap},
+    widgets::{Bar, BarChart, BarGroup, Paragraph, Wrap},
 };
 
 // ---- Single-view layout heights (rows). ----
@@ -71,10 +71,6 @@ fn draw_single(f: &mut Frame<'_>, entry: &SessionEntry, idx: usize, total: usize
     draw_tools(f, chunks[4], &entry.stats);
     draw_sparkline(f, chunks[5], &entry.stats);
     draw_single_footer(f, chunks[6], total > 1);
-}
-
-fn panel<'a>(title: impl Into<Line<'a>>) -> Block<'a> {
-    Block::default().borders(Borders::ALL).title(title)
 }
 
 fn draw_single_footer(f: &mut Frame<'_>, area: Rect, multi: bool) {

@@ -1,6 +1,15 @@
-//! Text styles shared by the tools' ratatui views.
+//! Text styles and the bordered panel shared by the tools' ratatui views.
 
 use ratatui::style::{Color, Modifier, Style};
+use ratatui::text::Line;
+use ratatui::widgets::{Block, Borders};
+
+/// A block with a full border and `title`; chain `.border_style(..)` etc. for
+/// variants.
+#[must_use]
+pub fn panel<'a>(title: impl Into<Line<'a>>) -> Block<'a> {
+    Block::default().borders(Borders::ALL).title(title)
+}
 
 /// Dim (dark gray) text for secondary information.
 #[must_use]
@@ -29,6 +38,21 @@ pub fn reversed() -> Style {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn panel_is_a_titled_full_border() {
+        assert_eq!(
+            panel(" t "),
+            Block::default().borders(Borders::ALL).title(" t ")
+        );
+        assert_eq!(
+            panel(String::from("t")).border_style(dim()),
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(dim())
+                .title("t")
+        );
+    }
 
     #[test]
     fn styles_match_their_inline_forms() {

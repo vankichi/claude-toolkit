@@ -7,7 +7,7 @@
 
 use crate::session::AgentStatusKind;
 use crate::stats::SessionStats;
-use cctk::style::{bold, bold_fg, dim, reversed};
+use cctk::style::{bold, bold_fg, dim, panel, reversed};
 use chrono::{DateTime, Utc};
 use ratatui::{
     Frame,
@@ -181,9 +181,7 @@ fn draw_aggregate(f: &mut Frame<'_>, area: Rect, entries: &[EntryView<'_>]) {
             spans.push(Span::styled(format!(":{count}"), dim()));
         }
     }
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .title(" ccwatch — summary ");
+    let block = panel(" ccwatch — summary ");
     f.render_widget(Paragraph::new(Line::from(spans)).block(block), area);
 }
 

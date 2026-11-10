@@ -13,11 +13,11 @@ use ratatui::{
     layout::{Constraint, Layout, Rect},
     style::{Color, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph},
+    widgets::{Block, Paragraph},
 };
 
 use cctk::fmt::tokens as fmt_tokens;
-use cctk::style::{bold, bold_fg, dim};
+use cctk::style::{bold, bold_fg, dim, panel};
 
 /// Dollar cost with cents.
 #[must_use]
@@ -25,19 +25,13 @@ fn fmt_cost(cost: f64) -> String {
     format!("${cost:.2}")
 }
 
-fn panel_block(title: &str, panel: Panel, app: &App) -> Block<'static> {
-    let selected = app.mode == Mode::Overview && app.selected == panel;
+fn panel_block(title: &str, which: Panel, app: &App) -> Block<'static> {
+    let selected = app.mode == Mode::Overview && app.selected == which;
     if selected {
         let accent = bold_fg(Color::Yellow);
-        Block::default()
-            .borders(Borders::ALL)
-            .border_style(accent)
-            .title(Line::from(Span::styled(format!(" ▸ {title} "), accent)))
+        panel(Line::from(Span::styled(format!(" ▸ {title} "), accent))).border_style(accent)
     } else {
-        Block::default()
-            .borders(Borders::ALL)
-            .border_style(dim())
-            .title(format!("   {title} "))
+        panel(format!("   {title} ")).border_style(dim())
     }
 }
 
@@ -373,10 +367,7 @@ fn draw_recent(f: &mut Frame<'_>, area: Rect, dash: &Dashboard, app: &App) {
     } else {
         "Tool usage   ( 1-4 select · Enter drill · c usage-cat · / filter · q quit )".to_string()
     };
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(dim())
-        .title(format!(" {title} "));
+    let block = panel(format!(" {title} ")).border_style(dim());
     let inner = block.inner(area);
     f.render_widget(block, area);
 
@@ -399,13 +390,11 @@ fn tools_text(now: &crate::now::NowStats) -> String {
 /// Full-screen "Now" detail shown when the Now panel is drilled into.
 pub fn draw_now_detail(f: &mut Frame<'_>, now: &crate::now::NowStats) {
     let area = f.area();
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Yellow))
-        .title(format!(
-            " Now · {}   (Esc/q to return) ",
-            project_label(&now.projects())
-        ));
+    let block = panel(format!(
+        " Now · {}   (Esc/q to return) ",
+        project_label(&now.projects())
+    ))
+    .border_style(Style::default().fg(Color::Yellow));
     let inner = block.inner(area);
     f.render_widget(block, area);
 

@@ -7,13 +7,13 @@ use super::{
 };
 use crate::board::age;
 use crate::text::{fit, pad, pad_left, width};
-use cctk::style::bold;
+use cctk::style::{bold, panel};
 use ratatui::{
     Frame,
     layout::{Alignment, Constraint, Layout, Rect},
     style::{Color, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph},
+    widgets::Paragraph,
 };
 use std::fmt::Write as _;
 
@@ -94,10 +94,7 @@ fn draw_next(f: &mut Frame<'_>, area: Rect, v: &View) {
         ]),
         None => Line::from(" next up "),
     };
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(dim())
-        .title(title);
+    let block = panel(title).border_style(dim());
     let inner = block.inner(area);
     f.render_widget(block, area);
     let body = match next {
@@ -214,10 +211,7 @@ fn parallel_text(t: &Today) -> String {
 }
 
 fn draw_today_box(f: &mut Frame<'_>, area: Rect, v: &View) {
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(dim())
-        .title(" today ");
+    let block = panel(" today ").border_style(dim());
     let inner = block.inner(area);
     f.render_widget(block, area);
     let t = &v.today;

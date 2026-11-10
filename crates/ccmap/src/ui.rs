@@ -9,14 +9,14 @@
 
 use crate::discover::{self, discover_all};
 use crate::model::{Item, Kind, PluginState, Provenance, Source};
-use cctk::style::{bold_fg, dim};
+use cctk::style::{bold_fg, dim, panel};
 use crossterm::event::{Event as CtEvent, KeyCode, KeyEventKind};
 use ratatui::{
     DefaultTerminal, Frame,
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Tabs, Wrap},
+    widgets::{List, ListItem, ListState, Paragraph, Tabs, Wrap},
 };
 
 /// The five category tabs, in the fixed order they cycle through.
@@ -366,7 +366,7 @@ fn draw_tabs(f: &mut Frame<'_>, area: Rect, active: Kind) {
     let titles: Vec<&'static str> = TABS.iter().copied().map(tab_title).collect();
     let selected = TABS.iter().position(|&kind| kind == active).unwrap_or(0);
     let tabs = Tabs::new(titles)
-        .block(Block::default().borders(Borders::ALL).title(" ccmap "))
+        .block(panel(" ccmap "))
         .highlight_style(bold_fg(Color::Yellow))
         .select(selected);
     f.render_widget(tabs, area);
@@ -413,14 +413,12 @@ fn draw_list(f: &mut Frame<'_>, area: Rect, state: &AppState) {
         format!(" {}  filter: {} ", tab_title(state.tab), state.filter)
     };
 
-    let list = List::new(items)
-        .block(Block::default().borders(Borders::ALL).title(title))
-        .highlight_style(
-            Style::default()
-                .bg(Color::Green)
-                .fg(Color::Black)
-                .add_modifier(Modifier::BOLD),
-        );
+    let list = List::new(items).block(panel(title)).highlight_style(
+        Style::default()
+            .bg(Color::Green)
+            .fg(Color::Black)
+            .add_modifier(Modifier::BOLD),
+    );
     f.render_stateful_widget(list, area, &mut list_state);
 }
 
@@ -429,7 +427,7 @@ fn draw_list(f: &mut Frame<'_>, area: Rect, state: &AppState) {
 /// disk (a dim second line). Renders a placeholder dash instead of
 /// panicking when the visible list is empty.
 fn draw_provenance(f: &mut Frame<'_>, area: Rect, state: &AppState) {
-    let block = Block::default().borders(Borders::ALL).title(" provenance ");
+    let block = panel(" provenance ");
     let Some(item) = state.selected_item() else {
         f.render_widget(Paragraph::new("—").block(block), area);
         return;
@@ -457,7 +455,7 @@ fn draw_detail(f: &mut Frame<'_>, area: Rect, state: &AppState) {
     );
     let paragraph = Paragraph::new(text)
         .wrap(Wrap { trim: false })
-        .block(Block::default().borders(Borders::ALL).title(" detail "));
+        .block(panel(" detail "));
     f.render_widget(paragraph, area);
 }
 
