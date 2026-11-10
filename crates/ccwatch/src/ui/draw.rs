@@ -75,24 +75,16 @@ fn draw_single(f: &mut Frame<'_>, entry: &SessionEntry, idx: usize, total: usize
 }
 
 fn draw_single_footer(f: &mut Frame<'_>, area: Rect, multi: bool) {
-    let mut spans: Vec<Span<'_>> = vec![Span::raw(" ")];
-    let push_key = |spans: &mut Vec<Span<'_>>, key: &'static str, desc: &'static str| {
-        if spans.len() > 1 {
-            spans.push(Span::styled("  ·  ", dim()));
-        }
-        spans.push(Span::styled(key, bold()));
-        spans.push(Span::styled(format!(" {desc}"), dim()));
-    };
-    push_key(&mut spans, "q", "quit");
-    push_key(&mut spans, "r", "reset");
-    push_key(&mut spans, "b", "browser");
+    let mut hints = vec![("q", "quit"), ("r", "reset"), ("b", "browser")];
     if multi {
-        push_key(&mut spans, "s", "summary");
-        push_key(&mut spans, "Tab/n", "next");
-        push_key(&mut spans, "⇧Tab/p", "prev");
-        push_key(&mut spans, "R", "rescan");
+        hints.extend([
+            ("s", "summary"),
+            ("Tab/n", "next"),
+            ("⇧Tab/p", "prev"),
+            ("R", "rescan"),
+        ]);
     }
-    f.render_widget(Paragraph::new(Line::from(spans)), area);
+    f.render_widget(Paragraph::new(summary::key_hints(&hints)), area);
 }
 
 fn draw_header(f: &mut Frame<'_>, area: Rect, entry: &SessionEntry, idx: usize, total: usize) {
