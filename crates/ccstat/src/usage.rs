@@ -194,7 +194,7 @@ impl UsageDb {
         today: NaiveDate,
     ) -> Vec<Row> {
         let cutoff = window.days().map(|d| today - Duration::days(d - 1));
-        #[allow(clippy::cast_possible_wrap)]
+        #[expect(clippy::cast_possible_wrap)]
         let trend_start = today - Duration::days(TREND_DAYS as i64 - 1);
         let show_by_project = matches!(project, ProjectFilter::All);
 
@@ -215,7 +215,7 @@ impl UsageDb {
                 row.first_used = Some(row.first_used.map_or(*day, |d| d.min(*day)));
                 // trend: last TREND_DAYS days.
                 if *day >= trend_start && *day <= today {
-                    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                    #[expect(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
                     let idx = (*day - trend_start).num_days() as usize;
                     if idx < TREND_DAYS {
                         row.trend[idx] += stat.count;
@@ -261,7 +261,7 @@ impl UsageDb {
         today: NaiveDate,
     ) -> usize {
         if let Some(d) = window.days() {
-            #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+            #[expect(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
             return (d as usize).max(1);
         }
         let earliest = self
@@ -273,7 +273,7 @@ impl UsageDb {
             .copied();
         match earliest {
             Some(e) => {
-                #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+                #[expect(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
                 let span = ((today - e).num_days().max(0) as usize) + 1;
                 span.clamp(1, MAX_SPAN_DAYS)
             }
@@ -294,7 +294,7 @@ impl UsageDb {
         today: NaiveDate,
     ) -> Vec<f64> {
         let span = span.max(1);
-        #[allow(clippy::cast_possible_wrap)]
+        #[expect(clippy::cast_possible_wrap)]
         let start = today - Duration::days(span as i64 - 1);
         let mut series = vec![0.0_f64; span];
         for (key, days) in &self.entries {
@@ -308,7 +308,7 @@ impl UsageDb {
                 if *day < start || *day > today {
                     continue;
                 }
-                #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+                #[expect(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
                 let idx = (*day - start).num_days() as usize;
                 if idx < span {
                     series[idx] += metric_value(stat, metric);

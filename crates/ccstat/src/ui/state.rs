@@ -12,7 +12,7 @@ const ALL_PROJECTS: &str = "(all projects)";
 
 /// Pure UI state: the aggregated store plus every selector the user can move.
 // The flags are independent modal toggles, not a state to hoist into an enum.
-#[allow(clippy::struct_excessive_bools)]
+#[expect(clippy::struct_excessive_bools)]
 pub struct AppState {
     db: UsageDb,
     provenance: ProvenanceMap,

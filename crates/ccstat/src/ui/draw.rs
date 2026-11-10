@@ -158,7 +158,7 @@ fn draw_trends(f: &mut Frame<'_>, area: Rect, state: &AppState) {
 /// X axis for a `span`-day series ending `today`, labeled with its first and
 /// last dates.
 fn date_axis(today: NaiveDate, span: usize) -> Axis<'static> {
-    #[allow(clippy::cast_possible_wrap)] // span is a small day count
+    #[expect(clippy::cast_possible_wrap)] // span is a small day count
     let oldest = (today - Duration::days(span as i64 - 1))
         .format("%m/%d")
         .to_string();
@@ -172,7 +172,7 @@ fn metric_top_label(metric: GraphMetric, y_max: f64) -> String {
     if metric == GraphMetric::Cost {
         return format!("${y_max:.2}");
     }
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    #[expect(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     cctk::fmt::tokens(y_max.round() as u64)
 }
 
@@ -382,7 +382,7 @@ fn draw_hint(f: &mut Frame<'_>, area: Rect, state: &AppState) {
 fn draw_project_picker(f: &mut Frame<'_>, area: Rect, state: &AppState) {
     let opts = state.picker_options();
     let width = area.width.saturating_sub(area.width / 4).clamp(20, 60);
-    #[allow(clippy::cast_possible_truncation)]
+    #[expect(clippy::cast_possible_truncation)]
     let opts_h = opts.len() as u16;
     let height = (opts_h.saturating_add(2))
         .min(area.height.saturating_sub(4))

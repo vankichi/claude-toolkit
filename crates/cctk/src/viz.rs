@@ -42,7 +42,7 @@ pub fn dot_bar(ratio: f64, width: usize) -> String {
     let total_cols = width * 2;
     // `ratio` is clamped to [0,1], so the product lands in [0, total_cols] and
     // round() keeps it non-negative — the cast cannot truncate or lose a sign.
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    #[expect(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     let filled = (ratio * total_cols as f64).round() as usize;
 
     let mut s = String::with_capacity(width);
@@ -91,7 +91,7 @@ pub fn sparkline(values: &[f64], width: usize) -> String {
         if max > 0.0 {
             // value/max is in [_, 1]; *4 and round lands in [0,4] after clamp,
             // so the cast is non-negative and in range.
-            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            #[expect(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
             let level = (values[idx] / max * 4.0).round().clamp(0.0, 4.0) as u8;
             level
         } else {

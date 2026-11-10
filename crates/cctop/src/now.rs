@@ -306,7 +306,7 @@ impl RateWindow {
             return None;
         }
         let secs = (ts - self.start).num_seconds() as f64;
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        #[expect(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let idx = ((secs / self.bucket_secs) as usize).min(self.bins - 1);
         Some(idx)
     }
