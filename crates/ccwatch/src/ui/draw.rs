@@ -13,7 +13,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Style},
     text::{Line, Span},
-    widgets::{Bar, BarChart, BarGroup, Paragraph, Wrap},
+    widgets::{Bar, BarChart, BarGroup, Clear, Paragraph, Wrap},
 };
 
 // ---- Single-view layout heights (rows). ----
@@ -25,12 +25,32 @@ const TOOLS_H: u16 = 3;
 const SPARKLINE_MIN_H: u16 = 3;
 const FOOTER_H: u16 = 1;
 
+/// Draw the current view. `notice` (a failed manual rescan) replaces the
+/// key-hint footer, the bottom row in both views, until it is cleared.
 pub(super) fn draw_frame(
     f: &mut Frame<'_>,
     entries: &[SessionEntry],
     selected: usize,
     mode: ViewMode,
+    notice: Option<&str>,
 ) {
+    draw_view(f, entries, selected, mode);
+    if let Some(msg) = notice {
+        let area = f.area();
+        if area.height > 0 {
+            let row = Rect {
+                y: area.bottom() - 1,
+                height: 1,
+                ..area
+            };
+            let line = Line::from(Span::styled(format!(" {msg}"), bold_fg(Color::Red)));
+            f.render_widget(Clear, row);
+            f.render_widget(Paragraph::new(line), row);
+        }
+    }
+}
+
+fn draw_view(f: &mut Frame<'_>, entries: &[SessionEntry], selected: usize, mode: ViewMode) {
     match mode {
         ViewMode::Summary => {
             let views = build_views(entries);

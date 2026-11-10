@@ -84,8 +84,104 @@ pub async fn run(cfg: Config) -> Result<()> {
 /// redraws each tick, and handles key input per the active view mode.
 async fn run_inner(terminal: &mut DefaultTerminal, cfg: Config) -> Result<()> {
     let (event_tx, mut event_rx) = mpsc::channel::<(usize, SessionLine)>(EVENT_CHANNEL_CAPACITY);
+    let (mut entries, pinned, mut mode) = initial_entries(&cfg, &event_tx).await?;
 
-    let (mut entries, pinned, mut mode) = if let Some(path) = cfg.explicit_session.clone() {
+    let mut selected: usize = 0;
+    let mut event_buf: Vec<(usize, SessionLine)> = Vec::with_capacity(EVENT_DRAIN_BATCH);
+    let mut tick = tokio::time::interval(Duration::from_millis(cfg.refresh_ms));
+    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    // Auto-refresh ticker. `None` when `--watch` wasn't passed; the select!
+    // arm uses `future::pending` in that case so it never fires.
+    let mut watch_tick = cfg.watch_interval.map(|d| {
+        let mut i = tokio::time::interval(d);
+        // First tick fires immediately; skip it so we don't double-rescan
+        // on startup (we just discovered the list moments ago).
+        i.reset();
+        i.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        i
+    });
+    let mut events = EventStream::new();
+
+    // A failed manual rescan, shown on the bottom row until the next key
+    // that does something (a later `R` included).
+    let mut notice: Option<String> = None;
+
+    loop {
+        terminal.draw(|f| draw_frame(f, &entries, selected, mode, notice.as_deref()))?;
+
+        let watch_fut = async {
+            if let Some(t) = watch_tick.as_mut() {
+                let _ = t.tick().await;
+            } else {
+                std::future::pending::<()>().await;
+            }
+        };
+
+        tokio::select! {
+            _ = tick.tick() => {}
+            () = watch_fut, if !pinned => {
+                // Auto-refresh is best-effort: if `claude agents --json`
+                // hiccups (CLI crashed, slow, network), we keep the current
+                // view. Manual `R` shows the error on the bottom row.
+                let _ = rescan(&mut entries, &event_tx, &cfg, &mut selected).await;
+            }
+            n = event_rx.recv_many(&mut event_buf, EVENT_DRAIN_BATCH) => {
+                if n == 0 {
+                    return Ok(()); // all watchers closed
+                }
+                for (idx, ev) in event_buf.drain(..) {
+                    if let Some(entry) = entries.get_mut(idx) {
+                        entry.stats.ingest(&ev);
+                    }
+                }
+            }
+            Some(Ok(ct_ev)) = events.next() => {
+                if let CtEvent::Key(k) = ct_ev
+                    && k.kind == KeyEventKind::Press
+                {
+                    let action = classify_key(k.code, mode, pinned);
+                    if action != KeyAction::Ignore {
+                        notice = None;
+                    }
+                    match action {
+                        KeyAction::Quit => return Ok(()),
+                        KeyAction::OpenBrowser => open_in_browser(USAGE_DASHBOARD_URL),
+                        KeyAction::ResetCurrent => {
+                            if let Some(e) = entries.get_mut(selected) {
+                                e.stats.reset();
+                            }
+                        }
+                        KeyAction::SelectPrev | KeyAction::PrevInSingle => {
+                            selected = prev_selected(&entries, selected);
+                        }
+                        KeyAction::SelectNext | KeyAction::NextInSingle => {
+                            selected = next_selected(&entries, selected);
+                        }
+                        KeyAction::OpenSelected => mode = ViewMode::Single,
+                        KeyAction::ToggleView => mode = ViewMode::Summary,
+                        KeyAction::Rescan => {
+                            if let Err(e) =
+                                rescan(&mut entries, &event_tx, &cfg, &mut selected).await
+                            {
+                                notice = Some(rescan_failed(&e));
+                            }
+                        }
+                        KeyAction::Ignore => {}
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// The entries to start with, whether they are pinned, and the first view:
+/// the one `--session` log in the single view, else every discovered
+/// session in the summary.
+async fn initial_entries(
+    cfg: &Config,
+    event_tx: &mpsc::Sender<(usize, SessionLine)>,
+) -> Result<(Vec<SessionEntry>, bool, ViewMode)> {
+    if let Some(path) = cfg.explicit_session.clone() {
         // `--session <path>` mode: single pinned entry, no summary toggle.
         let short_id = session::short_id(&path);
         let session_id = path
@@ -104,95 +200,14 @@ async fn run_inner(terminal: &mut DefaultTerminal, cfg: Config) -> Result<()> {
             stats,
             handle,
         };
-        (vec![entry], true, ViewMode::Single)
+        Ok((vec![entry], true, ViewMode::Single))
     } else {
         let discovered = session::discover_sessions(&cfg.projects_dir, cfg.days).await?;
         if discovered.is_empty() {
             anyhow::bail!("no sessions found (start one with `claude` or widen with `--days N`)");
         }
-        let entries = spawn_entries(&discovered, &event_tx, cfg.context_window_override);
-        (entries, false, ViewMode::Summary)
-    };
-
-    let mut selected: usize = 0;
-    let mut event_buf: Vec<(usize, SessionLine)> = Vec::with_capacity(EVENT_DRAIN_BATCH);
-    let mut tick = tokio::time::interval(Duration::from_millis(cfg.refresh_ms));
-    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-    // Auto-refresh ticker. `None` when `--watch` wasn't passed; the select!
-    // arm uses `future::pending` in that case so it never fires.
-    let mut watch_tick = cfg.watch_interval.map(|d| {
-        let mut i = tokio::time::interval(d);
-        // First tick fires immediately; skip it so we don't double-rescan
-        // on startup (we just discovered the list moments ago).
-        i.reset();
-        i.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-        i
-    });
-    let mut events = EventStream::new();
-
-    loop {
-        terminal.draw(|f| draw_frame(f, &entries, selected, mode))?;
-
-        let watch_fut = async {
-            if let Some(t) = watch_tick.as_mut() {
-                let _ = t.tick().await;
-            } else {
-                std::future::pending::<()>().await;
-            }
-        };
-
-        tokio::select! {
-            _ = tick.tick() => {}
-            () = watch_fut, if !pinned => {
-                // Auto-refresh is best-effort: if `claude agents --json`
-                // hiccups (CLI crashed, slow, network), we keep the current
-                // view rather than tearing down the TUI. Manual `R` still
-                // surfaces the error to the user.
-                let _ = rescan(&mut entries, &event_tx, &cfg, &mut selected).await;
-            }
-            n = event_rx.recv_many(&mut event_buf, EVENT_DRAIN_BATCH) => {
-                if n == 0 {
-                    return Ok(()); // all watchers closed
-                }
-                for (idx, ev) in event_buf.drain(..) {
-                    if let Some(entry) = entries.get_mut(idx) {
-                        entry.stats.ingest(&ev);
-                    }
-                }
-            }
-            Some(Ok(ct_ev)) = events.next() => {
-                if let CtEvent::Key(k) = ct_ev
-                    && k.kind == KeyEventKind::Press
-                {
-                    match classify_key(k.code, mode, pinned) {
-                        KeyAction::Quit => return Ok(()),
-                        KeyAction::OpenBrowser => open_in_browser(USAGE_DASHBOARD_URL),
-                        KeyAction::ResetCurrent => {
-                            if let Some(e) = entries.get_mut(selected) {
-                                e.stats.reset();
-                            }
-                        }
-                        KeyAction::SelectPrev | KeyAction::PrevInSingle => {
-                            selected = prev_selected(&entries, selected);
-                        }
-                        KeyAction::SelectNext | KeyAction::NextInSingle => {
-                            selected = next_selected(&entries, selected);
-                        }
-                        KeyAction::OpenSelected => mode = ViewMode::Single,
-                        KeyAction::ToggleView => mode = ViewMode::Summary,
-                        KeyAction::Rescan => {
-                            rescan(
-                                &mut entries,
-                                &event_tx,
-                                &cfg,
-                                &mut selected,
-                            ).await?;
-                        }
-                        KeyAction::Ignore => {}
-                    }
-                }
-            }
-        }
+        let entries = spawn_entries(&discovered, event_tx, cfg.context_window_override);
+        Ok((entries, false, ViewMode::Summary))
     }
 }
 
@@ -262,6 +277,19 @@ fn name_and_status(d: &DiscoveredSession) -> (Option<String>, AgentStatus) {
         ),
         None => (None, AgentStatus::Offline),
     }
+}
+
+/// The bottom-row message for a failed manual rescan: the error chain's
+/// first line with any text, control characters dropped (the text can
+/// carry the `claude` CLI's stderr, which must not drive the terminal).
+fn rescan_failed(e: &anyhow::Error) -> String {
+    let text = format!("{e:#}");
+    let first = text
+        .lines()
+        .map(|l| l.chars().filter(|c| !c.is_control()).collect::<String>())
+        .find(|l| !l.trim().is_empty())
+        .unwrap_or_default();
+    format!("rescan failed: {}", first.trim())
 }
 
 /// Re-discover sessions and reconcile against the running watcher set:
@@ -337,6 +365,18 @@ fn open_in_browser(url: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_failed_rescan_shows_one_clean_line() {
+        let e = anyhow::anyhow!("boom\u{1b}[31m\nsecond line").context("claude agents --json");
+        assert_eq!(
+            rescan_failed(&e),
+            "rescan failed: claude agents --json: boom[31m"
+        );
+        // A blank or control-only first line is skipped for the real cause.
+        let e = anyhow::anyhow!("\n\u{7}\u{1b}\n  real cause  ");
+        assert_eq!(rescan_failed(&e), "rescan failed: real cause");
+    }
 
     #[test]
     fn name_and_status_follow_the_agent_listing() {
