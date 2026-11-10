@@ -54,6 +54,11 @@ impl DayStat {
         self.cache_read += other.cache_read;
         self.cost_usd += other.cost_usd;
     }
+
+    /// Every token the day's records carried, cache reads included.
+    fn tokens(&self) -> u64 {
+        self.input + self.output + self.cache_creation + self.cache_read
+    }
 }
 
 #[derive(Hash, PartialEq, Eq, Clone)]
@@ -105,14 +110,17 @@ pub enum GraphMetric {
 }
 
 impl GraphMetric {
+    /// Toggle order for the graph key.
+    pub const ALL: [GraphMetric; 3] = [
+        GraphMetric::Tokens,
+        GraphMetric::Cost,
+        GraphMetric::Messages,
+    ];
+
     /// Next metric in the toggle cycle.
     #[must_use]
     pub fn next(self) -> Self {
-        match self {
-            GraphMetric::Tokens => GraphMetric::Cost,
-            GraphMetric::Cost => GraphMetric::Messages,
-            GraphMetric::Messages => GraphMetric::Tokens,
-        }
+        cctk::cycle::next(&Self::ALL, self)
     }
 
     /// Short label for the graph title.
@@ -203,9 +211,7 @@ impl UsageDb {
             if key.category != category {
                 continue;
             }
-            if let ProjectFilter::Only(p) = project
-                && &key.project != p
-            {
+            if !project_matches(project, &key.project) {
                 continue;
             }
             let row = acc.entry(key.name.clone()).or_default();
@@ -219,8 +225,7 @@ impl UsageDb {
                     let idx = (*day - trend_start).num_days() as usize;
                     if idx < TREND_DAYS {
                         row.trend[idx] += stat.count;
-                        row.trend_tokens[idx] +=
-                            stat.input + stat.output + stat.cache_creation + stat.cache_read;
+                        row.trend_tokens[idx] += stat.tokens();
                         row.trend_cost[idx] += stat.cost_usd;
                     }
                 }
@@ -336,9 +341,7 @@ fn project_matches(project: &ProjectFilter, p: &str) -> bool {
 /// One day's value for the selected graph metric.
 fn metric_value(stat: &DayStat, metric: GraphMetric) -> f64 {
     match metric {
-        GraphMetric::Tokens => {
-            (stat.input + stat.output + stat.cache_creation + stat.cache_read) as f64
-        }
+        GraphMetric::Tokens => stat.tokens() as f64,
         GraphMetric::Cost => stat.cost_usd,
         GraphMetric::Messages => stat.count as f64,
     }
