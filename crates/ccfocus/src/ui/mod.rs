@@ -241,6 +241,22 @@ fn task_text(t: TaskCount) -> String {
     }
 }
 
+/// ` [1,2]`: the numbers of the sessions working in a candidate, or nothing
+/// when none is.
+fn sessions_suffix(c: &Candidate) -> String {
+    if c.sessions.is_empty() {
+        return String::new();
+    }
+    let nums: Vec<String> = c.sessions.iter().map(u8::to_string).collect();
+    format!(" [{}]", nums.join(","))
+}
+
+/// The week's sparkline in cyan, cut to `max` columns (`usize::MAX` when the
+/// caller has room for all of it).
+fn week_span(week: &[u32], max: usize) -> Span<'static> {
+    Span::styled(fit(&sparkline(week), max), Style::default().fg(Color::Cyan))
+}
+
 /// Eight-level bars, scaled to the week's busiest day.
 #[must_use]
 pub fn sparkline(values: &[u32]) -> String {
@@ -267,5 +283,28 @@ mod tests {
         assert_eq!(sparkline(&[0, 7, 14]), "▁▄█");
         assert_eq!(sparkline(&[0, 0]), "▁▁");
         assert_eq!(sparkline(&[]), "");
+    }
+
+    #[test]
+    fn sessions_suffix_lists_numbers_or_nothing() {
+        let mut c = Candidate {
+            repo: "r".into(),
+            worktree: "w".into(),
+            ahead: 1,
+            behind: 0,
+            dirty: None,
+            sessions: vec![],
+        };
+        assert_eq!(sessions_suffix(&c), "");
+        c.sessions = vec![1, 2];
+        assert_eq!(sessions_suffix(&c), " [1,2]");
+    }
+
+    #[test]
+    fn week_span_is_cyan_and_cut_to_the_room() {
+        let week = [0, 7, 14, 0, 0, 0, 0];
+        let cyan = Style::default().fg(Color::Cyan);
+        assert_eq!(week_span(&week, usize::MAX), Span::styled("▁▄█▁▁▁▁", cyan));
+        assert_eq!(week_span(&week, 3), Span::styled("▁▄…", cyan));
     }
 }

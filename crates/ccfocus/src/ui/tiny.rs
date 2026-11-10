@@ -1,8 +1,8 @@
 //! The card view for a narrow side pane (`ccfocus tui --tiny`).
 
 use super::{
-    TINY_HELP, View, candidates_height, dim, draw_footer, parallel_style, sparkline, start_label,
-    status_style, task_text,
+    TINY_HELP, View, candidates_height, dim, draw_footer, parallel_style, sessions_suffix,
+    start_label, status_style, task_text, week_span,
 };
 use crate::board::{Row, age};
 use crate::text::{fit, pad, width};
@@ -10,7 +10,7 @@ use cctk::style::{bold, panel};
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
-    style::{Color, Modifier, Style},
+    style::Modifier,
     text::{Line, Span},
     widgets::{BorderType, Paragraph},
 };
@@ -130,10 +130,7 @@ fn draw_tiny_today(f: &mut Frame<'_>, area: Rect, v: &View) {
             Line::from(fit(&counts, w)),
             Line::from(vec![
                 Span::raw(fit(&par, w)),
-                Span::styled(
-                    fit(&sparkline(&t.week), w.saturating_sub(width(&par))),
-                    Style::default().fg(Color::Cyan),
-                ),
+                week_span(&t.week, w.saturating_sub(width(&par))),
             ]),
         ]),
         area,
@@ -168,10 +165,7 @@ fn draw_tiny_candidates(f: &mut Frame<'_>, area: Rect, v: &View) {
             }
             None => tail.push_str(" ?"),
         }
-        if !c.sessions.is_empty() {
-            let nums: Vec<String> = c.sessions.iter().map(u8::to_string).collect();
-            let _ = write!(tail, " [{}]", nums.join(","));
-        }
+        tail.push_str(&sessions_suffix(c));
         // The place gives way first, so the numbers stay readable.
         let place = fit(
             &format!("{}·{}", c.repo, c.worktree),
@@ -248,6 +242,7 @@ mod tests {
     use super::*;
     use crate::board::Board;
     use crate::ui::test_support::{at, render_with, sample, snapshot, text};
+    use ratatui::style::Color;
 
     #[test]
     fn snapshot_tiny() {

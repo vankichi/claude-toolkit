@@ -2,8 +2,8 @@
 
 use super::{
     HELP, NUM_W, REPO_W, START_W, STATUS_W, Today, UPDATED_W, View, WORKTREE_W, candidates_height,
-    columns, dim, draw_footer, list_line, parallel_span, round_text, sparkline, status_style,
-    summary, task_text,
+    columns, dim, draw_footer, list_line, parallel_span, round_text, sessions_suffix, status_style,
+    summary, task_text, week_span,
 };
 use crate::board::age;
 use crate::text::{fit, pad, pad_left, width};
@@ -11,7 +11,6 @@ use cctk::style::{bold, panel};
 use ratatui::{
     Frame,
     layout::{Alignment, Constraint, Layout, Rect},
-    style::{Color, Style},
     text::{Line, Span},
     widgets::Paragraph,
 };
@@ -191,10 +190,7 @@ fn draw_candidates(f: &mut Frame<'_>, area: Rect, v: &View) {
             c.ahead,
             c.behind
         );
-        if !c.sessions.is_empty() {
-            let nums: Vec<String> = c.sessions.iter().map(u8::to_string).collect();
-            let _ = write!(text, " [{}]", nums.join(","));
-        }
+        text.push_str(&sessions_suffix(c));
         lines.push(Line::from(fit(&text, w)));
     }
     if cands.len() > MAX_CANDIDATES {
@@ -224,10 +220,7 @@ fn draw_today_box(f: &mut Frame<'_>, area: Rect, v: &View) {
         row("yesterday", t.yesterday_switches.to_string()),
         row("parallel avg/max", parallel_text(t)),
         Line::from(Span::styled("week (switches/day)", dim())),
-        Line::from(Span::styled(
-            sparkline(&t.week),
-            Style::default().fg(Color::Cyan),
-        )),
+        Line::from(week_span(&t.week, usize::MAX)),
     ];
     f.render_widget(Paragraph::new(lines), inner);
 }
@@ -242,21 +235,15 @@ fn today_line(v: &View, w: usize) -> Line<'static> {
         parallel_text(t)
     );
     let room = w.saturating_sub(width(&text));
-    Line::from(vec![
-        Span::raw(fit(&text, w)),
-        Span::styled(
-            fit(&sparkline(&t.week), room),
-            Style::default().fg(Color::Cyan),
-        ),
-    ])
+    Line::from(vec![Span::raw(fit(&text, w)), week_span(&t.week, room)])
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use crate::board::{Board, Shown};
     use crate::ui::TaskCount;
     use crate::ui::test_support::{find, render, sample, snapshot, text};
+    use ratatui::style::Color;
 
     #[test]
     fn snapshot_width_80() {
