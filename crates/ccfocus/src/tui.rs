@@ -8,7 +8,7 @@
 
 use crate::app::Focus;
 use anyhow::Result;
-use crossterm::event::{self, Event, KeyEventKind};
+use crossterm::event;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -23,14 +23,13 @@ pub fn run(state_dir: PathBuf, tiny: bool) -> Result<()> {
     };
     let mut focus = Focus::open(state_dir);
     focus.tick(true);
-    let mut terminal = ratatui::try_init().inspect_err(|_| ratatui::restore())?;
+    let mut terminal = cctk::term::Tui::init()?;
     let result = (|| -> Result<()> {
         loop {
             terminal.draw(|f| draw(f, f.area(), focus.view()))?;
             if event::poll(POLL)?
-                && let Event::Key(k) = event::read()?
-                && k.kind == KeyEventKind::Press
-                && focus.on_key(k.code)
+                && let Some(code) = cctk::term::pressed(&event::read()?)
+                && focus.on_key(code)
             {
                 return Ok(());
             }
@@ -40,6 +39,6 @@ pub fn run(state_dir: PathBuf, tiny: bool) -> Result<()> {
     // A jump key just before `q`: let the switch finish while the board
     // (showing "switching…") is still on screen. Then stop git / gh.
     focus.close();
-    ratatui::restore();
+    drop(terminal);
     result
 }

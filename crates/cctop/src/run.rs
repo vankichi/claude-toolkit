@@ -16,7 +16,7 @@ use ccmap::discover::Context;
 use ccstat::scan::ScanConfig;
 use cctk::jsonl::Line;
 use chrono::Utc;
-use crossterm::event::{Event as CtEvent, EventStream, KeyCode, KeyEventKind};
+use crossterm::event::{EventStream, KeyCode};
 use futures::StreamExt;
 use ratatui::DefaultTerminal;
 use std::collections::HashMap;
@@ -82,12 +82,12 @@ pub async fn run(cfg: RunConfig) -> Result<()> {
     tails.reconcile(&cfg.projects_dir, &mut dash.now);
     dash.now.apply_names(&crate::agents::names().await);
 
-    let mut terminal = ratatui::try_init().inspect_err(|_| ratatui::restore())?;
+    let mut terminal = cctk::term::Tui::init()?;
     let result = run_loop(&mut terminal, &cfg, &mut dash, &mut app, rx, &mut tails).await;
     // A jump started in the Focus panel: let the switch finish before exit,
     // then stop the Focus panel's git / gh still running.
     dash.focus.close();
-    ratatui::restore();
+    drop(terminal);
     tails.abort_all();
     result
 }
@@ -127,9 +127,8 @@ async fn run_loop(
             }
             maybe_ev = events.next() => {
                 let Some(Ok(ev)) = maybe_ev else { continue };
-                if let CtEvent::Key(k) = ev
-                    && k.kind == KeyEventKind::Press
-                    && handle_key(k.code, terminal, app, dash, &scan_cfg, &ctx)?
+                if let Some(code) = cctk::term::pressed(&ev)
+                    && handle_key(code, terminal, app, dash, &scan_cfg, &ctx)?
                 {
                     return Ok(());
                 }

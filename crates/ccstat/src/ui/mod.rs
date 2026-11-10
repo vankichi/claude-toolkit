@@ -18,7 +18,6 @@ pub use state::AppState;
 use crate::provenance::ProvenanceMap;
 use crate::scan::{self, ScanConfig};
 use chrono::{Duration, NaiveDate};
-use crossterm::event::{Event as CtEvent, KeyEventKind};
 use ratatui::DefaultTerminal;
 
 /// Spinner animation frame interval (and the max time an idle watch loop
@@ -47,13 +46,11 @@ pub fn run(
     let provenance = ProvenanceMap::build(&ccmap::discover::discover_extensions(ctx));
     let mut state = AppState::new(db, provenance, today);
     state.watch = watch.is_some();
-    let mut terminal = ratatui::try_init().inspect_err(|_| ratatui::restore())?;
-    let result = match watch {
+    let mut terminal = cctk::term::Tui::init()?;
+    match watch {
         Some(interval) => run_watch_inner(&mut terminal, cfg, ctx, &mut state, interval),
         None => run_inner(&mut terminal, cfg, ctx, &mut state),
-    };
-    ratatui::restore();
-    result
+    }
 }
 
 /// Live event loop for `--watch`. Uses `event::poll` so the loop wakes on the
@@ -76,9 +73,8 @@ fn run_watch_inner(
         terminal.draw(|f| draw(f, state))?;
 
         if crossterm::event::poll(SPINNER_TICK)? {
-            if let CtEvent::Key(key) = crossterm::event::read()?
-                && key.kind == KeyEventKind::Press
-                && handle_key(key.code, state, cfg, ctx)
+            if let Some(code) = cctk::term::pressed(&crossterm::event::read()?)
+                && handle_key(code, state, cfg, ctx)
             {
                 return Ok(());
             }
@@ -125,13 +121,10 @@ fn run_inner(
 ) -> anyhow::Result<()> {
     loop {
         terminal.draw(|f| draw(f, state))?;
-        let CtEvent::Key(key) = crossterm::event::read()? else {
+        let Some(code) = cctk::term::pressed(&crossterm::event::read()?) else {
             continue;
         };
-        if key.kind != KeyEventKind::Press {
-            continue;
-        }
-        if handle_key(key.code, state, cfg, ctx) {
+        if handle_key(code, state, cfg, ctx) {
             return Ok(());
         }
     }

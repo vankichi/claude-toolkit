@@ -10,7 +10,7 @@
 use crate::discover::{self, discover_all};
 use crate::model::{Item, Kind, PluginState, Provenance, Source};
 use cctk::style::{bold_fg, dim, panel};
-use crossterm::event::{Event as CtEvent, KeyCode, KeyEventKind};
+use crossterm::event::KeyCode;
 use ratatui::{
     DefaultTerminal, Frame,
     layout::{Constraint, Direction, Layout, Rect},
@@ -165,10 +165,8 @@ impl AppState {
 pub fn run(cfg: UiConfig) -> anyhow::Result<()> {
     let UiConfig { ctx } = cfg;
     let mut state = AppState::new(discover_all(&ctx));
-    let mut terminal = ratatui::try_init().inspect_err(|_| ratatui::restore())?;
-    let result = run_inner(&mut terminal, &ctx, &mut state);
-    ratatui::restore();
-    result
+    let mut terminal = cctk::term::Tui::init()?;
+    run_inner(&mut terminal, &ctx, &mut state)
 }
 
 /// The blocking event loop: draw a frame, block on `crossterm::event::read()`,
@@ -182,13 +180,10 @@ fn run_inner(
     loop {
         terminal.draw(|f| draw(f, state))?;
 
-        let CtEvent::Key(key) = crossterm::event::read()? else {
+        let Some(code) = cctk::term::pressed(&crossterm::event::read()?) else {
             continue;
         };
-        if key.kind != KeyEventKind::Press {
-            continue;
-        }
-        if handle_key(key.code, state, ctx, terminal)? {
+        if handle_key(code, state, ctx, terminal)? {
             return Ok(());
         }
     }

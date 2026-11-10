@@ -17,6 +17,7 @@ pub mod paths;
 pub mod pricing;
 pub mod session;
 pub mod style;
+pub mod term;
 pub mod viz;
 
 #[cfg(feature = "tail")]

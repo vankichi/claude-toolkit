@@ -16,7 +16,7 @@ mod keys;
 mod state;
 
 use anyhow::Result;
-use crossterm::event::{Event as CtEvent, EventStream, KeyEventKind};
+use crossterm::event::EventStream;
 use futures::StreamExt;
 use ratatui::DefaultTerminal;
 use std::collections::HashMap;
@@ -74,10 +74,8 @@ struct SessionEntry {
 /// Public entry point. Owns terminal init/restore around `run_inner`. Any
 /// error that escapes propagates after the terminal has been restored.
 pub async fn run(cfg: Config) -> Result<()> {
-    let mut terminal = ratatui::try_init().inspect_err(|_| ratatui::restore())?;
-    let res = run_inner(&mut terminal, cfg).await;
-    ratatui::restore();
-    res
+    let mut terminal = cctk::term::Tui::init()?;
+    run_inner(&mut terminal, cfg).await
 }
 
 /// Core event loop. Drains the shared watcher bus into per-session stats,
@@ -136,10 +134,8 @@ async fn run_inner(terminal: &mut DefaultTerminal, cfg: Config) -> Result<()> {
                 }
             }
             Some(Ok(ct_ev)) = events.next() => {
-                if let CtEvent::Key(k) = ct_ev
-                    && k.kind == KeyEventKind::Press
-                {
-                    let action = classify_key(k.code, mode, pinned);
+                if let Some(code) = cctk::term::pressed(&ct_ev) {
+                    let action = classify_key(code, mode, pinned);
                     if action != KeyAction::Ignore {
                         notice = None;
                     }
