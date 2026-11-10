@@ -163,20 +163,11 @@ impl AppState {
 /// restored before returning, on both the success and the error path.
 pub fn run(cfg: UiConfig) -> anyhow::Result<()> {
     let UiConfig { ctx } = cfg;
-    let mut state = AppState::new(discover_all(&ctx).items);
-    let mut terminal = ratatui::try_init().inspect_err(|_| restore_terminal())?;
+    let mut state = AppState::new(discover_all(&ctx));
+    let mut terminal = ratatui::try_init().inspect_err(|_| ratatui::restore())?;
     let result = run_inner(&mut terminal, &ctx, &mut state);
-    restore_terminal();
-    result
-}
-
-/// Restores the terminal to its original mode (raw mode disabled, back to
-/// the main screen buffer). Called unconditionally after the event loop
-/// returns — success or error — and again around the `e` editor shell-out,
-/// so a crash or an early `?` never leaves the caller's shell in
-/// raw/alternate-screen mode.
-fn restore_terminal() {
     ratatui::restore();
+    result
 }
 
 /// The blocking event loop: draw a frame, block on `crossterm::event::read()`,
@@ -293,7 +284,7 @@ pub fn handle_key(
                 copy_to_clipboard(&item.invocation_string());
             }
         }
-        KeyAction::Rescan => state.reload(discover_all(ctx).items),
+        KeyAction::Rescan => state.reload(discover_all(ctx)),
         KeyAction::Ignore => {}
     }
     Ok(false)
@@ -310,7 +301,7 @@ fn open_editor(state: &AppState, terminal: &mut DefaultTerminal) -> anyhow::Resu
         return Ok(());
     };
 
-    restore_terminal();
+    ratatui::restore();
     let editor = std::env::var("EDITOR").unwrap_or_else(|_| "vi".to_string());
     let status = std::process::Command::new(editor).arg(&path).status();
     *terminal = ratatui::try_init()?;

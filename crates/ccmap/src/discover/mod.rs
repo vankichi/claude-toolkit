@@ -20,12 +20,6 @@ pub struct Context {
     pub project_dir: PathBuf,
 }
 
-/// The full set of items found by a discovery pass.
-#[derive(Debug)]
-pub struct Discovered {
-    pub items: Vec<Item>,
-}
-
 /// How a source directory is laid out on disk.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Layout {
@@ -172,7 +166,7 @@ pub fn discover_extensions(ctx: &Context) -> Vec<Item> {
 /// Discovers agents, skills, commands, plugins, and MCP servers from user,
 /// project, and enabled-plugin sources.
 #[must_use]
-pub fn discover_all(ctx: &Context) -> Discovered {
+pub fn discover_all(ctx: &Context) -> Vec<Item> {
     let mut items = discover_extensions(ctx);
 
     // `--claude-dir` overrides `~/.claude`, and `~/.claude.json` lives as its
@@ -183,8 +177,7 @@ pub fn discover_all(ctx: &Context) -> Discovered {
         .parent()
         .map_or_else(|| PathBuf::from(".claude.json"), |p| p.join(".claude.json"));
     items.extend(mcp::discover(&claude_json, &ctx.project_dir));
-
-    Discovered { items }
+    items
 }
 
 /// Reads and parses `path` as JSON, returning `None` if it is missing or
@@ -367,7 +360,6 @@ mod tests {
         let discovered = discover_all(&ctx);
 
         let skill_names: Vec<&str> = discovered
-            .items
             .iter()
             .filter(|item| item.kind == Kind::Skill)
             .map(|item| item.name.as_str())
@@ -376,7 +368,6 @@ mod tests {
         assert!(!skill_names.contains(&"hidden"));
 
         let demo = discovered
-            .items
             .iter()
             .find(|item| item.kind == Kind::Skill && item.name == "demo")
             .unwrap();
@@ -428,7 +419,7 @@ mod tests {
         };
         let discovered = discover_all(&ctx);
 
-        let count = |kind: Kind| discovered.items.iter().filter(|i| i.kind == kind).count();
+        let count = |kind: Kind| discovered.iter().filter(|i| i.kind == kind).count();
         assert_eq!(count(Kind::Agent), 1);
         assert_eq!(count(Kind::Skill), 1);
         assert_eq!(count(Kind::Command), 1);
@@ -473,7 +464,7 @@ mod tests {
         assert!(ext.iter().any(|i| i.kind == Kind::Plugin));
 
         // discover_all = discover_extensions + MCP (same non-MCP set).
-        let all = discover_all(&ctx).items;
+        let all = discover_all(&ctx);
         let all_non_mcp = all.iter().filter(|i| i.kind != Kind::Mcp).count();
         assert_eq!(all_non_mcp, ext.len());
         assert!(all.iter().any(|i| i.kind == Kind::Mcp)); // MCP only via discover_all
