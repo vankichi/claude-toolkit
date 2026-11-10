@@ -16,7 +16,7 @@ use ratatui::{
     widgets::{Block, Paragraph},
 };
 
-use cctk::fmt::{tokens as fmt_tokens, usd};
+use cctk::fmt::{tokens as fmt_tokens, tokens_f64, usd};
 use cctk::style::{bold, bold_fg, dim, panel};
 
 fn panel_block(title: &str, which: Panel, app: &App) -> Block<'static> {
@@ -207,10 +207,7 @@ fn draw_rate_chart(f: &mut Frame<'_>, area: Rect, points: &[(f64, f64)]) {
         return;
     }
 
-    // `peak` is tokens/minute (from non-negative token counts), so the
-    // round-trip cast for the axis label cannot truncate or lose a sign.
-    #[expect(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    let peak_label = format!("{}/m", fmt_tokens(peak.round() as u64));
+    let peak_label = format!("{}/m", tokens_f64(peak));
     let last_x = points.last().map_or(1.0, |&(x, _)| x).max(1.0);
 
     let chart = cctk::chart::braille_line(points, peak, peak_label, Color::Cyan)
@@ -278,9 +275,8 @@ fn draw_usage(f: &mut Frame<'_>, area: Rect, dash: &Dashboard, app: &App) {
         .flat_map(|s| s.points.iter().map(|&(_, y)| y))
         .fold(0.0_f64, f64::max)
         .max(1.0);
-    #[expect(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     let y_label = if is_model {
-        format!("{}/m", fmt_tokens(y_max.round() as u64))
+        format!("{}/m", tokens_f64(y_max))
     } else {
         format!("{y_max:.0}/m")
     };

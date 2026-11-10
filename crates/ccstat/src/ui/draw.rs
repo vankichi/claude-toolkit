@@ -168,8 +168,7 @@ fn metric_top_label(metric: GraphMetric, y_max: f64) -> String {
     if metric == GraphMetric::Cost {
         return cctk::fmt::usd(y_max);
     }
-    #[expect(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    cctk::fmt::tokens(y_max.round() as u64)
+    cctk::fmt::tokens_f64(y_max)
 }
 
 /// One-line running summary shown in watch mode: an animated spinner (or a dim
